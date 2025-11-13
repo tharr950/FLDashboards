@@ -229,7 +229,8 @@ def render_app(config):
                     "average_nps": "Average NPS",
                     "% of Active Students with Progress Updates Completed in last 2 months": "Progress Update Average Percentage",
                     "current_sci": "Current SCI",
-                    "availability_percent": "Percent to Availability (%)"
+                    "availability_percent": "Percent to Availability (%)",
+                    "delivery_percent":"Percent to Delivery (%)"
                 }
 
 
@@ -281,7 +282,7 @@ def render_app(config):
                         tutor_value = row[col]
 
                     # Format percentages
-                    if col in ["sessions_on_time", "prep_time", "availability_percent",
+                    if col in ["sessions_on_time", "prep_time", "availability_percent","delivery_percent",
                               "% Parents Updates Done on Time","% of Active Students with Progress Updates Completed in last 2 months"]:
                         if col in ["% Parents Updates Done on Time","% of Active Students with Progress Updates Completed in last 2 months"]:
                             tutor_value_display = f"{tutor_value_monthly_metric * 100:.0f}%"
