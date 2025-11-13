@@ -8,6 +8,22 @@ import os
 #st.write("Current working directory:", os.getcwd())
 # st.write("Files here:", os.listdir())
 
+
+@st.cache_data(ttl=60)
+def load_tutor_concerns():
+    file = "Tutor_Concerns.csv"
+    if os.path.exists(file):
+        try:
+            df = pd.read_csv(file)
+            return df
+        except Exception as e:
+            st.warning(f"Could not read {file}: {e}")
+            return pd.DataFrame()
+    else:
+        return pd.DataFrame()
+
+
+
 @st.cache_data(ttl=60)
 def load_annual_reviews():
     file = "December_Annual_Reviews.xlsx"
@@ -365,6 +381,110 @@ def render_app(config):
 
 
 
+                        
+                        
+    # ---- Concerns Tab ----
+    if page == "Concerns":
+        st.markdown('<div class="main-title">Tutor Concerns 📌</div>', unsafe_allow_html=True)
+
+        concerns_df = load_tutor_concerns()
+
+        # Filter for this Faculty Leader
+        fl_df = concerns_df[concerns_df["Faculty Leader Name"] == faculty_leader_name]
+
+        if fl_df.empty:
+            st.info("No concern data available for your team.")
+        else:
+                        
+            # ---- Parse end date from Date Range ----
+            import re
+            def extract_end_date(range_str):
+                if pd.isna(range_str):
+                    return pd.NaT
+                # Replace all dash variants with 'to'
+                clean_str = range_str.replace("-", "to").replace("–", "to").replace("—", "to")
+                parts = clean_str.split("to")
+                if len(parts) < 2:
+                    return pd.NaT
+                end_str = parts[-1].strip()
+                # Fix cases like "6-14/25" -> "6/14/25"
+                end_str = re.sub(r"(\d+)-(\d+/\d+)", r"\1/\2", end_str)
+                try:
+                    return pd.to_datetime(end_str, errors="coerce", dayfirst=False)
+                except:
+                    return pd.NaT
+            
+            # --- Team Overview (latest date only) ---
+            
+            fl_df["Date"] = fl_df["Date"].apply(extract_end_date)
+
+            latest_date = fl_df["Date"].max()
+            latest_df = fl_df[fl_df["Date"] == latest_date]
+
+            st.subheader(f"Team Overview (Latest Date: {latest_date.date()})")
+
+            # Breakdown of # of tutors in each Concern Group
+            concern_counts = latest_df.groupby("Concern Group")["Tutor Name"].nunique().sort_index(ascending=False)
+            st.markdown("**Number of Tutors in Each Concern Group**")
+            st.bar_chart(concern_counts)
+
+            # List of tutors by Concern Group (5 first)
+            for group in sorted(latest_df["Concern Group"].unique(), reverse=True):
+                st.markdown(f"### Concern Group {group}")
+                tutors_in_group = latest_df[latest_df["Concern Group"] == group]["Tutor Name"].tolist()
+                st.write(", ".join(tutors_in_group))
+
+            # Download button for latest team concerns
+            st.download_button(
+                label="Download Latest Tutor Concerns",
+                data=latest_df.to_csv(index=False),
+                file_name=f"Tutor_Concerns_{faculty_leader_name}_{latest_date.date()}.csv",
+                mime="text/csv"
+            )
+
+            st.markdown("---")
+
+            # --- Individual Tutor Selector ---
+            tutor_names = fl_df["Tutor Name"].dropna().unique().tolist()
+            selected_tutor = st.selectbox("Select a Tutor", tutor_names)
+
+            if selected_tutor:
+                tutor_df = fl_df[fl_df["Tutor Name"] == selected_tutor].sort_values("Date")
+
+                # Plot concern score over time
+                fig = px.line(
+                    tutor_df,
+                    x="Date",
+                    y="Concern Group",
+                    markers=True,
+                    title=f"{selected_tutor} Concern Score Over Time"
+                )
+
+                # Force y-axis from 1 to 5 and reverse it
+                fig.update_yaxes(
+                    range=[1, 5],  # 5 at top, 1 at bottom
+                    dtick=1,
+                    title="Concern Group",
+                    autorange=False  # ensure range is respected
+                )
+
+                st.plotly_chart(fig, use_container_width=True)
+
+                # Table of all data for the tutor
+                st.subheader(f"{selected_tutor} Details")
+                st.dataframe(tutor_df[["Date", "Concern Group", "Reasons"]])
+
+                # Download button for individual tutor
+                st.download_button(
+                    label=f"Download {selected_tutor} Concerns",
+                    data=tutor_df.to_csv(index=False),
+                    file_name=f"{selected_tutor}_Concerns.csv",
+                    mime="text/csv"
+                )
+                        
+                        
+                        
+                     
 
 
     # ---- KPI Trends Tab ----
