@@ -22,7 +22,17 @@ def load_tutor_concerns():
     else:
         return pd.DataFrame()
 
-
+@st.cache_data(ttl=60)
+def load_full_metrics():
+    file = "December_Annual_Reviews.xlsx"
+    if os.path.exists(file):
+        try:
+            return pd.read_excel(file, sheet_name="MonthlyMetricFullData")
+        except Exception as e:
+            st.warning(f"Could not read {file}: {e}")
+            return pd.DataFrame()
+    else:
+        return pd.DataFrame()
 
 @st.cache_data(ttl=60)
 def load_annual_reviews():
@@ -148,6 +158,7 @@ def render_app(config):
 
     grade_summary_df = load_grade_summary()
     concern_groupings_df = load_concern_groupings()
+    full_metrics_df = load_full_metrics()
 
 
     #st.title("Tutor KPI Tracker")
@@ -904,42 +915,73 @@ def render_app(config):
 
 
         # --- KPI Distributions Across Team ---
+
         st.subheader("Team KPI Leaderboard")
 
-        # Ensure metrics are numeric
+        team_df2 = full_metrics_df[
+            full_metrics_df["Faculty Leader Name"] == "Annelies de Groot"
+        ].copy()
+
+        # --- Fix hidden/trailing spaces in column names ---
+        team_df2.columns = team_df2.columns.str.strip()
+
+        # --- Use YOUR corrected metrics list ---
+        metrics = [
+            "Current Tier",
+            "Delivery Target",
+            "Avg. Delivery Actual",
+            "% to Delivery Target",
+            "Availability Target",
+            "Avg. Availability Actual",
+            "% to Availability Target",
+            "Prep Time %",
+            "% Parents Updates Done on Time",
+            "% Sessions on Time",
+            "Ratio of PPW Events with Attached PPWs",
+            "% of Active Students with Progress Updates Completed",
+            "# of NPS Scores",
+            "Avg. NPS Score",
+            "Weighted Repurchases",
+            "Autoattendance",
+            "New 1 on 1 Students",
+            "total 1 on 1 students",
+            "Average AI Score for Progress Updates"
+        ]
+
+        display_cols = ["Tutor Name"] + metrics
+
+        # Convert ONLY numeric metrics
         for m in metrics:
-            team_df[m] = pd.to_numeric(team_df[m], errors="coerce")
+            if m != "Current Tier":   # <-- DON'T COERCE Current Tier
+                team_df2[m] = pd.to_numeric(team_df2[m], errors="coerce")
 
-        team_df["Overall KPI Score"] = team_df[metrics].mean(axis=1)
-        display_cols = ["Tutor Name"] + metrics + ["Overall KPI Score"]
-        leaderboard_df = (
-            team_df[display_cols]
-            .sort_values(by="Overall KPI Score", ascending=False)
-            .reset_index(drop=True)
-        )
+        leaderboard_df = team_df2[display_cols].reset_index(drop=True)
 
-        # Format table values for display
+        # --- Format display values (pretty %) ---
         display_table_values = []
         for c in display_cols:
-            if c == "Tutor Name":
-                display_table_values.append(leaderboard_df[c].astype(str).tolist())
+            if c == "Tutor Name" or c == "Current Tier":
+                display_table_values.append(leaderboard_df[c].astype(str))
             else:
                 display_table_values.append([
-                    f"{v:.1f}%" if pd.notna(v) else "" for v in leaderboard_df[c]
+                    (f"{v:.1f}%" if pd.notna(v) else "")
+                    for v in leaderboard_df[c]
                 ])
 
         # --- Build color grid ---
         n_rows = len(leaderboard_df)
         n_cols = len(display_cols)
-        colors = [["lightgrey"] * n_cols]  # header row
 
-        # Initialize all white
+        colors = [["lightgrey"] * n_cols]
         cell_colors = [["white"] * n_cols for _ in range(n_rows)]
 
-        # Highlight best (green) and worst (red) per metric
+        # Best/worst coloring
         for j, c in enumerate(display_cols):
-            if c in metrics + ["Overall KPI Score"]:
+            if c in metrics and c != "Current Tier":  # skip non-numeric
                 col_vals = leaderboard_df[c]
+                if col_vals.notna().sum() == 0:
+                    continue
+
                 max_val = col_vals.max()
                 min_val = col_vals.min()
 
@@ -951,37 +993,56 @@ def render_app(config):
                     elif val == min_val:
                         cell_colors[i][j] = "lightcoral"
 
-        # Combine header and body
         colors += cell_colors
 
-        # --- Plotly Table ---
+        # --- Plotly Table (center aligned) ---
+        column_widths = [200] + [150] * (len(display_cols) - 1)
+
         fig_table = go.Figure(
             data=[
                 go.Table(
+                    columnwidth=column_widths,
                     header=dict(
-                        values=[f"<b>{c}</b>" for c in display_cols],
+                        values=[f"<b>{c.replace(' ', '<br>')}</b>" for c in display_cols],
                         fill_color="lightgrey",
                         align="center",
+                        font=dict(size=12),
+                        height=45
                     ),
                     cells=dict(
                         values=display_table_values,
                         fill_color=colors,
                         align="center",
+                        font=dict(size=11),
+                        height=38  # increased for visual vertical centering
                     ),
                 )
             ]
         )
 
-        fig_table.update_layout(margin=dict(l=0, r=0, t=0, b=0), height=500)
-        st.plotly_chart(fig_table, use_container_width=True)
 
-        # --- Download button ---
+        fig_table.update_layout(
+            width=3200,
+            height=500,
+            margin=dict(l=0, r=0, t=10, b=0),
+        )
+
+        scroll_html = f"""
+        <div style="width:100%; overflow-x:auto; border:1px solid #DDD; padding:5px;">
+            {fig_table.to_html(include_plotlyjs='cdn')}
+        </div>
+        """
+
+        st.components.v1.html(scroll_html, height=800, scrolling=True)
+
         st.download_button(
             label="Download Team KPI Data",
             data=leaderboard_df.to_csv(index=False),
-            file_name=f"{leader_name.replace(' ', '_')}_KPI_Data.csv",
+            file_name="Team_KPI_Data.csv",
             mime="text/csv",
         )
+
+
     
     
     
