@@ -8,18 +8,27 @@ import os
 #st.write("Current working directory:", os.getcwd())
 # st.write("Files here:", os.listdir())
 
-@st.cache_data(ttl=60)
-def load_tutor_concerns():
-    file = "Tutor_Concerns.csv"
-    if os.path.exists(file):
-        try:
-            df = pd.read_csv(file)
-            return df
-        except Exception as e:
-            st.warning(f"Could not read {file}: {e}")
-            return pd.DataFrame()
-    else:
-        return pd.DataFrame()
+# @st.cache_data(ttl=60)
+# def load_tutor_concerns():
+#     file = "Tutor_Concerns.csv"
+#     if os.path.exists(file):
+#         try:
+#             df = pd.read_csv(file)
+#             return df
+#         except Exception as e:
+#             st.warning(f"Could not read {file}: {e}")
+#             return pd.DataFrame()
+#     else:
+#         return pd.DataFrame()
+
+# NEW — auto-refreshing on file change
+@st.cache_data
+def load_tutor_concerns(filepath: str, mod_time: float):
+    return pd.read_csv(filepath)
+
+# Call it like this
+file = "Tutor_Concerns.csv"
+df = load_tutor_concerns(file, os.path.getmtime(file))
 
 @st.cache_data(ttl=60)
 def load_annual_reviews():
