@@ -725,13 +725,14 @@ def render_app(config):
         df["Date Range Parsed"] = pd.to_datetime(df["Date Range"].str.split(" - ").str[0], errors="coerce")
 
         # --- Sort date ranges chronologically ---
-        date_ranges_sorted = df.sort_values("Date Range Parsed")["Date Range"].dropna().unique().tolist()
+        date_ranges_sorted = (df[["Date Range", "Date Range Parsed"]].dropna().drop_duplicates()
+                              .sort_values("Date Range Parsed"))
 
         if len(date_ranges_sorted) < 2:
             st.info("Not enough time periods available to calculate changes.")
         else:
-            latest_range = date_ranges_sorted[-1]
-            prev_range = date_ranges_sorted[-2]
+            latest_range = date_ranges_sorted[-1]["Date Range"]
+            prev_range = date_ranges_sorted[-2]["Date Range"]
 
 
             # Filter for Ela' team in both time periods
