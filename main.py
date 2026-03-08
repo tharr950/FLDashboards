@@ -177,7 +177,7 @@ FL_CONFIGS = {
     "Ian": "configs/ian_secrets.toml",
     "Geoff": "configs/geoff_secrets.toml",
     "Kristin": "configs/kristin_secrets.toml",
-    "Jessica": "configs/jessica_secrets.toml",
+    #"Jessica": "configs/jessica_secrets.toml",
 }
 
 # --- Load universal config ---

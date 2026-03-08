@@ -17,6 +17,14 @@ def load_dashboard_metrics():
         return pd.DataFrame()
 
 @st.cache_data(ttl=60)
+def load_progressupdate_metrics():
+    file = "Dashboard_Metrics.xlsx"
+    if os.path.exists(file):
+        return pd.read_excel(file, sheet_name="ProgressUpdateEmails", header=0)
+    else:
+        return pd.DataFrame()
+
+@st.cache_data(ttl=60)
 def load_tutor_concerns():
     file = "Tutor_Concerns.csv"
     if os.path.exists(file):
@@ -1077,7 +1085,7 @@ def render_app(config):
         # -------------------------
         # Load ProgressUpdateEmails sheet
         # -------------------------
-        progress_df = pd.read_excel("Dashboard_Metrics.xlsx", sheet_name="ProgressUpdateEmails", header=0)
+        progress_df = load_progressupdate_metrics()
         
         if progress_df.empty:
             st.warning("Progress Update Emails sheet not found or empty.")
