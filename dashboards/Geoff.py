@@ -4,6 +4,8 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 import os
+import io
+
 
 #st.write("Current working directory:", os.getcwd())
 # st.write("Files here:", os.listdir())
