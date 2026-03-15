@@ -83,14 +83,78 @@ def load_archivable_unscheduled():
     return df, fetched_at
 
 
-SNAPSHOT_FILE = "geoff_archive_snapshots.csv"
+# ─────────────────────────────────────────────
+# GRADES QUERY & LOADER
+# ─────────────────────────────────────────────
+
+@st.cache_data(ttl=3600)
+def load_grades_data():
+    conn = get_redshift_connection()
+    query = """
+        with cte_grades as (
+            select
+                orbit_stitch.study_areas.student_id,
+                dw.subjects.name as subject,
+                sas.score,
+                sas.updated_at
+            from orbit_stitch.study_areas
+            left join dw.subjects on orbit_stitch.study_areas.subject_id = dw.subjects.id
+            left join orbit_stitch.study_area_snapshots sas
+                on orbit_stitch.study_areas.id = sas.study_area_id
+            where 1=1
+            AND dw.subjects.category_id in (1,2,3,4,5,8,9,10,11,12)
+            AND orbit_stitch.study_areas.archived_at is null
+            AND orbit_stitch.study_areas._sdc_deleted_at is null
+        )
+        select distinct
+            dw.employees.id as tutor_id,
+            tutor_users.first_name||' '|| tutor_users.last_name as tutor_name,
+            dw.teams.name as team_name,
+            dw.students.id as student_id,
+            student_users.first_name|| ' '|| student_users.last_name as student_name,
+            min(dw.sessions.starts_at) as first_session_day,
+            max(dw.sessions.starts_at) as last_session_day,
+            cte_grades.subject,
+            cte_grades.score,
+            cte_grades.updated_at
+        from dw.tutoring_histories
+        JOIN dw.enrollments ON dw.enrollments.id = dw.tutoring_histories.enrollment_id
+        join dw.sessions on (dw.sessions.course_id = dw.enrollments.course_id)
+            and (dw.sessions.supervisor_id = dw.tutoring_histories.tutor_id)
+        join dw.students on dw.enrollments.enrollee_id = dw.students.id
+        join dw.users student_users on dw.students.user_id = student_users.id
+        join dw.employees on dw.tutoring_histories.tutor_id = dw.employees.id
+        join dw.users tutor_users on dw.employees.user_id = tutor_users.id
+        JOIN dw.team_members ON dw.team_members.member_id = dw.employees.id
+        JOIN dw.teams ON dw.teams.id = dw.team_members.team_id
+        left join cte_grades on dw.students.id = cte_grades.student_id
+        where 1=1
+        AND dw.tutoring_histories.active = true
+        AND dw.enrollments.unenrolled_at IS null
+        AND dw.employees.end_date IS null
+        AND dw.team_members.member_type = 'Employee'
+        group by 1,2,3,4,5,8,9,10
+        having min(dw.sessions.starts_at) <= getdate()   -- exclude students not yet met with
+           and max(dw.sessions.starts_at) > (getdate() - 30)
+        order by 4
+    """
+    try:
+        df = pd.read_sql(query, conn)
+    finally:
+        conn.close()
+    fetched_at = pd.Timestamp.now().strftime("%B %d, %Y at %I:%M %p")
+    return df, fetched_at
+
+
+# ─────────────────────────────────────────────
+# SNAPSHOT HELPERS
+# ─────────────────────────────────────────────
+
+SNAPSHOT_FILE        = "geoff_archive_snapshots.csv"
+GRADES_SNAPSHOT_FILE = "geoff_grades_snapshots.csv"
+
 
 def save_weekly_snapshot(df):
-    """
-    Appends a per-tutor weekly summary to geoff_archive_snapshots.csv.
-    Only writes once per ISO week — safe to call on every page load.
-    Returns the full snapshots dataframe.
-    """
     today     = pd.Timestamp.now()
     week_key  = today.strftime("%Y-W%V")
     week_date = (today - pd.to_timedelta(today.dayofweek, unit="d")).strftime("%Y-%m-%d")
@@ -109,7 +173,7 @@ def save_weekly_snapshot(df):
     if os.path.exists(SNAPSHOT_FILE):
         existing = pd.read_csv(SNAPSHOT_FILE)
         if week_key in existing["week_key"].values:
-            return existing          # already saved this week — skip
+            return existing
         updated = pd.concat([existing, summary], ignore_index=True)
     else:
         updated = summary
@@ -118,8 +182,72 @@ def save_weekly_snapshot(df):
     return updated
 
 
+def save_grades_weekly_snapshot(df):
+    """
+    Saves a per-tutor weekly grades summary.
+    Columns captured:
+      - total_students        : unique active students
+      - students_no_grades    : students with no grade entries at all
+      - pct_subjects_graded   : mean % of subjects that have a score across students
+      - stale_grade_students  : students whose most recent grade update (any subject) is >90 days old
+      - avg_days_since_update : mean days since last grade update (graded students only)
+    """
+    today     = pd.Timestamp.now()
+    week_key  = today.strftime("%Y-W%V")
+    week_date = (today - pd.to_timedelta(today.dayofweek, unit="d")).strftime("%Y-%m-%d")
+
+    if os.path.exists(GRADES_SNAPSHOT_FILE):
+        existing = pd.read_csv(GRADES_SNAPSHOT_FILE)
+        if week_key in existing["week_key"].values:
+            return existing
+    else:
+        existing = pd.DataFrame()
+
+    now = pd.Timestamp.now()
+
+    rows = []
+    for tutor, tdf in df.groupby("tutor_name"):
+        total_students    = tdf["student_id"].nunique()
+        no_grade_students = tdf[tdf["score"].isna()]["student_id"].nunique()
+
+        # Stale = most recent updated_at across ALL subjects for a student is >90 days ago.
+        # Only consider students who have at least one grade entered.
+        has_any_grade      = tdf.groupby("student_id")["score"].apply(lambda s: s.notna().any())
+        graded_student_ids = has_any_grade[has_any_grade].index
+        graded_df          = tdf[tdf["student_id"].isin(graded_student_ids)].copy()
+        if not graded_df.empty and "updated_at" in graded_df.columns:
+            graded_df["updated_at"] = pd.to_datetime(graded_df["updated_at"], errors="coerce", utc=True)
+            graded_df["days_since"] = (now.tz_localize("UTC") - graded_df["updated_at"]).dt.days
+            latest_per_student = graded_df.groupby("student_id")["days_since"].min()
+            stale_count        = int((latest_per_student > 90).sum())
+            avg_days           = round(latest_per_student.mean(), 1)
+        else:
+            stale_count = 0
+            avg_days    = None
+
+        per_student = tdf.groupby("student_id").apply(
+            lambda g: g["score"].notna().sum() / len(g) * 100 if len(g) > 0 else 0
+        )
+        pct_graded = round(per_student.mean(), 1)
+
+        rows.append({
+            "tutor_name":            tutor,
+            "total_students":        total_students,
+            "students_no_grades":    no_grade_students,
+            "pct_subjects_graded":   pct_graded,
+            "stale_grade_students":  stale_count,
+            "avg_days_since_update": avg_days,
+            "week_key":              week_key,
+            "week_date":             week_date,
+        })
+
+    summary = pd.DataFrame(rows)
+    updated  = pd.concat([existing, summary], ignore_index=True) if not existing.empty else summary
+    updated.to_csv(GRADES_SNAPSHOT_FILE, index=False)
+    return updated
+
+
 def load_snapshots():
-    """Load historical weekly snapshots CSV if it exists."""
     if os.path.exists(SNAPSHOT_FILE):
         df = pd.read_csv(SNAPSHOT_FILE)
         df["week_date"] = pd.to_datetime(df["week_date"])
@@ -127,8 +255,16 @@ def load_snapshots():
     return pd.DataFrame()
 
 
+def load_grades_snapshots():
+    if os.path.exists(GRADES_SNAPSHOT_FILE):
+        df = pd.read_csv(GRADES_SNAPSHOT_FILE)
+        df["week_date"] = pd.to_datetime(df["week_date"])
+        return df
+    return pd.DataFrame()
+
+
 # ─────────────────────────────────────────────
-# FILE-BASED DATA LOADERS (existing)
+# FILE-BASED DATA LOADERS
 # ─────────────────────────────────────────────
 
 @st.cache_data(ttl=60)
@@ -269,7 +405,7 @@ def render_app(config):
         </style>
     """, unsafe_allow_html=True)
 
-    grade_summary_df = load_grade_summary()
+    grade_summary_df     = load_grade_summary()
     concern_groupings_df = load_concern_groupings()
 
     st.markdown('<div class="main-title">Geoff Tutor Data 📊</div>', unsafe_allow_html=True)
@@ -280,21 +416,496 @@ def render_app(config):
         "KPI Table",
         "KPI Trends",
         "Grades Summary",
-        "Annual Reviews",
+        #"Annual Reviews",
         "Archivable Students & Unscheduled Hours"
     ])
 
     faculty_leader_name = "Geoff St. Marie"
-    master_tutor_df = load_master_tutor()
-    annelies_tutors = master_tutor_df[master_tutor_df["Faculty Leader"] == faculty_leader_name]["Full Name"].sort_values().dropna().unique().tolist()
+    master_tutor_df     = load_master_tutor()
+    annelies_tutors     = master_tutor_df[master_tutor_df["Faculty Leader"] == faculty_leader_name]["Full Name"].sort_values().dropna().unique().tolist()
 
     st.sidebar.markdown("---")
     st.sidebar.markdown("### 📋 Annual Reviews")
 
-    annual_review_df = load_annual_reviews()
+    annual_review_df                = load_annual_reviews()
     monthly_metric_annual_review_df = load_monthly_metric_annual_reviews()
-    repurchase_df = load_repurchases()
-    annelies_tutors = master_tutor_df[master_tutor_df["Faculty Leader"] == "Geoff St. Marie"]["Full Name"].dropna().sort_values().tolist()
+    repurchase_df                   = load_repurchases()
+    annelies_tutors                 = master_tutor_df[master_tutor_df["Faculty Leader"] == "Geoff St. Marie"]["Full Name"].dropna().sort_values().tolist()
+
+
+    # ─────────────────────────────────────────────
+    # PAGE: GRADES SUMMARY
+    # ─────────────────────────────────────────────
+
+    if page == "Grades Summary":
+        st.markdown('<div class="main-title">Grades Summary 📝</div>', unsafe_allow_html=True)
+
+        st.info(
+            "ℹ️ **About this page**\n\n"
+            "Shows grade entry health for all active students (those met with in the last 30 days, "
+            "with at least one session already completed). "
+            "Tutors should update grades **at least quarterly** — students with no update in 90+ days are flagged. "
+            "Students who have never had a grade entered are also surfaced.\n\n"
+            "**Once a week, this data is captured and stored. You will see trend data in the 'Tutor Breakdown' tab once at least 2 weeks of data are captured.**",
+            icon=None
+        )
+
+        st.info(
+            "ℹ️ **Stale Grades**\n\n"
+            "Stale Grades are grades that have not been updated for >90 days. "
+            "For the student count: **If a student has ANY subject updated within the past 90 days, "
+            "that student is not considered stale.**",
+            icon=None
+        )
+
+        with st.spinner("Loading live grades data from Redshift..."):
+            try:
+                raw_grades_df, grades_fetched_at = load_grades_data()
+            except Exception as e:
+                st.error(f"Could not connect to Redshift: {e}")
+                st.stop()
+
+        if raw_grades_df.empty:
+            st.info("No grades data returned from the database.")
+            st.stop()
+
+        st.caption(f"🕐 Data last updated: **{grades_fetched_at}**")
+        st.sidebar.markdown(f"🕐 **Grades data last updated**  \n{grades_fetched_at}")
+
+        # Filter to Team St. Marie
+        team_grades_df = raw_grades_df[raw_grades_df["team_name"] == "Team St. Marie"].copy()
+
+        if team_grades_df.empty:
+            st.warning("No grades records found for Team St. Marie.")
+            st.stop()
+
+        # ── Normalise date columns ────────────────────
+        now = pd.Timestamp.now(tz="UTC")
+        team_grades_df["updated_at"]        = pd.to_datetime(team_grades_df["updated_at"],        errors="coerce", utc=True)
+        team_grades_df["first_session_day"] = pd.to_datetime(team_grades_df["first_session_day"], errors="coerce", utc=True)
+        team_grades_df["last_session_day"]  = pd.to_datetime(team_grades_df["last_session_day"],  errors="coerce", utc=True)
+        team_grades_df["days_since_update"] = (now - team_grades_df["updated_at"]).dt.days
+
+        # ── Save weekly snapshot ──────────────────────
+        grades_snap_df = save_grades_weekly_snapshot(team_grades_df)
+
+        # ─────────────────────────────────────────────
+        # TOP CONCERN FLAGS
+        # ─────────────────────────────────────────────
+        st.markdown("### 🚨 Top Tutors to Address")
+
+        def build_tutor_summary(df):
+            rows = []
+            for tutor, tdf in df.groupby("tutor_name"):
+                total_students    = tdf["student_id"].nunique()
+
+                no_grade_ids      = tdf.groupby("student_id")["score"].apply(lambda s: s.isna().all())
+                no_grade_students = int(no_grade_ids.sum())
+
+                pct_graded = (
+                    tdf["score"].notna().sum() / len(tdf) * 100
+                    if len(tdf) > 0 else 0
+                )
+
+                # Stale = most recent updated_at across ALL subjects for a student is >90 days.
+                # Only applies to students who have at least one grade entered.
+                has_any_grade = tdf.groupby("student_id")["score"].apply(lambda s: s.notna().any())
+                graded_ids    = has_any_grade[has_any_grade].index
+                graded        = tdf[tdf["student_id"].isin(graded_ids)]
+                if not graded.empty:
+                    latest_per_student = graded.groupby("student_id")["days_since_update"].min()
+                    stale_students     = int((latest_per_student > 90).sum())
+                    avg_days           = round(latest_per_student.mean(), 1)
+                else:
+                    stale_students = 0
+                    avg_days       = None
+
+                rows.append({
+                    "tutor_name":            tutor,
+                    "total_students":        total_students,
+                    "students_no_grades":    no_grade_students,
+                    "pct_subjects_graded":   round(pct_graded, 1),
+                    "stale_grade_students":  stale_students,
+                    "avg_days_since_update": avg_days,
+                })
+            return pd.DataFrame(rows)
+
+        tutor_summary = build_tutor_summary(team_grades_df)
+        medals        = ["🥇","🥈","🥉","4️⃣","5️⃣"]
+
+        flag_c1, flag_c2, flag_c3 = st.columns(3)
+
+        with flag_c1:
+            st.markdown("**Most Students With No Grades (Top 5)**")
+            top_no_grades = (
+                tutor_summary[tutor_summary["students_no_grades"] > 0]
+                .sort_values("students_no_grades", ascending=False)
+                .head(5)
+            )
+            if top_no_grades.empty:
+                st.success("✅ All students have at least one grade entered.")
+            else:
+                for rank, (_, row) in enumerate(top_no_grades.iterrows()):
+                    st.markdown(
+                        f"{medals[rank]} **{row['tutor_name']}** — "
+                        f"<span style='color:#cc0000; font-weight:bold'>{int(row['students_no_grades'])} students</span>",
+                        unsafe_allow_html=True
+                    )
+
+        with flag_c2:
+            st.markdown("**Most Students With Stale Grades >90 Days (Top 5)**")
+            top_stale = (
+                tutor_summary[tutor_summary["stale_grade_students"] > 0]
+                .sort_values("stale_grade_students", ascending=False)
+                .head(5)
+            )
+            if top_stale.empty:
+                st.success("✅ All graded students have been updated within 90 days.")
+            else:
+                for rank, (_, row) in enumerate(top_stale.iterrows()):
+                    st.markdown(
+                        f"{medals[rank]} **{row['tutor_name']}** — "
+                        f"<span style='color:#b35c00; font-weight:bold'>{int(row['stale_grade_students'])} students</span>",
+                        unsafe_allow_html=True
+                    )
+
+        with flag_c3:
+            st.markdown("**Lowest % Subjects Graded (Top 5)**")
+            top_low_pct = (
+                tutor_summary.sort_values("pct_subjects_graded", ascending=True)
+                .head(5)
+            )
+            if top_low_pct.empty:
+                st.success("✅ No data to display.")
+            else:
+                for rank, (_, row) in enumerate(top_low_pct.iterrows()):
+                    st.markdown(
+                        f"{medals[rank]} **{row['tutor_name']}** — "
+                        f"<span style='color:#555; font-weight:bold'>{row['pct_subjects_graded']:.1f}%</span>",
+                        unsafe_allow_html=True
+                    )
+
+        st.divider()
+
+        # ─────────────────────────────────────────────
+        # TEAM-LEVEL SUMMARY METRICS
+        # ─────────────────────────────────────────────
+        st.markdown("### 📊 Team Overview")
+
+        total_students_team = team_grades_df["student_id"].nunique()
+        no_grades_team      = int(
+            team_grades_df.groupby("student_id")["score"]
+            .apply(lambda s: s.isna().all()).sum()
+        )
+        pct_graded_team     = (
+            team_grades_df["score"].notna().sum() / len(team_grades_df) * 100
+            if len(team_grades_df) > 0 else 0
+        )
+
+        has_any_grade_team = team_grades_df.groupby("student_id")["score"].apply(lambda s: s.notna().any())
+        graded_ids_team    = has_any_grade_team[has_any_grade_team].index
+        graded_rows        = team_grades_df[team_grades_df["student_id"].isin(graded_ids_team)]
+        stale_team         = 0
+        if not graded_rows.empty:
+            latest_per_student = graded_rows.groupby("student_id")["days_since_update"].min()
+            stale_team         = int((latest_per_student > 90).sum())
+
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Total Active Students",   total_students_team)
+        m2.metric("Students — No Grades",     no_grades_team,
+                  delta=f"{no_grades_team/total_students_team*100:.0f}% of roster" if total_students_team else None,
+                  delta_color="inverse")
+        m3.metric("% Subject Rows Graded",    f"{pct_graded_team:.1f}%")
+        m4.metric("Students w/ Stale Grades", stale_team,
+                  delta="(>90 days since last update)", delta_color="inverse")
+
+        st.divider()
+
+        # ─────────────────────────────────────────────
+        # FILTERS
+        # ─────────────────────────────────────────────
+        st.markdown("### 🔍 Filters")
+        fc1, fc2 = st.columns(2)
+        with fc1:
+            tutor_opts_g = ["All Tutors"] + sorted(team_grades_df["tutor_name"].dropna().unique().tolist())
+            sel_tutor_g  = st.selectbox("Tutor", tutor_opts_g, key="grades_tutor")
+        with fc2:
+            grade_filter_opts = ["All Students", "Missing Grades Only", "Stale Grades Only (>90 days)"]
+            sel_grade_filter  = st.selectbox("Grade Status Filter", grade_filter_opts, key="grades_filter")
+
+        view_grades_df = team_grades_df.copy()
+        if sel_tutor_g != "All Tutors":
+            view_grades_df = view_grades_df[view_grades_df["tutor_name"] == sel_tutor_g]
+
+        if sel_grade_filter == "Missing Grades Only":
+            missing_ids    = (
+                view_grades_df.groupby("student_id")["score"]
+                .apply(lambda s: s.isna().all())
+            )
+            missing_ids    = missing_ids[missing_ids].index
+            view_grades_df = view_grades_df[view_grades_df["student_id"].isin(missing_ids)]
+        elif sel_grade_filter == "Stale Grades Only (>90 days)":
+            has_any_grade_view = view_grades_df.groupby("student_id")["score"].apply(lambda s: s.notna().any())
+            graded_ids_view    = has_any_grade_view[has_any_grade_view].index
+            graded_view        = view_grades_df[view_grades_df["student_id"].isin(graded_ids_view)]
+            if not graded_view.empty:
+                latest_per     = graded_view.groupby("student_id")["days_since_update"].min()
+                stale_ids      = latest_per[latest_per > 90].index
+                view_grades_df = view_grades_df[view_grades_df["student_id"].isin(stale_ids)]
+            else:
+                view_grades_df = pd.DataFrame(columns=view_grades_df.columns)
+
+        single_tutor_grades = sel_tutor_g != "All Tutors"
+
+        st.divider()
+
+        # ─────────────────────────────────────────────
+        # CHARTS & DETAIL TABS
+        # ─────────────────────────────────────────────
+        tab_team, tab_tutor, tab_detail = st.tabs([
+            "📊 Team Charts",
+            "👤 Tutor Breakdown",
+            "📋 Student Detail"
+        ])
+
+        # ── TAB: Team Charts ──────────────────────────
+        with tab_team:
+
+            if not single_tutor_grades:
+
+                no_grades_chart = (
+                    tutor_summary[tutor_summary["students_no_grades"] > 0]
+                    .sort_values("students_no_grades", ascending=True)
+                )
+                if not no_grades_chart.empty:
+                    n    = len(no_grades_chart)
+                    fig1 = px.bar(
+                        no_grades_chart,
+                        x="students_no_grades", y="tutor_name",
+                        orientation="h",
+                        color="students_no_grades",
+                        color_continuous_scale=["#ffe0e0","#cc0000"],
+                        text="students_no_grades",
+                        title="Students With No Grades Entered — By Tutor",
+                        height=max(350, n * 30)
+                    )
+                    fig1.update_layout(
+                        title=dict(x=0.5, xanchor="center"),
+                        showlegend=False, coloraxis_showscale=False,
+                        xaxis_title="# Students", yaxis_title="",
+                        yaxis=dict(autorange="reversed"),
+                        margin=dict(l=160, r=20, t=50, b=40)
+                    )
+                    fig1.update_traces(textposition="outside")
+                    st.plotly_chart(fig1, use_container_width=True)
+                else:
+                    st.success("✅ All students have at least one grade entered.")
+
+                pct_chart = tutor_summary.sort_values("pct_subjects_graded", ascending=True)
+                n         = len(pct_chart)
+                fig2      = px.bar(
+                    pct_chart,
+                    x="pct_subjects_graded", y="tutor_name",
+                    orientation="h",
+                    color="pct_subjects_graded",
+                    color_continuous_scale=["#cc0000","#ffdd99","#006400"],
+                    text=pct_chart["pct_subjects_graded"].apply(lambda v: f"{v:.0f}%"),
+                    title="% of Subject Rows With a Grade Entered — By Tutor",
+                    height=max(350, n * 30)
+                )
+                fig2.update_layout(
+                    title=dict(x=0.5, xanchor="center"),
+                    showlegend=False, coloraxis_showscale=False,
+                    xaxis_title="% Graded", yaxis_title="",
+                    xaxis=dict(range=[0, 110]),
+                    yaxis=dict(autorange="reversed"),
+                    margin=dict(l=160, r=20, t=50, b=40)
+                )
+                fig2.update_traces(textposition="outside")
+                st.plotly_chart(fig2, use_container_width=True)
+
+                stale_chart = (
+                    tutor_summary[tutor_summary["stale_grade_students"] > 0]
+                    .sort_values("stale_grade_students", ascending=True)
+                )
+                if not stale_chart.empty:
+                    n    = len(stale_chart)
+                    fig3 = px.bar(
+                        stale_chart,
+                        x="stale_grade_students", y="tutor_name",
+                        orientation="h",
+                        color="stale_grade_students",
+                        color_continuous_scale=["#fff3cc","#b35c00"],
+                        text="stale_grade_students",
+                        title="Students With Grades Not Updated in 90+ Days — By Tutor",
+                        height=max(350, n * 30)
+                    )
+                    fig3.update_layout(
+                        title=dict(x=0.5, xanchor="center"),
+                        showlegend=False, coloraxis_showscale=False,
+                        xaxis_title="# Students", yaxis_title="",
+                        yaxis=dict(autorange="reversed"),
+                        margin=dict(l=160, r=20, t=50, b=40)
+                    )
+                    fig3.update_traces(textposition="outside")
+                    st.plotly_chart(fig3, use_container_width=True)
+                else:
+                    st.success("✅ No stale grades on the team (all updated within 90 days).")
+
+            else:
+                sel_summary = tutor_summary[tutor_summary["tutor_name"] == sel_tutor_g]
+                if not sel_summary.empty:
+                    row = sel_summary.iloc[0]
+                    sc1, sc2, sc3, sc4 = st.columns(4)
+                    sc1.metric("Total Students",       int(row["total_students"]))
+                    sc2.metric("No Grades",            int(row["students_no_grades"]), delta_color="inverse")
+                    sc3.metric("% Subjects Graded",    f"{row['pct_subjects_graded']:.1f}%")
+                    sc4.metric("Stale Grade Students", int(row["stale_grade_students"]), delta_color="inverse")
+
+                has_grade        = view_grades_df.groupby("student_id")["score"].apply(lambda s: s.notna().any())
+                graded_ids_tutor = has_grade[has_grade].index
+                graded_tutor     = view_grades_df[view_grades_df["student_id"].isin(graded_ids_tutor)].copy()
+                if not graded_tutor.empty:
+                    per_student_days = (
+                        graded_tutor.groupby(["student_id","student_name"])["days_since_update"]
+                        .min().reset_index()
+                        .sort_values("days_since_update", ascending=True)
+                    )
+                    fig_days = px.bar(
+                        per_student_days,
+                        x="days_since_update", y="student_name",
+                        orientation="h",
+                        text=per_student_days["days_since_update"].apply(lambda d: f"{d}d"),
+                        title=f"{sel_tutor_g} — Days Since Last Grade Update (per student)",
+                        height=max(300, len(per_student_days) * 30),
+                        color="days_since_update",
+                        color_continuous_scale=["#2a7a2a","#ffaa00","#cc0000"],
+                        range_color=[0, max(per_student_days["days_since_update"].max(), 91)]
+                    )
+                    fig_days.update_layout(
+                        title=dict(x=0.5, xanchor="center"),
+                        xaxis_title="Days Since Last Grade Update",
+                        yaxis_title="", showlegend=False, coloraxis_showscale=False,
+                        margin=dict(l=160, r=20, t=50, b=40)
+                    )
+                    fig_days.add_vline(x=90, line_dash="dash", line_color="red",
+                                       annotation_text="90-day threshold",
+                                       annotation_position="top right")
+                    fig_days.update_traces(textposition="outside")
+                    st.plotly_chart(fig_days, use_container_width=True)
+
+        # ── TAB: Tutor Breakdown (week-over-week trends) ──
+        with tab_tutor:
+            gsnap = load_grades_snapshots()
+
+            tutors_to_show = (
+                [sel_tutor_g] if single_tutor_grades
+                else sorted(team_grades_df["tutor_name"].dropna().unique().tolist())
+            )
+
+            trend_metric = st.selectbox(
+                "Trend metric",
+                ["students_no_grades", "stale_grade_students", "pct_subjects_graded", "avg_days_since_update"],
+                format_func=lambda x: {
+                    "students_no_grades":    "Students With No Grades",
+                    "stale_grade_students":  "Students With Stale Grades (>90d)",
+                    "pct_subjects_graded":   "% Subjects Graded",
+                    "avg_days_since_update": "Avg Days Since Last Update"
+                }[x],
+                key="grades_trend_metric"
+            )
+
+            if gsnap.empty:
+                st.caption("No historical snapshot data yet — trends will build automatically each week.")
+            else:
+                for tutor in tutors_to_show:
+                    tsnap = gsnap[gsnap["tutor_name"] == tutor].sort_values("week_date")
+                    if len(tsnap) < 2:
+                        if single_tutor_grades:
+                            st.caption(f"Only one week of data for {tutor} — trend will appear as more weeks accumulate.")
+                        continue
+
+                    color = {
+                        "students_no_grades":    "#cc0000",
+                        "stale_grade_students":  "#b35c00",
+                        "pct_subjects_graded":   "#006400",
+                        "avg_days_since_update": "#003f7f",
+                    }[trend_metric]
+
+                    fig_t = px.line(
+                        tsnap, x="week_date", y=trend_metric,
+                        markers=True,
+                        title=f"{tutor} — {trend_metric.replace('_',' ').title()} Week over Week",
+                        color_discrete_sequence=[color]
+                    )
+                    fig_t.update_layout(
+                        title=dict(x=0.5, xanchor="center"),
+                        xaxis_title="Week", yaxis_title="",
+                        height=300, margin=dict(l=20, r=20, t=50, b=40)
+                    )
+                    fig_t.update_traces(line=dict(width=2.5))
+                    st.plotly_chart(fig_t, use_container_width=True)
+
+        # ── TAB: Student Detail ────────────────────────
+        with tab_detail:
+            if view_grades_df.empty:
+                st.info("No records match the current filters.")
+            else:
+                detail_cols    = [
+                    "tutor_name", "student_name", "subject",
+                    "score", "updated_at", "days_since_update",
+                    "first_session_day", "last_session_day"
+                ]
+                detail_cols    = [c for c in detail_cols if c in view_grades_df.columns]
+                detail_display = view_grades_df[detail_cols].copy()
+
+                for dc in ["updated_at", "first_session_day", "last_session_day"]:
+                    if dc in detail_display.columns:
+                        detail_display[dc] = detail_display[dc].dt.strftime("%Y-%m-%d")
+
+                detail_display = detail_display.rename(columns={
+                    "tutor_name":        "Tutor",
+                    "student_name":      "Student",
+                    "subject":           "Subject",
+                    "score":             "Grade",
+                    "updated_at":        "Grade Last Updated",
+                    "days_since_update": "Days Since Update",
+                    "first_session_day": "First Session",
+                    "last_session_day":  "Last Session",
+                }).sort_values(["Tutor","Student","Subject"])
+
+                def highlight_grade_row(row):
+                    days  = row.get("Days Since Update")
+                    grade = row.get("Grade")
+                    if pd.isna(grade):
+                        return ["background-color: #ffe5e5"] * len(row)
+                    if pd.notna(days) and days > 90:
+                        return ["background-color: #fff3cc"] * len(row)
+                    return [""] * len(row)
+
+                st.markdown(
+                    "🔴 Red rows = no grade entered &nbsp;&nbsp; 🟡 Yellow rows = grade not updated in 90+ days",
+                    unsafe_allow_html=True
+                )
+                st.dataframe(
+                    detail_display.style.apply(highlight_grade_row, axis=1),
+                    use_container_width=True,
+                    hide_index=True
+                )
+
+                output_g = io.BytesIO()
+                detail_display.to_excel(output_g, index=False)
+                output_g.seek(0)
+                st.download_button(
+                    label="⬇️ Download Grades Detail",
+                    data=output_g,
+                    file_name="Grades_Detail_TeamStMarie.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+
+        if st.sidebar.button("🔄 Refresh Grades Data", key="refresh_grades"):
+            st.cache_data.clear()
+            st.rerun()
 
 
     # ─────────────────────────────────────────────
@@ -304,12 +915,12 @@ def render_app(config):
     if page == "Archivable Students & Unscheduled Hours":
         st.markdown('<div class="main-title">Archivable Students & Unscheduled Hours 📦</div>', unsafe_allow_html=True)
 
-        # ── Info bubble ──────────────────────────────────
         st.info(
             "ℹ️ **What is an Archivable Student?**\n\n"
             "An archivable student is a student currently appearing on a tutor's active dashboard "
             "who has **not had a session in the past 30 days** and has **no sessions scheduled in the future**. "
-            "These students should be reviewed and archived so tutors' dashboards reflect only truly active students.",
+            "These students should be reviewed and archived so tutors' dashboards reflect only truly active students.\n\n"
+            "**Once a week, this data is captured and stored. You will see trend data per tutor once at least 2 weeks of data are captured.**",
             icon=None
         )
 
@@ -324,33 +935,25 @@ def render_app(config):
             st.info("No data returned from the database.")
             st.stop()
 
-        # ── Data last updated — shown below title ────────
         st.caption(f"🕐 Data last updated: **{fetched_at}**")
-
-        # ── Sidebar: data last updated ───────────────────
         st.sidebar.markdown("---")
         st.sidebar.markdown(f"🕐 **Data last updated**  \n{fetched_at}")
 
-        # Normalize the should_archive column to bool safely
         raw_df["should_archive"] = raw_df["should_archive"].apply(
             lambda x: bool(x) if pd.notna(x) else False
         )
 
-        # Filter to Geoff St. Marie's team only
         full_team_df = raw_df[raw_df["team_name"] == "Team St. Marie"].copy()
 
         if full_team_df.empty:
             st.warning("No records found for Team St. Marie.")
             st.stop()
 
-        # ── Save weekly snapshot (no-op if already saved this week) ──
         snapshots_df = save_weekly_snapshot(full_team_df)
 
-        # ── Helper: horizontal bar chart (fixes squished labels for large teams) ──
         def horizontal_bar(df, x_col, y_col, color_scale, title, x_label, height=None):
-            """Always plots as a horizontal bar so tutor names are readable."""
-            n      = len(df)
-            h      = height or max(350, n * 28)   # auto-size by row count
+            n   = len(df)
+            h   = height or max(350, n * 28)
             fig = px.bar(
                 df, x=x_col, y=y_col,
                 orientation="h",
@@ -364,18 +967,16 @@ def render_app(config):
                 title=dict(x=0.5, xanchor="center"),
                 showlegend=False, coloraxis_showscale=False,
                 xaxis_title=x_label, yaxis_title="",
-                yaxis=dict(autorange="reversed"),   # highest value at top
+                yaxis=dict(autorange="reversed"),
                 margin=dict(l=160, r=20, t=50, b=40)
             )
             fig.update_traces(textposition="outside")
             return fig
 
-        # ── Helper: single-tutor student breakdown (replaces lonely single bar) ──
         def single_tutor_student_chart(tutor_df, value_col, color, title, x_label):
-            """Horizontal bar of individual students — much more useful than 1 bar."""
             plot_df = (
                 tutor_df[tutor_df[value_col] > 0]
-                .sort_values(value_col, ascending=True)   # ascending so highest is at top
+                .sort_values(value_col, ascending=True)
                 [["student_name", value_col]]
                 .copy()
             )
@@ -402,7 +1003,6 @@ def render_app(config):
 
         st.divider()
 
-        # ── TOP CONCERN FLAGS (always based on full unfiltered team) ──────────
         st.markdown("### 🚨 Top Tutors to Address")
         flag_col1, flag_col2 = st.columns(2)
 
@@ -420,8 +1020,8 @@ def render_app(config):
                 st.success("✅ No archivable students on the team.")
             else:
                 for i, row in top_archive.iterrows():
-                    rank   = top_archive.index.get_loc(i) + 1
-                    medal  = ["🥇","🥈","🥉","4️⃣","5️⃣"][rank - 1]
+                    rank  = top_archive.index.get_loc(i) + 1
+                    medal = ["🥇","🥈","🥉","4️⃣","5️⃣"][rank - 1]
                     st.markdown(
                         f"{medal} **{row['Tutor']}** — "
                         f"<span style='color:#cc0000; font-weight:bold'>{int(row['Archivable Students'])} students</span>",
@@ -452,31 +1052,25 @@ def render_app(config):
 
         st.divider()
 
-        # ── Filters row ──────────────────────────────────
         st.markdown("### 🔍 Filters")
         f1, f2, f3, f4, f5 = st.columns(5)
 
         with f1:
             tutor_opts = ["All Tutors"] + sorted(full_team_df["tutor_name"].dropna().unique().tolist())
             sel_tutor  = st.selectbox("Tutor", tutor_opts)
-
         with f2:
             tier_opts  = ["All Tiers"] + sorted(full_team_df["tier"].dropna().unique().tolist())
             sel_tier   = st.selectbox("Tier", tier_opts)
-
         with f3:
             brand_opts = ["All Brands"] + sorted(full_team_df["brand"].dropna().unique().tolist())
             sel_brand  = st.selectbox("Brand", brand_opts)
-
         with f4:
             archive_opts = ["All Students", "Archivable Only", "Active Only"]
             sel_archive  = st.selectbox("Archivable Status", archive_opts)
-
         with f5:
             unsched_opts = ["All Students", "Has Unscheduled Hours Only"]
             sel_unsched  = st.selectbox("Unscheduled Hours", unsched_opts)
 
-        # Apply filters
         view_df = full_team_df.copy()
         if sel_tutor  != "All Tutors":  view_df = view_df[view_df["tutor_name"] == sel_tutor]
         if sel_tier   != "All Tiers":   view_df = view_df[view_df["tier"]        == sel_tier]
@@ -489,7 +1083,6 @@ def render_app(config):
 
         st.divider()
 
-        # ── Summary metrics (update with filtered data) ──
         total_students    = view_df["student_name"].nunique()
         to_archive        = view_df[view_df["should_archive"] == True]["student_name"].nunique()
         pct_archivable    = (to_archive / total_students * 100) if total_students > 0 else 0
@@ -505,10 +1098,8 @@ def render_app(config):
 
         st.divider()
 
-        # ── Tab layout ───────────────────────────────────
         tab1, tab2 = st.tabs(["📦 Archivable Students", "⏳ Unscheduled Hours"])
 
-        # ── TAB 1: Archivable Students ───────────────────
         with tab1:
             st.markdown(
                 "**Archivable students** are flagged when their last session was more than 30 days ago "
@@ -520,9 +1111,7 @@ def render_app(config):
             if archive_df.empty:
                 st.success("✅ No students flagged for archiving with the current filters.")
             else:
-                # ── Chart: tutor-level or student-level depending on filter ──
                 if single_tutor_selected:
-                    # Per-student breakdown
                     archive_df["days_since"] = (
                         pd.Timestamp.now() - pd.to_datetime(archive_df["last_session_day"])
                     ).dt.days
@@ -536,7 +1125,6 @@ def render_app(config):
                     if fig:
                         st.plotly_chart(fig, use_container_width=True)
 
-                    # ── Trend over time for this tutor ──
                     st.markdown("#### 📈 Trend: Archivable Students Over Time")
                     snap_df = load_snapshots()
                     if snap_df.empty or sel_tutor not in snap_df["tutor_name"].values:
@@ -561,7 +1149,6 @@ def render_app(config):
                             fig_trend.update_traces(line=dict(width=2.5))
                             st.plotly_chart(fig_trend, use_container_width=True)
                 else:
-                    # Multi-tutor: horizontal bar, auto-sized
                     archive_by_tutor = (
                         archive_df.groupby("tutor_name")["student_name"]
                         .nunique().reset_index()
@@ -577,7 +1164,6 @@ def render_app(config):
                     )
                     st.plotly_chart(fig, use_container_width=True)
 
-                # Detail table
                 st.markdown("#### Student Detail")
                 display_cols = ["tutor_name", "student_name", "brand", "tier",
                                 "first_session_day", "last_session_day",
@@ -609,11 +1195,10 @@ def render_app(config):
                 st.download_button(
                     label="⬇️ Download Archivable Students",
                     data=output,
-                    file_name="Archivable_Students_TeamCross.xlsx",
+                    file_name="Archivable_Students_TeamStMarie.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
 
-        # ── TAB 2: Unscheduled Hours ─────────────────────
         with tab2:
             st.markdown(
                 "Students with hours purchased but **not yet scheduled**. "
@@ -626,7 +1211,6 @@ def render_app(config):
             if unsched_df.empty:
                 st.success("✅ No unscheduled hours found with the current filters.")
             else:
-                # ── Chart: tutor-level or student-level depending on filter ──
                 if single_tutor_selected:
                     fig = single_tutor_student_chart(
                         unsched_df,
@@ -638,7 +1222,6 @@ def render_app(config):
                     if fig:
                         st.plotly_chart(fig, use_container_width=True)
 
-                    # ── Trend over time for this tutor ──
                     st.markdown("#### 📈 Trend: Unscheduled Hours Over Time")
                     snap_df = load_snapshots()
                     if snap_df.empty or sel_tutor not in snap_df["tutor_name"].values:
@@ -678,7 +1261,6 @@ def render_app(config):
                     )
                     st.plotly_chart(fig, use_container_width=True)
 
-                # Detail table
                 st.markdown("#### Student Detail")
                 display_cols = ["tutor_name", "student_name", "brand", "tier",
                                 "first_session_day", "last_session_day",
@@ -705,11 +1287,10 @@ def render_app(config):
                 st.download_button(
                     label="⬇️ Download Unscheduled Hours",
                     data=output,
-                    file_name="Unscheduled_Hours_TeamCross.xlsx",
+                    file_name="Unscheduled_Hours_TeamStMarie.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
 
-        # ── Sidebar refresh ──────────────────────────────
         if st.sidebar.button("🔄 Refresh Live Data"):
             st.cache_data.clear()
             st.rerun()
@@ -724,26 +1305,26 @@ def render_app(config):
         selected_annual_tutor = st.selectbox("Select a Tutor:", annelies_tutors)
 
         if selected_annual_tutor:
-            tutor_review = annual_review_df[annual_review_df["tutor_name"] == selected_annual_tutor]
-            tutor_review_repurchase = repurchase_df[repurchase_df["Tutor Name"] == selected_annual_tutor]
+            tutor_review                = annual_review_df[annual_review_df["tutor_name"] == selected_annual_tutor]
+            tutor_review_repurchase     = repurchase_df[repurchase_df["Tutor Name"] == selected_annual_tutor]
             tutor_review_monthly_metric = monthly_metric_annual_review_df[monthly_metric_annual_review_df["Tutor Name"] == selected_annual_tutor]
 
             if not tutor_review.empty:
-                row = tutor_review.iloc[0]
+                row       = tutor_review.iloc[0]
                 tutor_tier = row["tier"]
 
-                row_repurchase = tutor_review_repurchase.iloc[0]
+                row_repurchase        = tutor_review_repurchase.iloc[0]
                 tutor_tier_repurchase = row_repurchase["Current Tier"]
-                tutor_deliverytarget = row_repurchase["Delivery Target"]
+                tutor_deliverytarget  = row_repurchase["Delivery Target"]
 
-                row_monthly_metric = tutor_review_monthly_metric
+                row_monthly_metric        = tutor_review_monthly_metric
                 tutor_tier_monthly_metric = row_monthly_metric["Tier"].iloc[0]
 
                 team_df = annual_review_df[annual_review_df["fl"] == "Geoff St. Marie"]
                 tier_df = annual_review_df[annual_review_df["tier"] == tutor_tier]
 
-                team_repurchase_df = repurchase_df[repurchase_df["Team Name"] == "Team St. Marie"]
-                tier_repurchase_df = repurchase_df[repurchase_df["Current Tier"] == tutor_tier]
+                team_repurchase_df         = repurchase_df[repurchase_df["Team Name"] == "Team St. Marie"]
+                tier_repurchase_df         = repurchase_df[repurchase_df["Current Tier"] == tutor_tier]
                 tierdelivery_repurchase_df = repurchase_df[
                     (repurchase_df["Current Tier"] == tutor_tier) &
                     (repurchase_df["Delivery Target"] == tutor_deliverytarget)
@@ -812,25 +1393,25 @@ def render_app(config):
                                "% Parents Updates Done on Time", "% of Active Students with Progress Updates Completed in last 2 months"]:
                         if col in ["% Parents Updates Done on Time", "% of Active Students with Progress Updates Completed in last 2 months"]:
                             tutor_value_display = f"{tutor_value_monthly_metric * 100:.0f}%"
-                            tutor_value_plot = tutor_value_monthly_metric * 100
-                            team_avg = team_monthly_metric_df[col].mean() * 100
-                            tier_avg = tier_monthly_metric_df[col].mean() * 100
+                            tutor_value_plot    = tutor_value_monthly_metric * 100
+                            team_avg            = team_monthly_metric_df[col].mean() * 100
+                            tier_avg            = tier_monthly_metric_df[col].mean() * 100
                         else:
                             tutor_value_display = f"{tutor_value * 100:.0f}%"
-                            tutor_value_plot = tutor_value * 100
-                            team_avg = team_df[col].mean() * 100
-                            tier_avg = tier_df[col].mean() * 100
+                            tutor_value_plot    = tutor_value * 100
+                            team_avg            = team_df[col].mean() * 100
+                            tier_avg            = tier_df[col].mean() * 100
                     else:
                         if col in ["Repurchases Weighted"]:
                             tutor_value_display = f"{tutor_value_repurchase:.1f}"
-                            tutor_value_plot = tutor_value_repurchase
-                            team_avg = tierdelivery_repurchase_df[col].mean()
-                            tier_avg = tier_repurchase_df[col].mean()
+                            tutor_value_plot    = tutor_value_repurchase
+                            team_avg            = tierdelivery_repurchase_df[col].mean()
+                            tier_avg            = tier_repurchase_df[col].mean()
                         else:
                             tutor_value_display = f"{tutor_value:.1f}"
-                            tutor_value_plot = tutor_value
-                            team_avg = team_df[col].mean()
-                            tier_avg = tier_df[col].mean()
+                            tutor_value_plot    = tutor_value
+                            team_avg            = team_df[col].mean()
+                            tier_avg            = tier_df[col].mean()
 
                     st.markdown("<hr>", unsafe_allow_html=True)
                     st.markdown(f"<h3 style='text-align:center'>{label}</h3>", unsafe_allow_html=True)
@@ -904,7 +1485,7 @@ def render_app(config):
                 if pd.isna(range_str):
                     return pd.NaT
                 clean_str = range_str.replace("-", "to").replace("–", "to").replace("—", "to")
-                parts = clean_str.split("to")
+                parts     = clean_str.split("to")
                 if len(parts) < 2:
                     return pd.NaT
                 end_str = parts[-1].strip()
@@ -916,13 +1497,13 @@ def render_app(config):
 
             tutor_df["Date Parsed"] = tutor_df["Date Range"].apply(extract_end_date)
 
-            annelies_team = master_df[master_df["Faculty Leader"] == "Geoff St. Marie"]["Full Name"].dropna()
-            team_df = monthly_df[monthly_df["Tutor Name"].isin(annelies_team)].copy()
+            geoff_team = master_df[master_df["Faculty Leader"] == "Geoff St. Marie"]["Full Name"].dropna()
+            team_df    = monthly_df[monthly_df["Tutor Name"].isin(geoff_team)].copy()
             team_df["Date Parsed"] = team_df["Date Range"].apply(extract_end_date)
 
             if tutor_tier:
                 tier_tutors = annual_df[annual_df["tier"] == tutor_tier]["tutor_name"]
-                tier_df = monthly_df[monthly_df["Tutor Name"].isin(tier_tutors)].copy()
+                tier_df     = monthly_df[monthly_df["Tutor Name"].isin(tier_tutors)].copy()
                 tier_df["Date Parsed"] = tier_df["Date Range"].apply(extract_end_date)
             else:
                 tier_df = pd.DataFrame()
@@ -1027,7 +1608,7 @@ def render_app(config):
         st.markdown('<div class="main-title">Tutor Concerns 📌</div>', unsafe_allow_html=True)
 
         concerns_df = load_tutor_concerns()
-        fl_df = concerns_df[concerns_df["Faculty Leader Name"] == faculty_leader_name]
+        fl_df       = concerns_df[concerns_df["Faculty Leader Name"] == faculty_leader_name]
 
         if fl_df.empty:
             st.info("No concern data available for your team.")
@@ -1037,7 +1618,7 @@ def render_app(config):
                 if pd.isna(range_str):
                     return pd.NaT
                 clean_str = range_str.replace("-", "to").replace("–", "to").replace("—", "to")
-                parts = clean_str.split("to")
+                parts     = clean_str.split("to")
                 if len(parts) < 2:
                     return pd.NaT
                 end_str = parts[-1].strip()
@@ -1048,8 +1629,8 @@ def render_app(config):
                     return pd.NaT
 
             fl_df["Date"] = fl_df["Date"].apply(extract_end_date)
-            latest_date = fl_df["Date"].max()
-            latest_df   = fl_df[fl_df["Date"] == latest_date]
+            latest_date   = fl_df["Date"].max()
+            latest_df     = fl_df[fl_df["Date"] == latest_date]
 
             st.subheader(f"Team Overview (Latest Date: {latest_date.date()})")
 
@@ -1103,10 +1684,10 @@ def render_app(config):
 
         df = load_kpi_data()
         df["Date Range Parsed"] = pd.to_datetime(df["Date Range"].str.split(" - ").str[0], errors="coerce")
-        latest_range_parsed = df["Date Range Parsed"].max()
-        latest_range = df.loc[df["Date Range Parsed"] == latest_range_parsed, "Date Range"].iloc[0]
-        leader_name  = "Geoff St. Marie"
-        team_df = df[(df["Date Range"] == latest_range) & (df["Faculty Leader"] == leader_name)].copy()
+        latest_range_parsed     = df["Date Range Parsed"].max()
+        latest_range            = df.loc[df["Date Range Parsed"] == latest_range_parsed, "Date Range"].iloc[0]
+        leader_name             = "Geoff St. Marie"
+        team_df                 = df[(df["Date Range"] == latest_range) & (df["Faculty Leader"] == leader_name)].copy()
 
         metrics = [
             "% to Delivery Target",
@@ -1125,9 +1706,9 @@ def render_app(config):
         st.divider()
 
         st.subheader("Team Summary KPIs")
-        n_metrics    = len(metrics)
-        n_cols       = 3
-        rows_needed  = (n_metrics + n_cols - 1) // n_cols
+        n_metrics   = len(metrics)
+        n_cols      = 3
+        rows_needed = (n_metrics + n_cols - 1) // n_cols
         for r in range(rows_needed):
             cols = st.columns(n_cols)
             for i, col in enumerate(cols):
@@ -1143,7 +1724,7 @@ def render_app(config):
         st.subheader("📊 Team KPI Changes from Previous Period")
 
         df["Date Range Parsed"] = pd.to_datetime(df["Date Range"].str.split(" - ").str[0], errors="coerce")
-        date_ranges_sorted = df.sort_values("Date Range Parsed")["Date Range"].dropna().unique().tolist()
+        date_ranges_sorted      = df.sort_values("Date Range Parsed")["Date Range"].dropna().unique().tolist()
 
         if len(date_ranges_sorted) < 2:
             st.info("Not enough time periods available to calculate changes.")
@@ -1158,10 +1739,10 @@ def render_app(config):
             prev_avg   = prev_team[metrics].mean()
 
             change_df = pd.DataFrame({
-                "Metric": metrics,
+                "Metric":              metrics,
                 f"{prev_range} Avg":   prev_avg.values,
                 f"{latest_range} Avg": latest_avg.values,
-                "Change (pp)": (latest_avg - prev_avg).values
+                "Change (pp)":         (latest_avg - prev_avg).values
             })
 
             for c in [f"{prev_range} Avg", f"{latest_range} Avg", "Change (pp)"]:
@@ -1179,7 +1760,7 @@ def render_app(config):
                 color = "lightgreen" if val > 0 else ("lightcoral" if val < 0 else "white")
                 return f"background-color: {color}; font-weight: bold; text-align: center"
 
-            styled_df = change_df[["Metric", f"{prev_range} Avg", f"{latest_range} Avg", "Change (pp)"]].copy()
+            styled_df         = change_df[["Metric", f"{prev_range} Avg", f"{latest_range} Avg", "Change (pp)"]].copy()
             styled_df_display = styled_df.style.format({
                 f"{prev_range} Avg":   "{:.1f}%",
                 f"{latest_range} Avg": "{:.1f}%",
@@ -1227,9 +1808,9 @@ def render_app(config):
 
         for metric in metrics:
             st.markdown(f"### {metric}")
-            plot_df = leader_group.reset_index().sort_values(by=metric, ascending=False)
+            plot_df              = leader_group.reset_index().sort_values(by=metric, ascending=False)
             plot_df[metric + "_pct"] = plot_df[metric] * 100
-            color_map = {fl: ("blue" if fl == leader_name else "lightgray") for fl in plot_df["Faculty Leader"]}
+            color_map            = {fl: ("blue" if fl == leader_name else "lightgray") for fl in plot_df["Faculty Leader"]}
 
             fig = px.bar(
                 plot_df, x="Faculty Leader", y=metric + "_pct",
@@ -1304,10 +1885,10 @@ def render_app(config):
                 workbook  = writer.book
                 worksheet = writer.sheets["Team KPI Leaderboard"]
 
-                fmt_center     = workbook.add_format({'align': 'center'})
+                fmt_center    = workbook.add_format({'align': 'center'})
                 fmt_percentage = workbook.add_format({'num_format': '0.00%', 'align': 'center'})
-                fmt_decimal    = workbook.add_format({'num_format': '0.00',  'align': 'center'})
-                fmt_text_wrap  = workbook.add_format({'text_wrap': True,     'align': 'center'})
+                fmt_decimal   = workbook.add_format({'num_format': '0.00',  'align': 'center'})
+                fmt_text_wrap = workbook.add_format({'text_wrap': True,     'align': 'center'})
 
                 for col_num, col_name in enumerate(team_dashboard_df.columns):
                     if col_name in kpi_thresholds:
@@ -1322,8 +1903,8 @@ def render_app(config):
 
                 for col_num, col_name in enumerate(team_dashboard_df.columns):
                     if col_name in kpi_thresholds:
-                        low, high    = kpi_thresholds[col_name]
-                        col_letter   = chr(65 + col_num)
+                        low, high   = kpi_thresholds[col_name]
+                        col_letter  = chr(65 + col_num)
                         if col_name != "Prep Time %":
                             worksheet.conditional_format(f"{col_letter}2:{col_letter}{len(team_dashboard_df)+1}",
                                 {'type': 'cell', 'criteria': '>', 'value': high,
