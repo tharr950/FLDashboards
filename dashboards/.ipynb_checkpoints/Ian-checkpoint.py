@@ -2447,6 +2447,91 @@ def render_app(config):
 
             st.markdown("<div style='margin-top:6px;'></div>", unsafe_allow_html=True)
 
+            # ── Drill-through expanders for flagged metrics ──
+            drill_items = []
+
+            # Archivable students
+            if arch_count > 0 and not wl_arch_df.empty:
+                _arch_names = sorted(wl_arch_df[
+                    (wl_arch_df["tutor_name"] == tutor) &
+                    (wl_arch_df["should_archive"] == True)
+                ]["student_name"].dropna().unique().tolist())
+                if _arch_names:
+                    drill_items.append(("📦 Archivable Students", _arch_names))
+
+            # Unscheduled hours
+            if unsched_hrs > 0 and not wl_arch_df.empty:
+                _unsched_df = wl_arch_df[
+                    (wl_arch_df["tutor_name"] == tutor) &
+                    (wl_arch_df["unscheduled_hours"] > 0)
+                ][["student_name","unscheduled_hours"]].dropna()
+                _unsched_df = _unsched_df.sort_values("unscheduled_hours", ascending=False)
+                if not _unsched_df.empty:
+                    drill_items.append(("⏳ Unscheduled Hours", [
+                        f"{row['student_name']} — {row['unscheduled_hours']:.1f} hrs"
+                        for _, row in _unsched_df.iterrows()
+                    ]))
+
+            # No grades entered
+            if no_grades_count > 0 and not wl_grades_df.empty:
+                _tgdf = wl_grades_df[wl_grades_df["tutor_name"] == tutor]
+                _no_g_ids = _tgdf.groupby("student_id")["score"].apply(lambda s: s.isna().all())
+                _no_g_names = sorted(_tgdf[_tgdf["student_id"].isin(
+                    _no_g_ids[_no_g_ids].index)]["student_name"].dropna().unique().tolist())
+                if _no_g_names:
+                    drill_items.append(("📋 No Grades Entered", _no_g_names))
+
+            # Stale grades
+            if stale_count_wl > 0 and not wl_grades_df.empty:
+                _tgdf = wl_grades_df[wl_grades_df["tutor_name"] == tutor]
+                _hany = _tgdf.groupby("student_id")["score"].apply(lambda s: s.notna().any())
+                _graded = _tgdf[_tgdf["student_id"].isin(_hany[_hany].index)]
+                if not _graded.empty:
+                    _latest_g = _graded.groupby(["student_id","student_name"])["days_since_update"].min().reset_index()
+                    _stale_g  = _latest_g[_latest_g["days_since_update"] > 90].sort_values("days_since_update", ascending=False)
+                    if not _stale_g.empty:
+                        drill_items.append(("📚 Stale Grades >90d", [
+                            f"{row['student_name']} — {int(row['days_since_update'])}d since update"
+                            for _, row in _stale_g.iterrows()
+                        ]))
+
+            # No completed exam
+            if no_exam_count > 0 and not wl_exam_df.empty:
+                _tedf = wl_exam_df[wl_exam_df["tutor_name"] == tutor]
+                _no_ex_names = sorted(set(
+                    sname
+                    for sid, sdf in _tedf.groupby("student_id")
+                    if sdf["test_prep_hours_delivered"].iloc[0] >= 6
+                    and sdf[sdf["exam_valid_composite"] == True].empty
+                    for sname in sdf["student_name"].dropna().unique()
+                ))
+                if _no_ex_names:
+                    drill_items.append(("📝 No Completed Exam", _no_ex_names))
+
+            # Stale exams
+            if stale_exam_count_wl > 0 and not wl_exam_df.empty:
+                _tedf   = wl_exam_df[wl_exam_df["tutor_name"] == tutor]
+                _now_d  = pd.Timestamp.now(tz="UTC")
+                _stale_ex_names = []
+                for sid, sdf in _tedf.groupby("student_id"):
+                    _comp = sdf[sdf["exam_valid_composite"] == True]
+                    if not _comp.empty:
+                        _latest = pd.to_datetime(_comp["exam_date"], utc=True).max()
+                        if pd.notna(_latest) and (_now_d - _latest).days > 90:
+                            _sname = sdf["student_name"].iloc[0]
+                            _days  = (_now_d - _latest).days
+                            _stale_ex_names.append(f"{_sname} — {_days}d since last exam")
+                if _stale_ex_names:
+                    drill_items.append(("🕐 Stale Exams >90d", sorted(_stale_ex_names)))
+
+            if drill_items:
+                with st.expander(f"👥 Student detail — {tutor}", expanded=False):
+                    for label, names in drill_items:
+                        st.markdown(f"**{label}**")
+                        for name in names:
+                            st.markdown(f"- {name}")
+                        st.markdown("")
+
             # ── KPI trend charts ───────────────────────
             if not wl_kpi_df.empty:
                 wl_kpi_df["Date Range Parsed"] = pd.to_datetime(
