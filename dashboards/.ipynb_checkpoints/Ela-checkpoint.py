@@ -31,10 +31,26 @@ def get_redshift_connection():
 
 def get_rp_connection():
     """Opens a fresh MySQL connection to replica.revolutionprep.com."""
+    import socket
     creds = st.secrets["rp_db"]
+    host  = str(creds["host"])
+    port  = int(creds.get("port", 3306))
+
+    # Quick reachability check before handing off to mysql.connector
+    # If port is firewalled/unreachable this fails in ~5s instead of hanging
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.settimeout(10)
+    result = sock.connect_ex((host, port))
+    sock.close()
+    if result != 0:
+        raise ConnectionError(
+            f"Cannot reach {host}:{port} — port may be blocked by the hosting environment "
+            f"(socket error {result}). Exam data requires direct MySQL access."
+        )
+
     return mysql.connector.connect(
-        host=str(creds["host"]),
-        port=int(creds.get("port", 3306)),
+        host=host,
+        port=port,
         user=str(creds["user"]),
         password=str(creds["password"]),
         connection_timeout=30,
