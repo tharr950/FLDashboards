@@ -1171,6 +1171,8 @@ def render_app(config):
                     or next week ({next_label}). Please review.<br>
                     <b style='font-size:1.08rem;'>{names_list}</b>
                 </div>""", unsafe_allow_html=True)
+                with st.expander("🔍 Debug — raw availability counts"):
+                    st.dataframe(team_avail_df, use_container_width=True)
 
         # ─────────────────────────────────────────────
         # TOP STATS BAR
