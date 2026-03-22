@@ -1135,15 +1135,20 @@ def render_app(config):
             </div>""", unsafe_allow_html=True)
 
         # ── Helper: card renderer ─────────────────────
-        def card(emoji, title, body, color="#fff"):
-            bg = {"red":"#fff0f0","green":"#f0fff4","yellow":"#fffbea","blue":"#f0f4ff"}.get(color,"#fff")
+        def card(emoji, title, body, color="#fff", details=None):
+            bg     = {"red":"#fff0f0","green":"#f0fff4","yellow":"#fffbea","blue":"#f0f4ff"}.get(color,"#fff")
             border = {"red":"#ffcccc","green":"#b2f5c8","yellow":"#ffe58f","blue":"#bfd7ff"}.get(color,"#ddd")
             st.markdown(f"""
             <div style='background:{bg}; border:1.5px solid {border}; border-radius:10px;
-                        padding:14px 18px; margin-bottom:10px;'>
+                        padding:14px 18px; margin-bottom:6px;'>
                 <div style='font-size:1.05rem; font-weight:600; margin-bottom:4px;'>{emoji} {title}</div>
                 <div style='font-size:0.92rem; color:#444;'>{body}</div>
             </div>""", unsafe_allow_html=True)
+            if details:
+                with st.expander(f"👥 See {len(details)} student{'s' if len(details)>1 else ''}"):
+                    for name in details:
+                        st.markdown(f"- {name}")
+
 
         # ── Availability banner ───────────────────────
         if not home_arch_df.empty:
@@ -1184,6 +1189,40 @@ def render_app(config):
         # TOP STATS BAR
         # ─────────────────────────────────────────────
         st.markdown("### 📊 Team Snapshot")
+
+        # ── Exam data sync status ─────────────────────
+        try:
+            _, _exam_fetched_at = load_exam_data()
+            try:
+                _exam_ts    = pd.to_datetime(_exam_fetched_at, format="%B %d, %Y at %I:%M %p")
+                _hours_old  = (pd.Timestamp.now() - _exam_ts).total_seconds() / 3600
+                if _hours_old < 24:
+                    _sync_color = "#1a6e36"
+                    _sync_icon  = "✅"
+                    _sync_msg   = f"Exam data is fresh — last synced {_exam_fetched_at}"
+                elif _hours_old < 48:
+                    _sync_color = "#b35c00"
+                    _sync_icon  = "⚠️"
+                    _sync_msg   = f"Exam data is {_hours_old:.0f} hours old — last synced {_exam_fetched_at}. Consider running sync_exam_data.py."
+                else:
+                    _sync_color = "#cc0000"
+                    _sync_icon  = "🚨"
+                    _sync_msg   = f"Exam data is {_hours_old:.0f} hours old — last synced {_exam_fetched_at}. Run sync_exam_data.py now."
+            except Exception:
+                _sync_color = "#888"
+                _sync_icon  = "🕐"
+                _sync_msg   = f"Exam data last synced: {_exam_fetched_at}"
+            st.markdown(f"""
+            <div style='background:#f7f9fc; border:1px solid #d0d7e0; border-radius:8px;
+                        padding:7px 14px; margin-bottom:10px; font-size:0.83rem; color:{_sync_color};'>
+                {_sync_icon} <b>Exam Data Sync:</b> {_sync_msg}
+            </div>""", unsafe_allow_html=True)
+        except Exception:
+            st.markdown("""
+            <div style='background:#fff3cd; border:1px solid #ffe58f; border-radius:8px;
+                        padding:7px 14px; margin-bottom:10px; font-size:0.83rem; color:#b35c00;'>
+                ⚠️ <b>Exam Data Sync:</b> Could not load exam data — check GitHub secrets and run sync_exam_data.py.
+            </div>""", unsafe_allow_html=True)
 
         total_active = home_arch_df["student_name"].nunique() if not home_arch_df.empty else "—"
         total_tp     = home_exam_df["student_id"].nunique() if not home_exam_df.empty else "—"
@@ -1442,10 +1481,15 @@ def render_app(config):
                                  .groupby("tutor_name")["student_name"].nunique()
                                  .sort_values(ascending=False))
                 for tutor, count in arch_by_tutor.head(3).items():
+                    _arch_students = sorted(home_arch_df[
+                        (home_arch_df["tutor_name"] == tutor) &
+                        (home_arch_df["should_archive"] == True)
+                    ]["student_name"].dropna().unique().tolist())
                     card("📦", f"Archivable Students",
                          f"<b>{tutor}</b> has <b>{count} student{'s' if count>1 else ''}</b> "
                          f"that should be archived.",
-                         color="red")
+                         color="red", details=_arch_students)
+
 
             # No completed exam
             if not home_exam_df.empty:
@@ -1477,10 +1521,17 @@ def render_app(config):
                         no_exam_by_tutor[tutor] = count
                 for tutor, count in sorted(no_exam_by_tutor.items(),
                                            key=lambda x: x[1], reverse=True)[:3]:
+                    _no_exam_students = sorted(set(
+                        sname for sid, sdf in home_exam_df[home_exam_df["tutor_name"] == tutor].groupby("student_id")
+                        if sdf["test_prep_hours_delivered"].iloc[0] >= 6
+                        and sdf[sdf["exam_valid_composite"] == True].empty
+                        for sname in sdf["student_name"].dropna().unique()
+                    ))
                     card("📝", "No Completed Exam",
                          f"<b>{tutor}</b> has <b>{count} student{'s' if count>1 else ''}</b> "
                          f"with 6+ hrs but no completed exam.",
-                         color="red")
+                         color="red", details=_no_exam_students)
+
 
             # No grades entered at all
             if not home_grades_df.empty:
@@ -1491,10 +1542,18 @@ def render_app(config):
                         no_grades_by_tutor[tutor] = int(no_g)
                 for tutor, count in sorted(no_grades_by_tutor.items(),
                                            key=lambda x: x[1], reverse=True)[:2]:
+                    _no_grades_students = sorted(
+                        home_grades_df[
+                            (home_grades_df["tutor_name"] == tutor) &
+                            (home_grades_df.groupby("student_id")["score"]
+                             .transform(lambda s: s.isna().all()))
+                        ]["student_name"].dropna().unique().tolist()
+                    )
                     card("📋", "No Grades Entered",
                          f"<b>{tutor}</b> has <b>{count} student{'s' if count>1 else ''}</b> "
                          f"with no grades entered at all.",
-                         color="red")
+                         color="red", details=_no_grades_students)
+
 
             # KPI below threshold
             thresholds = {
@@ -4860,6 +4919,98 @@ def render_app(config):
             fl_df["Date"] = fl_df["Date"].apply(extract_end_date)
             latest_date = fl_df["Date"].max()
             latest_df   = fl_df[fl_df["Date"] == latest_date]
+
+            # ── Movement Alerts ───────────────────────────
+            all_dates = sorted(fl_df["Date"].dropna().unique())
+            if len(all_dates) >= 2:
+                prev_date    = all_dates[-2]
+                prev_df      = fl_df[fl_df["Date"] == prev_date]
+
+                # Merge latest vs previous on tutor name
+                merged = latest_df[["Tutor Name","Concern Group"]].merge(
+                    prev_df[["Tutor Name","Concern Group"]].rename(
+                        columns={"Concern Group": "Prev Group"}),
+                    on="Tutor Name", how="inner"
+                )
+                merged["Change"] = pd.to_numeric(merged["Concern Group"], errors="coerce") - \
+                                    pd.to_numeric(merged["Prev Group"],    errors="coerce")
+
+                big_jumps = merged[merged["Change"].abs() >= 2].sort_values("Change")
+
+                if not big_jumps.empty:
+                    st.markdown("### 🚨 Concern Group Movement Alerts")
+                    st.caption(f"Tutors who moved **2+ concern groups** between {prev_date.date()} and {latest_date.date()}")
+
+                    for _, row in big_jumps.iterrows():
+                        tname   = row["Tutor Name"]
+                        change  = int(row["Change"])
+                        prev_g  = int(row["Prev Group"])
+                        curr_g  = int(row["Concern Group"])
+
+                        direction = "⬆️ Worsened" if change > 0 else "⬇️ Improved"
+                        color     = "#fff0f0" if change > 0 else "#f0fff4"
+                        border    = "#ffcccc" if change > 0 else "#b2f5c8"
+                        arrow     = "▲" if change > 0 else "▼"
+
+                        # Pull KPI data to explain the change
+                        kpi_context = ""
+                        try:
+                            _concern_kpi_df = load_kpi_data()
+                        except Exception:
+                            _concern_kpi_df = pd.DataFrame()
+                        if not _concern_kpi_df.empty and "Tutor Name" in _concern_kpi_df.columns:
+                            tutor_kpi = _concern_kpi_df[_concern_kpi_df["Tutor Name"] == tname].copy()
+                            if not tutor_kpi.empty:
+                                tutor_kpi["Date Range Parsed"] = pd.to_datetime(
+                                    tutor_kpi["Date Range"].str.split(" - ").str[0], errors="coerce")
+                                tutor_kpi = tutor_kpi.sort_values("Date Range Parsed").tail(2)
+                                if len(tutor_kpi) >= 2:
+                                    kpi_cols = [
+                                        "% to Delivery Target",
+                                        "% to Availability Target",
+                                        "% Sessions on Time",
+                                        "% Parents Updates Done on Time",
+                                    ]
+                                    changes = []
+                                    for kc in kpi_cols:
+                                        if kc in tutor_kpi.columns:
+                                            v1 = tutor_kpi.iloc[-2][kc]
+                                            v2 = tutor_kpi.iloc[-1][kc]
+                                            if pd.notna(v1) and pd.notna(v2):
+                                                diff = (v2 - v1) * 100
+                                                if abs(diff) >= 3:
+                                                    short = kc.replace("% to ","").replace("% ","").replace("% of Active Students with Progress Updates Completed in last 2 months","Progress Updates")
+                                                    arrow_kpi = "↑" if diff > 0 else "↓"
+                                                    changes.append(f"{short} {arrow_kpi}{abs(diff):.0f}pp")
+                                    if changes:
+                                        kpi_context = "KPI shifts: " + ", ".join(changes)
+
+                        # Pull latest reasons from concerns data
+                        latest_reasons = ""
+                        latest_row = latest_df[latest_df["Tutor Name"] == tname]
+                        if not latest_row.empty and "Reasons" in latest_row.columns:
+                            reasons_val = latest_row.iloc[0].get("Reasons", "")
+                            if pd.notna(reasons_val) and str(reasons_val).strip():
+                                latest_reasons = f"Reasons: {reasons_val}"
+
+                        detail_parts = [p for p in [kpi_context, latest_reasons] if p]
+                        detail_html  = f"<div style='font-size:0.82rem; color:#555; margin-top:5px;'>{' &nbsp;|&nbsp; '.join(detail_parts)}</div>" if detail_parts else ""
+
+                        st.markdown(f"""
+                        <div style='background:{color}; border:1.5px solid {border}; border-radius:10px;
+                                    padding:12px 16px; margin-bottom:8px;'>
+                            <div style='font-weight:700; font-size:1rem;'>
+                                {direction} &nbsp; <b>{tname}</b> &nbsp;
+                                <span style='color:#888; font-weight:400;'>
+                                    Group {prev_g} {arrow} Group {curr_g} ({change:+d})
+                                </span>
+                            </div>
+                            {detail_html}
+                        </div>""", unsafe_allow_html=True)
+
+                    st.divider()
+
+
 
             st.subheader(f"Team Overview (Latest Date: {latest_date.date()})")
 
