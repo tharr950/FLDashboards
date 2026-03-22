@@ -37,7 +37,7 @@ def get_rp_connection():
         port=int(creds.get("port", 3306)),
         user=str(creds["user"]),
         password=str(creds["password"]),
-        connection_timeout=10,
+        connection_timeout=30,
         charset="utf8mb4",
         auth_plugin="mysql_native_password",
     )
@@ -267,6 +267,7 @@ def load_exam_data():
             join exams_production.transcript_subjects on exams_production.transcript_subjects.transcript_id = exams_production.transcripts.id
             join exams_production.exam_subjects on exams_production.exam_subjects.id = exams_production.transcript_subjects.exam_subject_id
             join exams_production.subjects on exams_production.subjects.id = exams_production.exam_subjects.subject_id
+            where exams_production.transcripts.created_at >= (curdate() - interval 2 year)
         ),
         cte_exams as (
             select
@@ -318,6 +319,7 @@ def load_exam_data():
             join orbit_production.students on orbit_production.study_areas.student_id = orbit_production.students.id
             join orbit_production.users studentusers on orbit_production.students.user_id = studentusers.id
             and orbit_production.subject_translations.name in ('ACT', 'SAT', 'Digital SAT', 'PSAT/NMSQT', 'Digital PSAT','Digital PSAT/NMSQT','PSAT','Digital ACT', 'PSAT 8/9')
+            where orbit_production.study_area_snapshots.date >= (curdate() - interval 2 year)
         )
         select distinct
             orbit_production.employees.id as tutor_id,
@@ -369,6 +371,7 @@ def load_exam_data():
     """
     try:
         cursor = conn.cursor(dictionary=True)
+        cursor.execute("SET SESSION MAX_EXECUTION_TIME=60000")  # 60s hard limit
         cursor.execute(query)
         rows = cursor.fetchall()
         df   = pd.DataFrame(rows)
