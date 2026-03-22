@@ -40,8 +40,6 @@ def get_rp_connection():
         connection_timeout=10,
         charset="utf8mb4",
         auth_plugin="mysql_native_password",
-        ssl_disabled=False,
-        ssl_verify_cert=False,
     )
 
 
