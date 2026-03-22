@@ -5,3 +5,4 @@ plotly
 openpyxl
 xlsxwriter
 psycopg2-binary
+pymysql
