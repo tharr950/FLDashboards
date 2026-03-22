@@ -196,36 +196,42 @@ def load_grades_data():
 @st.cache_data(ttl=3600)
 def load_availability_compliance():
     """
-    Returns tutors who HAVE posted 7+ days of availability.
-    We use this to find who is MISSING from the list for the
-    current and next week.
+    Returns tutors who have posted 7+ days of availability
+    in the current week OR the next week only.
     """
     conn = get_redshift_connection()
-    # Get current week's Sunday and next week's Sunday dynamically
     today = pd.Timestamp.now()
     days_since_sunday = (today.weekday() + 1) % 7
     this_sunday = (today - pd.Timedelta(days=days_since_sunday)).strftime("%Y-%m-%d")
+    next_sunday = (today - pd.Timedelta(days=days_since_sunday) + pd.Timedelta(weeks=1)).strftime("%Y-%m-%d")
 
     query = f"""
+        with avail_deduped as (
+            select distinct
+                rp_bi.tutor_availabilities_daily.employee_id,
+                rp_bi.tutor_availabilities_daily.full_date,
+                rp_bi.dates.first_day_of_week_sunday_start as week_start
+            from rp_bi.tutor_availabilities_daily
+            join rp_bi.dates on rp_bi.tutor_availabilities_daily.full_date = rp_bi.dates.full_date
+            where rp_bi.dates.first_day_of_week_sunday_start >= '{this_sunday}'
+              and rp_bi.dates.first_day_of_week_sunday_start <= '{next_sunday}'
+        )
         select
-            users.first_name||' '||users.last_name as tutor_name,
+            dw.users.first_name||' '||dw.users.last_name as tutor_name,
             dw.employees.id as employee_id,
             dw.addresses.state,
             dw.teams.name as team,
-            rp_bi.dates.first_day_of_week_sunday_start as week_start
-        from rp_bi.tutor_availabilities_daily
-        join rp_bi.dates on rp_bi.tutor_availabilities_daily.full_date = rp_bi.dates.full_date
-        join dw.employees on rp_bi.tutor_availabilities_daily.employee_id = dw.employees.id
+            avail_deduped.week_start
+        from avail_deduped
+        join dw.employees on avail_deduped.employee_id = dw.employees.id
         join dw.users on dw.employees.user_id = dw.users.id
         join dw.team_members on dw.employees.id = dw.team_members.member_id
         join dw.teams on dw.team_members.team_id = dw.teams.id
         join dw.addresses on dw.users.address_id = dw.addresses.id
-        where 1=1
-        and rp_bi.dates.first_day_of_week_sunday_start >= '{this_sunday}'
-        and dw.teams.name <> 'Proctors'
-        and dw.employees.end_date IS NULL
+        where dw.teams.name <> 'Proctors'
+          and dw.employees.end_date IS NULL
         group by 1,2,3,4,5
-        having count(distinct rp_bi.tutor_availabilities_daily.full_date) > 6
+        having count(distinct avail_deduped.full_date) > 6
         order by 4,1
     """
     try:
