@@ -1714,50 +1714,63 @@ def render_app(config):
                            .sort_values(ascending=False))
                 total_unsched = home_arch_df["unscheduled_hours"].sum()
                 if total_unsched > 0:
+                    _unsched_details = [
+                        f"{t} — {h:.1f} hrs"
+                        for t, h in unsched.head(10).items()
+                    ]
                     card("⏳", "Unscheduled Hours",
                          f"Team has <b>{total_unsched:,.1f} total unscheduled hours</b>. "
                          f"Top: <b>{unsched.index[0]}</b> ({unsched.iloc[0]:.1f} hrs).",
-                         color="yellow")
+                         color="yellow", details=_unsched_details)
 
             # Stale exam scores
             if not home_exam_df.empty and "exam_valid_composite" in home_exam_df.columns:
                 now_utc2 = pd.Timestamp.now(tz="UTC")
                 stale_exam_by_tutor = {}
+                stale_exam_students = {}
                 for tutor, tdf in home_exam_df.groupby("tutor_name"):
-                    count = 0
+                    _stale_names = []
                     for sid, sdf in tdf.groupby("student_id"):
                         completed = sdf[sdf["exam_valid_composite"] == True]
                         if not completed.empty:
                             latest = pd.to_datetime(completed["exam_date"], utc=True).max()
                             if pd.notna(latest) and (now_utc2 - latest).days > 90:
-                                count += 1
-                    if count > 0:
-                        stale_exam_by_tutor[tutor] = count
+                                _sname = sdf["student_name"].iloc[0]
+                                _days  = (now_utc2 - latest).days
+                                _stale_names.append(f"{_sname} — {_days}d since last exam")
+                    if _stale_names:
+                        stale_exam_by_tutor[tutor] = len(_stale_names)
+                        stale_exam_students[tutor]  = sorted(_stale_names)
                 for tutor, count in sorted(stale_exam_by_tutor.items(),
                                            key=lambda x: x[1], reverse=True)[:3]:
                     card("🕐", "Stale Practice Exam",
                          f"<b>{tutor}</b> has <b>{count} student{'s' if count>1 else ''}</b> "
                          f"with no completed exam in 90+ days.",
-                         color="yellow")
+                         color="yellow", details=stale_exam_students.get(tutor))
 
             # Stale grades
             if not home_grades_df.empty:
                 stale_by_tutor = {}
+                stale_grade_students = {}
                 for tutor, tdf in home_grades_df.groupby("tutor_name"):
                     has_any    = tdf.groupby("student_id")["score"].apply(lambda s: s.notna().any())
                     graded_ids = has_any[has_any].index
                     graded     = tdf[tdf["student_id"].isin(graded_ids)]
                     if not graded.empty:
-                        latest = graded.groupby("student_id")["days_since_update"].min()
-                        stale  = int((latest > 90).sum())
-                        if stale > 0:
-                            stale_by_tutor[tutor] = stale
+                        latest = graded.groupby(["student_id","student_name"])["days_since_update"].min().reset_index()
+                        stale_rows = latest[latest["days_since_update"] > 90].sort_values("days_since_update", ascending=False)
+                        if not stale_rows.empty:
+                            stale_by_tutor[tutor]      = len(stale_rows)
+                            stale_grade_students[tutor] = [
+                                f"{row['student_name']} — {int(row['days_since_update'])}d since update"
+                                for _, row in stale_rows.iterrows()
+                            ]
                 for tutor, count in sorted(stale_by_tutor.items(),
                                            key=lambda x: x[1], reverse=True)[:2]:
                     card("📚", "Stale Grades",
                          f"<b>{tutor}</b> has <b>{count} student{'s' if count>1 else ''}</b> "
                          f"with no grade update in 90+ days.",
-                         color="yellow")
+                         color="yellow", details=stale_grade_students.get(tutor))
 
             # Students not yet met with (exam students with no sessions yet)
             if not home_exam_df.empty:
