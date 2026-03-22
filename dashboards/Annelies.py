@@ -196,15 +196,14 @@ def load_grades_data():
 @st.cache_data(ttl=3600)
 def load_availability_compliance():
     """
-    Returns tutors who HAVE posted 7+ days of availability.
-    We use this to find who is MISSING from the list for the
-    current and next week.
+    Returns tutors who have posted 7+ days of availability
+    in the current week OR the next week only.
     """
     conn = get_redshift_connection()
-    # Get current week's Sunday and next week's Sunday dynamically
     today = pd.Timestamp.now()
     days_since_sunday = (today.weekday() + 1) % 7
     this_sunday = (today - pd.Timedelta(days=days_since_sunday)).strftime("%Y-%m-%d")
+    next_sunday = (today - pd.Timedelta(days=days_since_sunday) + pd.Timedelta(weeks=1)).strftime("%Y-%m-%d")
 
     query = f"""
         select
@@ -222,6 +221,7 @@ def load_availability_compliance():
         join dw.addresses on dw.users.address_id = dw.addresses.id
         where 1=1
         and rp_bi.dates.first_day_of_week_sunday_start >= '{this_sunday}'
+        and rp_bi.dates.first_day_of_week_sunday_start <= '{next_sunday}'
         and dw.teams.name <> 'Proctors'
         and dw.employees.end_date IS NULL
         group by 1,2,3,4,5
