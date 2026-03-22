@@ -4950,8 +4950,12 @@ def render_app(config):
 
                         # Pull KPI data to explain the change
                         kpi_context = ""
-                        if not kpi_home_df.empty and "Tutor Name" in kpi_home_df.columns:
-                            tutor_kpi = kpi_home_df[kpi_home_df["Tutor Name"] == tname].copy()
+                        try:
+                            _concern_kpi_df = load_kpi_data()
+                        except Exception:
+                            _concern_kpi_df = pd.DataFrame()
+                        if not _concern_kpi_df.empty and "Tutor Name" in _concern_kpi_df.columns:
+                            tutor_kpi = _concern_kpi_df[_concern_kpi_df["Tutor Name"] == tname].copy()
                             if not tutor_kpi.empty:
                                 tutor_kpi["Date Range Parsed"] = pd.to_datetime(
                                     tutor_kpi["Date Range"].str.split(" - ").str[0], errors="coerce")
