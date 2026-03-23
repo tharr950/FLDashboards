@@ -988,7 +988,7 @@ def render_app(config):
                 raw_video, video_fetched_at_home = load_parent_update_videos()
                 home_video_df = raw_video[
                     (raw_video["faculty leader"] == "Team Cross") &
-                    (raw_video["parent update sent"] == "True")
+                    (raw_video["parent update sent"].astype(str) == "True")
                 ].copy()
                 home_video_df["duration_secs"] = home_video_df["video duration"].apply(duration_to_secs)
                 if not home_video_df.empty:
@@ -2016,7 +2016,7 @@ def render_app(config):
                 raw_wl_video, _ = load_parent_update_videos()
                 wl_video_df = raw_wl_video[
                     (raw_wl_video["faculty leader"] == "Team Cross") &
-                    (raw_wl_video["parent update sent"] == "True")
+                    (raw_wl_video["parent update sent"].astype(str) == "True")
                 ].copy()
                 wl_video_df["duration_secs"] = wl_video_df["video duration"].apply(duration_to_secs)
                 if not wl_video_df.empty:
@@ -2578,14 +2578,14 @@ def render_app(config):
                 raw_p_video, _ = load_parent_update_videos()
                 p_video_df = raw_p_video[
                     (raw_p_video["faculty leader"] == "Team Cross") &
-                    (raw_p_video["parent update sent"] == "True") &
+                    (raw_p_video["parent update sent"].astype(str) == "True") &
                     (raw_p_video["tutor"] == profile_tutor)
                 ].copy()
                 p_video_df["duration_secs"] = p_video_df["video duration"].apply(duration_to_secs)
                 if not p_video_df.empty:
                     all_video = raw_p_video[
                         (raw_p_video["faculty leader"] == "Team Cross") &
-                        (raw_p_video["parent update sent"] == "True")
+                        (raw_p_video["parent update sent"].astype(str) == "True")
                     ].copy()
                     all_video["duration_secs"] = all_video["video duration"].apply(duration_to_secs)
                     all_summary = build_video_tutor_summary(all_video)
@@ -2907,7 +2907,7 @@ def render_app(config):
 
         team_video_df = raw_video_df[
             (raw_video_df["faculty leader"] == "Team Cross") &
-            (raw_video_df["parent update sent"] == "True")
+            (raw_video_df["parent update sent"].astype(str) == "True")
         ].copy()
 
         if team_video_df.empty:
