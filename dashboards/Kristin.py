@@ -285,10 +285,10 @@ def build_video_tutor_summary(df):
 # SNAPSHOT FILES
 # ─────────────────────────────────────────────
 
-SNAPSHOT_FILE        = "archive_snapshots.csv"
-GRADES_SNAPSHOT_FILE = "grades_snapshots.csv"
-EXAMS_SNAPSHOT_FILE  = "exams_snapshots.csv"
-VIDEO_SNAPSHOT_FILE  = "video_snapshots.csv"
+SNAPSHOT_FILE        = "kristin_archive_snapshots.csv"
+GRADES_SNAPSHOT_FILE = "kristin_grades_snapshots.csv"
+EXAMS_SNAPSHOT_FILE  = "kristin_exams_snapshots.csv"
+VIDEO_SNAPSHOT_FILE  = "kristin_video_snapshots.csv"
 
 
 def save_weekly_snapshot(df):
@@ -601,10 +601,10 @@ def load_kpi_data():
 # WATCH LIST HELPERS
 # ─────────────────────────────────────────────
 
-WATCHLIST_FILE            = "ela_watchlist.csv"
-WATCHLIST_BASELINE_FILE   = "ela_watchlist_baselines.csv"
-WATCHLIST_NOTES_FILE      = "ela_watchlist_notes.csv"
-WATCHLIST_THRESHOLDS_FILE = "ela_watchlist_thresholds.csv"
+WATCHLIST_FILE            = "kristin_watchlist.csv"
+WATCHLIST_BASELINE_FILE   = "kristin_watchlist_baselines.csv"
+WATCHLIST_NOTES_FILE      = "kristin_watchlist_notes.csv"
+WATCHLIST_THRESHOLDS_FILE = "kristin_watchlist_thresholds.csv"
 
 DEFAULT_THRESHOLDS = {
     "arch_count":      1,
@@ -732,7 +732,7 @@ def delete_watchlist_thresholds(tutor_name):
 # LOGIN SNAPSHOT HELPERS
 # ─────────────────────────────────────────────
 
-LOGIN_SNAPSHOT_FILE = "ela_login_snapshot.csv"
+LOGIN_SNAPSHOT_FILE = "kristin_login_snapshot.csv"
 
 def save_login_snapshot(arch_df, grades_df, exam_df, video_summary_df=None):
     team_archivable  = int(arch_df["should_archive"].sum()) if not arch_df.empty else 0
@@ -1928,7 +1928,7 @@ def render_app(config):
         new_watched = st.multiselect(
             "Select tutors to watch:",
             options=all_tutors_wl,
-            default=current_watched,
+            default=[t for t in current_watched if t in all_tutors_wl],
             key="watchlist_select"
         )
 

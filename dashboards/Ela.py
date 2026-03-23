@@ -1928,7 +1928,7 @@ def render_app(config):
         new_watched = st.multiselect(
             "Select tutors to watch:",
             options=all_tutors_wl,
-            default=current_watched,
+            default=[t for t in current_watched if t in all_tutors_wl],
             key="watchlist_select"
         )
 
