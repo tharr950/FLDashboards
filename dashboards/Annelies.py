@@ -3665,6 +3665,96 @@ def render_app(config):
                 })
             return pd.DataFrame(rows)
 
+        # ── Score improvement helper ──────────────────────────
+        def compute_improvement(student_df, exam_family, mode="last", score_col="score"):
+            fsd    = student_df["first_session_day"].iloc[0]
+            fam_df = student_df[student_df["exam_family"] == exam_family].copy()
+            fam_df = fam_df[fam_df["exam_valid_composite"] == True].copy()
+            if fam_df.empty:
+                return None, None, None, None, None
+            fam_df      = fam_df.sort_values("exam_date")
+            baseline_df = fam_df[fam_df["exam_date"] <= fsd]
+            after_df    = fam_df[fam_df["exam_date"] >  fsd]
+            if baseline_df.empty or after_df.empty:
+                return None, None, None, None, None
+            baseline_row    = baseline_df.sort_values("exam_date").iloc[-1]
+            official_after  = after_df[after_df["is_official"] == True].dropna(subset=[score_col])
+            after_df_valid  = after_df.dropna(subset=[score_col])
+            if after_df_valid.empty:
+                return None, None, None, None, None
+            if not official_after.empty:
+                endpoint_row = official_after.sort_values("exam_date").iloc[-1]                                if mode == "last" else                                official_after.loc[official_after[score_col].idxmax()]
+            else:
+                endpoint_row = after_df_valid.sort_values("exam_date").iloc[-1]                                if mode == "last" else                                after_df_valid.loc[after_df_valid[score_col].idxmax()]
+            b_score     = baseline_row[score_col]
+            e_score     = endpoint_row[score_col]
+            improvement = (e_score - b_score) if pd.notna(b_score) and pd.notna(e_score) else None
+            return b_score, e_score, improvement, baseline_row, endpoint_row
+
+        def build_student_improvement(df, mode="last"):
+            records = []
+            for (tutor_id, tutor_name, student_id, student_name), sdf in df.groupby(
+                    ["tutor_id","tutor_name","student_id","student_name"]):
+                hours = sdf["test_prep_hours_delivered"].iloc[0]
+                fsd   = sdf["first_session_day"].iloc[0]
+                mrs   = sdf["most_recent_session"].iloc[0]
+                for fam in ["SAT/PSAT", "ACT"]:
+                    b, e, imp, b_row, e_row = compute_improvement(sdf, fam, mode=mode)
+                    fam_all    = sdf[sdf["exam_family"] == fam].copy().sort_values("exam_date")
+                    before_all = fam_all[fam_all["exam_date"] <= fsd]
+                    after_all  = fam_all[fam_all["exam_date"] >  fsd]
+                    def section_imp(section_col, valid_col):
+                        if before_all.empty or after_all.empty: return None, None, None
+                        b_sec = before_all[before_all[valid_col] == True].dropna(subset=[section_col])
+                        a_sec = after_all[after_all[valid_col] == True].dropna(subset=[section_col])
+                        if b_sec.empty or a_sec.empty: return None, None, None
+                        bv = b_sec.sort_values("exam_date").iloc[-1][section_col]
+                        av = a_sec.loc[a_sec[section_col].idxmax()][section_col]                              if mode == "highest" else                              a_sec.sort_values("exam_date").iloc[-1][section_col]
+                        return bv, av, (av - bv) if pd.notna(bv) and pd.notna(av) else None
+                    if fam == "SAT/PSAT":
+                        bm, em, imp_m = section_imp("sat_math", "sat_math_valid")
+                        br, er, imp_r = section_imp("sat_rw",   "sat_rw_valid")
+                        sec_imps = {
+                            "sat_math_baseline": bm, "sat_math_endpoint": em, "sat_math_improvement": imp_m,
+                            "sat_rw_baseline":   br, "sat_rw_endpoint":   er, "sat_rw_improvement":   imp_r,
+                        }
+                    else:
+                        beng, eeng, imp_eng = section_imp("act_english", "act_english_valid")
+                        bmat, emat, imp_mat = section_imp("act_math",    "act_math_valid")
+                        bred, ered, imp_red = section_imp("act_reading", "act_reading_valid")
+                        bsci, esci, imp_sci = section_imp("act_science", "act_science_valid")
+                        sec_imps = {
+                            "act_english_baseline": beng, "act_english_endpoint": eeng, "act_english_improvement": imp_eng,
+                            "act_math_baseline":    bmat, "act_math_endpoint":    emat, "act_math_improvement":    imp_mat,
+                            "act_reading_baseline": bred, "act_reading_endpoint": ered, "act_reading_improvement": imp_red,
+                            "act_science_baseline": bsci, "act_science_endpoint": esci, "act_science_improvement": imp_sci,
+                        }
+                    if b is not None or e is not None:
+                        fam_completed_after = sdf[
+                            (sdf["exam_family"] == fam) &
+                            (sdf["exam_valid_composite"] == True) &
+                            (sdf["exam_date"] > fsd)
+                        ]["exam_id"].nunique()
+                        hours_per_exam = (
+                            round(hours / fam_completed_after, 1)
+                            if fam_completed_after > 0 and pd.notna(hours) else None
+                        )
+                        rec = {
+                            "tutor_id": tutor_id, "tutor_name": tutor_name,
+                            "student_id": student_id, "student_name": student_name,
+                            "exam_family": fam, "hours_delivered": hours,
+                            "completed_exams": fam_completed_after,
+                            "hours_per_exam": hours_per_exam,
+                            "first_session_day": fsd, "most_recent_session": mrs,
+                            "baseline_score": b, "endpoint_score": e, "improvement": imp,
+                            "baseline_date":  b_row["exam_date"] if b_row is not None else None,
+                            "endpoint_date":  e_row["exam_date"] if e_row is not None else None,
+                            "endpoint_is_official": e_row["is_official"] if e_row is not None else None,
+                        }
+                        rec.update(sec_imps)
+                        records.append(rec)
+            return pd.DataFrame(records)
+
         tutor_flag_summary = build_tutor_flag_summary(team_exam_df)
         medals_e = ["🥇","🥈","🥉","4️⃣","5️⃣"]
 
@@ -3724,6 +3814,60 @@ def render_app(config):
         m3.metric("No Completed Exam",        total_no_exam, delta_color="inverse")
         m4.metric("Stale Exam (>90 days)",    total_stale_e, delta_color="inverse")
         m5.metric("% Eligible w/ Exam",       f"{pct_with_exam_team:.1f}%")
+        # ── Score improvement & hours-per-exam team summary ──
+        st.markdown("#### 📈 Score Improvement & Efficiency Summary")
+        ov_mode     = st.radio("Improvement mode", ["First → Last", "First → Highest"],
+                               horizontal=True, key="overview_imp_mode")
+        ov_mode_key = "last" if ov_mode == "First → Last" else "highest"
+        ov_imp_df   = build_student_improvement(team_exam_df, mode=ov_mode_key)
+
+        if not ov_imp_df.empty:
+            ov_col1, ov_col2 = st.columns(2)
+            for fam, col in [("SAT/PSAT", ov_col1), ("ACT", ov_col2)]:
+                fam_ov = ov_imp_df[
+                    (ov_imp_df["exam_family"] == fam) & ov_imp_df["improvement"].notna()]
+                with col:
+                    st.markdown(f"**{fam}**")
+                    if fam_ov.empty:
+                        st.caption("Not enough data for improvement calculation.")
+                    else:
+                        avg_imp      = fam_ov["improvement"].mean()
+                        pct_improved = (fam_ov["improvement"] > 0).mean() * 100
+                        avg_hpe      = fam_ov["hours_per_exam"].dropna().mean()
+                        n_students   = len(fam_ov)
+                        ci1, ci2, ci3, ci4 = st.columns(4)
+                        ci1.metric("Avg Improvement",  f"{avg_imp:+.0f} pts")
+                        ci2.metric("% Improved",        f"{pct_improved:.0f}%")
+                        ci3.metric("Avg Hrs / Exam",    f"{avg_hpe:.1f}" if pd.notna(avg_hpe) else "N/A")
+                        ci4.metric("Students w/ Data",  n_students)
+                        tutor_ov = (fam_ov.groupby("tutor_name")
+                                    .agg(avg_improvement=("improvement","mean"),
+                                         avg_hrs_per_exam=("hours_per_exam","mean"),
+                                         n=("student_name","count"))
+                                    .reset_index()
+                                    .sort_values("avg_improvement", ascending=True))
+                        if not tutor_ov.empty:
+                            max_abs_t = max(abs(tutor_ov["avg_improvement"].min()),
+                                            abs(tutor_ov["avg_improvement"].max()), 1)
+                            fig_ov = px.bar(
+                                tutor_ov, x="avg_improvement", y="tutor_name",
+                                orientation="h", color="avg_improvement",
+                                color_continuous_scale=["#cc0000","#ffffff","#006400"],
+                                range_color=[-max_abs_t, max_abs_t],
+                                text=tutor_ov["avg_improvement"].apply(lambda v: f"{v:+.0f}"),
+                                title=f"Avg {fam} Composite Improvement by Tutor",
+                                height=max(280, len(tutor_ov) * 30),
+                                hover_data={"avg_hrs_per_exam": ":.1f", "n": True}
+                            )
+                            fig_ov.update_layout(
+                                title=dict(x=0.5, xanchor="center"),
+                                xaxis_title="Avg Score Change", yaxis_title="",
+                                showlegend=False, coloraxis_showscale=False,
+                                margin=dict(l=160, r=60, t=50, b=30))
+                            fig_ov.add_vline(x=0, line_dash="dash", line_color="grey")
+                            fig_ov.update_traces(textposition="outside")
+                            st.plotly_chart(fig_ov, use_container_width=True)
+
 
         st.divider()
         st.markdown("### 🔍 Filters")
@@ -3765,8 +3909,9 @@ def render_app(config):
         single_tutor_exam = sel_tutor_e != "All Tutors"
         st.divider()
 
-        tab_ov_e, tab_det_e, tab_tr_e = st.tabs([
-            "📊 Team / Tutor Overview", "📋 Exam Detail", "📅 Trends Over Time"])
+        tab_ov_e, tab_imp_e, tab_det_e, tab_tr_e = st.tabs([
+            "📊 Team / Tutor Overview", "📈 Score Improvement",
+            "📋 Exam Detail", "📅 Trends Over Time"])
 
         with tab_ov_e:
             if not single_tutor_exam:
@@ -3822,6 +3967,94 @@ def render_app(config):
                                        annotation_position="top right")
                     fig_days.update_traces(textposition="outside")
                     st.plotly_chart(fig_days, use_container_width=True)
+
+        with tab_imp_e:
+            st.markdown("#### Score Improvement Settings")
+            imp_col1, imp_col2 = st.columns(2)
+            with imp_col1:
+                improvement_mode = st.radio("Improvement mode",
+                                            ["First → Last", "First → Highest"],
+                                            horizontal=True, key="imp_mode")
+            with imp_col2:
+                imp_fam = st.radio("Exam type", ["SAT/PSAT", "ACT"],
+                                   horizontal=True, key="imp_fam")
+            mode_key = "last" if improvement_mode == "First → Last" else "highest"
+            imp_df   = build_student_improvement(view_exam_df, mode=mode_key)
+            if imp_df.empty:
+                st.info("Not enough data to calculate score improvement with the current filters. "
+                        "Students need at least one exam before and one exam after their first session.")
+            else:
+                fam_imp_df = imp_df[imp_df["exam_family"] == imp_fam].copy()
+                if fam_imp_df.empty:
+                    st.info(f"No {imp_fam} improvement data available with current filters.")
+                else:
+                    comp_df = fam_imp_df.dropna(subset=["improvement"]).sort_values("improvement", ascending=True)
+                    if not comp_df.empty:
+                        color_vals = comp_df["improvement"].tolist()
+                        max_abs    = max(abs(min(color_vals)), abs(max(color_vals)), 1)
+                        fig_imp = px.bar(
+                            comp_df, x="improvement", y="student_name",
+                            orientation="h", color="improvement",
+                            color_continuous_scale=["#cc0000","#ffffff","#006400"],
+                            range_color=[-max_abs, max_abs],
+                            text=comp_df["improvement"].apply(lambda v: f"{v:+.0f}"),
+                            title=f"{imp_fam} Composite Score Improvement ({improvement_mode})",
+                            height=max(350, len(comp_df) * 30),
+                            hover_data={"student_name": True, "tutor_name": True,
+                                        "baseline_score": True, "endpoint_score": True,
+                                        "hours_delivered": True}
+                        )
+                        fig_imp.update_layout(
+                            title=dict(x=0.5, xanchor="center"),
+                            xaxis_title="Score Change", yaxis_title="",
+                            showlegend=False, coloraxis_showscale=False,
+                            margin=dict(l=180, r=60, t=50, b=40))
+                        fig_imp.add_vline(x=0, line_dash="dash", line_color="grey")
+                        fig_imp.update_traces(textposition="outside")
+                        st.plotly_chart(fig_imp, use_container_width=True)
+                        avg_imp = comp_df["improvement"].mean()
+                        pct_pos = (comp_df["improvement"] > 0).mean() * 100
+                        avg_hpe = comp_df["hours_per_exam"].dropna().mean()
+                        sm1, sm2, sm3, sm4 = st.columns(4)
+                        sm1.metric("Avg Composite Improvement", f"{avg_imp:+.0f} pts")
+                        sm2.metric("% Students Improved",       f"{pct_pos:.0f}%")
+                        sm3.metric("Avg Hours / Exam",          f"{avg_hpe:.1f}" if pd.notna(avg_hpe) else "N/A")
+                        sm4.metric("Students w/ Data",          len(comp_df))
+                    st.divider()
+                    st.markdown("#### Section-Level Improvement")
+                    if imp_fam == "SAT/PSAT":
+                        section_map = {
+                            "Math":              ("sat_math_baseline","sat_math_endpoint","sat_math_improvement"),
+                            "Reading & Writing": ("sat_rw_baseline",  "sat_rw_endpoint",  "sat_rw_improvement"),
+                        }
+                    else:
+                        section_map = {
+                            "English": ("act_english_baseline","act_english_endpoint","act_english_improvement"),
+                            "Math":    ("act_math_baseline",   "act_math_endpoint",   "act_math_improvement"),
+                            "Reading": ("act_reading_baseline","act_reading_endpoint","act_reading_improvement"),
+                            "Science": ("act_science_baseline","act_science_endpoint","act_science_improvement"),
+                        }
+                    for sec_name, (b_col, e_col, imp_col) in section_map.items():
+                        if imp_col not in fam_imp_df.columns: continue
+                        sec_df = fam_imp_df.dropna(subset=[imp_col]).sort_values(imp_col, ascending=True)
+                        if sec_df.empty: continue
+                        max_abs_s = max(abs(sec_df[imp_col].min()), abs(sec_df[imp_col].max()), 1)
+                        fig_sec = px.bar(
+                            sec_df, x=imp_col, y="student_name",
+                            orientation="h", color=imp_col,
+                            color_continuous_scale=["#cc0000","#ffffff","#006400"],
+                            range_color=[-max_abs_s, max_abs_s],
+                            text=sec_df[imp_col].apply(lambda v: f"{v:+.0f}"),
+                            title=f"{imp_fam} — {sec_name} Section ({improvement_mode})",
+                            height=max(280, len(sec_df) * 28))
+                        fig_sec.update_layout(
+                            title=dict(x=0.5, xanchor="center"),
+                            xaxis_title="Score Change", yaxis_title="",
+                            showlegend=False, coloraxis_showscale=False,
+                            margin=dict(l=180, r=60, t=50, b=30))
+                        fig_sec.add_vline(x=0, line_dash="dash", line_color="grey")
+                        fig_sec.update_traces(textposition="outside")
+                        st.plotly_chart(fig_sec, use_container_width=True)
 
         with tab_det_e:
             if view_exam_df.empty:

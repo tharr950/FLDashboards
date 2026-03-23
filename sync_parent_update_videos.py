@@ -79,7 +79,7 @@ def get_previous_week():
     shifted       = today_pacific - timedelta(days=1)
     monday        = shifted - timedelta(days=shifted.weekday())
     week_start    = monday - timedelta(days=1)
-    week_end      = monday + timedelta(days=5)
+    week_end      = monday + timedelta(days=6)  # +1 day buffer for Eastern-time tutors
     log.info(f"Previous week: {week_start} -> {week_end}")
     return (
         datetime(week_start.year, week_start.month, week_start.day),
