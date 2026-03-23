@@ -4131,10 +4131,10 @@ def render_app(config):
                                 sorted(team_exam_df["tutor_name"].dropna().unique().tolist())
             trend_metric_e = st.selectbox(
                 "Trend metric",
-                ["no_exam_students","stale_exam_students","pct_eligible_with_exam"],
+                ["students_no_exam","students_stale_exam","pct_eligible_with_exam"],
                 format_func=lambda x: {
-                    "no_exam_students":      "Students With No Completed Exam",
-                    "stale_exam_students":   "Students With Stale Exam (>90d)",
+                    "students_no_exam":      "Students With No Completed Exam",
+                    "students_stale_exam":   "Students With Stale Exam (>90d)",
                     "pct_eligible_with_exam":"% Eligible Students With a Completed Exam",
                 }[x], key="exam_trend_metric")
             if esnap.empty:
