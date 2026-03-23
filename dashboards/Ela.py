@@ -4141,8 +4141,8 @@ def render_app(config):
                 st.caption("No historical snapshot data yet — trends will build automatically each week.")
             else:
                 trend_color_e = {
-                    "no_exam_students":      "#cc0000",
-                    "stale_exam_students":   "#b35c00",
+                    "students_no_exam":      "#cc0000",
+                    "students_stale_exam":   "#b35c00",
                     "pct_eligible_with_exam":"#006400",
                 }[trend_metric_e]
                 for tutor in tutors_to_show_e:
