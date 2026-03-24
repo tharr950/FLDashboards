@@ -8,6 +8,64 @@ import io
 import psycopg2
 import mysql.connector
 
+import requests as _requests
+import base64 as _base64
+
+# ─────────────────────────────────────────────
+# GITHUB PERSISTENT STORAGE HELPERS
+# ─────────────────────────────────────────────
+
+def gh_read(filename: str) -> pd.DataFrame:
+    """Read a persistent CSV from GitHub. Returns empty DataFrame if not found."""
+    try:
+        repo  = st.secrets["github"]["repo"]
+        token = st.secrets["github"]["token"]
+        path  = f"data/persistent/{filename}"
+        ts    = int(pd.Timestamp.now().timestamp())
+        url   = f"https://raw.githubusercontent.com/{repo}/main/{path}?cb={ts}"
+        resp  = _requests.get(url, headers={"Authorization": f"token {token}"}, timeout=15)
+        if resp.status_code == 404:
+            return pd.DataFrame()
+        resp.raise_for_status()
+        return pd.read_csv(io.StringIO(resp.text))
+    except Exception as e:
+        st.warning(f"⚠️ Could not read {filename} from GitHub: {e}")
+        return pd.DataFrame()
+
+
+def gh_write(filename: str, df: pd.DataFrame) -> bool:
+    """Write a persistent CSV to GitHub. Returns True on success."""
+    try:
+        repo  = st.secrets["github"]["repo"]
+        token = st.secrets["github"]["token"]
+        path  = f"data/persistent/{filename}"
+        api   = f"https://api.github.com/repos/{repo}/contents/{path}"
+        heads = {
+            "Authorization": f"token {token}",
+            "Accept": "application/vnd.github.v3+json",
+        }
+        csv_bytes = df.to_csv(index=False).encode("utf-8")
+        encoded   = _base64.b64encode(csv_bytes).decode("utf-8")
+        # Get existing SHA if file exists
+        existing_sha = None
+        r = _requests.get(api, headers=heads, timeout=15)
+        if r.status_code == 200:
+            existing_sha = r.json().get("sha")
+        payload = {
+            "message": f"persist: {filename} {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M')} UTC",
+            "content": encoded,
+        }
+        if existing_sha:
+            payload["sha"] = existing_sha
+        r2 = _requests.put(api, headers=heads, json=payload, timeout=30)
+        r2.raise_for_status()
+        return True
+    except Exception as e:
+        st.warning(f"⚠️ Could not save {filename} to GitHub: {e}")
+        return False
+
+
+
 # ─────────────────────────────────────────────
 # REDSHIFT CONNECTION
 # ─────────────────────────────────────────────
@@ -202,13 +260,11 @@ def load_exam_data():
         github_token = st.secrets["github"]["token"]
         github_path  = st.secrets["github"].get("exam_data_path", "data/exam_data.csv")
         import urllib.request
-        req = urllib.request.Request(
-            f"https://raw.githubusercontent.com/{github_repo}/main/{github_path}",
-            headers={"Authorization": f"token {github_token}"}
-        )
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            csv_content = resp.read().decode("utf-8")
-        df = pd.read_csv(io.StringIO(csv_content))
+        ts   = int(pd.Timestamp.now().timestamp())
+        url  = f"https://raw.githubusercontent.com/{github_repo}/main/{github_path}?cb={ts}"
+        resp = _requests.get(url, headers={"Authorization": f"token {github_token}"}, timeout=30)
+        resp.raise_for_status()
+        df = pd.read_csv(io.StringIO(resp.text))
         if "fetched_at" in df.columns:
             fetched_at = df["fetched_at"].iloc[0] if not df.empty else "unknown"
             df = df.drop(columns=["fetched_at"])
@@ -226,13 +282,11 @@ def load_parent_update_videos():
         github_token = st.secrets["github"]["token"]
         github_path  = st.secrets["github"].get("parent_update_video_path", "data/parent_update_videos.csv")
         import urllib.request
-        req = urllib.request.Request(
-            f"https://raw.githubusercontent.com/{github_repo}/main/{github_path}",
-            headers={"Authorization": f"token {github_token}"}
-        )
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            csv_content = resp.read().decode("utf-8")
-        df = pd.read_csv(io.StringIO(csv_content))
+        ts   = int(pd.Timestamp.now().timestamp())
+        url  = f"https://raw.githubusercontent.com/{github_repo}/main/{github_path}?cb={ts}"
+        resp = _requests.get(url, headers={"Authorization": f"token {github_token}"}, timeout=30)
+        resp.raise_for_status()
+        df = pd.read_csv(io.StringIO(resp.text))
         if "fetched_at" in df.columns:
             fetched_at = df["fetched_at"].iloc[0] if not df.empty else "unknown"
             df = df.drop(columns=["fetched_at"])
@@ -304,14 +358,11 @@ def save_weekly_snapshot(df):
     )
     summary["week_key"]  = week_key
     summary["week_date"] = week_date
-    if os.path.exists(SNAPSHOT_FILE):
-        existing = pd.read_csv(SNAPSHOT_FILE)
-        if week_key in existing["week_key"].values:
-            return existing
-        updated = pd.concat([existing, summary], ignore_index=True)
-    else:
-        updated = summary
-    updated.to_csv(SNAPSHOT_FILE, index=False)
+    existing = gh_read(SNAPSHOT_FILE)
+    if not existing.empty and week_key in existing["week_key"].values:
+        return existing
+    updated = pd.concat([existing, summary], ignore_index=True) if not existing.empty else summary
+    gh_write(SNAPSHOT_FILE, updated)
     return updated
 
 
@@ -319,12 +370,9 @@ def save_grades_weekly_snapshot(df):
     today     = pd.Timestamp.now()
     week_key  = today.strftime("%Y-W%V")
     week_date = (today - pd.to_timedelta(today.dayofweek, unit="d")).strftime("%Y-%m-%d")
-    if os.path.exists(GRADES_SNAPSHOT_FILE):
-        existing = pd.read_csv(GRADES_SNAPSHOT_FILE)
-        if week_key in existing["week_key"].values:
-            return existing
-    else:
-        existing = pd.DataFrame()
+    existing = gh_read(GRADES_SNAPSHOT_FILE)
+    if not existing.empty and week_key in existing["week_key"].values:
+        return existing
     now = pd.Timestamp.now()
     rows = []
     for tutor, tdf in df.groupby("tutor_name"):
@@ -352,7 +400,7 @@ def save_grades_weekly_snapshot(df):
         })
     summary = pd.DataFrame(rows)
     updated = pd.concat([existing, summary], ignore_index=True) if not existing.empty else summary
-    updated.to_csv(GRADES_SNAPSHOT_FILE, index=False)
+    gh_write(GRADES_SNAPSHOT_FILE, updated)
     return updated
 
 
@@ -360,12 +408,9 @@ def save_exams_weekly_snapshot(df):
     today     = pd.Timestamp.now()
     week_key  = today.strftime("%Y-W%V")
     week_date = (today - pd.to_timedelta(today.dayofweek, unit="d")).strftime("%Y-%m-%d")
-    if os.path.exists(EXAMS_SNAPSHOT_FILE):
-        existing = pd.read_csv(EXAMS_SNAPSHOT_FILE)
-        if week_key in existing["week_key"].values:
-            return existing
-    else:
-        existing = pd.DataFrame()
+    existing = gh_read(EXAMS_SNAPSHOT_FILE)
+    if not existing.empty and week_key in existing["week_key"].values:
+        return existing
     now = pd.Timestamp.now(tz="UTC")
     rows = []
     for tutor, tdf in df.groupby("tutor_name"):
@@ -392,7 +437,7 @@ def save_exams_weekly_snapshot(df):
         })
     summary = pd.DataFrame(rows)
     updated = pd.concat([existing, summary], ignore_index=True) if not existing.empty else summary
-    updated.to_csv(EXAMS_SNAPSHOT_FILE, index=False)
+    gh_write(EXAMS_SNAPSHOT_FILE, updated)
     return updated
 
 
@@ -401,47 +446,40 @@ def save_video_weekly_snapshot(video_summary_df):
     today     = pd.Timestamp.now()
     week_key  = today.strftime("%Y-W%V")
     week_date = (today - pd.to_timedelta(today.dayofweek, unit="d")).strftime("%Y-%m-%d")
-    if os.path.exists(VIDEO_SNAPSHOT_FILE):
-        existing = pd.read_csv(VIDEO_SNAPSHOT_FILE)
-        if week_key in existing["week_key"].values:
-            return existing
-    else:
-        existing = pd.DataFrame()
+    existing = gh_read(VIDEO_SNAPSHOT_FILE)
+    if not existing.empty and week_key in existing["week_key"].values:
+        return existing
     summary = video_summary_df.copy()
     summary["week_key"]  = week_key
     summary["week_date"] = week_date
     updated = pd.concat([existing, summary], ignore_index=True) if not existing.empty else summary
-    updated.to_csv(VIDEO_SNAPSHOT_FILE, index=False)
+    gh_write(VIDEO_SNAPSHOT_FILE, updated)
     return updated
 
 
 def load_snapshots():
-    if os.path.exists(SNAPSHOT_FILE):
-        df = pd.read_csv(SNAPSHOT_FILE)
+    df = gh_read(SNAPSHOT_FILE)
+    if not df.empty and "week_date" in df.columns:
         df["week_date"] = pd.to_datetime(df["week_date"])
-        return df
-    return pd.DataFrame()
+    return df
 
 def load_grades_snapshots():
-    if os.path.exists(GRADES_SNAPSHOT_FILE):
-        df = pd.read_csv(GRADES_SNAPSHOT_FILE)
+    df = gh_read(GRADES_SNAPSHOT_FILE)
+    if not df.empty and "week_date" in df.columns:
         df["week_date"] = pd.to_datetime(df["week_date"])
-        return df
-    return pd.DataFrame()
+    return df
 
 def load_exams_snapshots():
-    if os.path.exists(EXAMS_SNAPSHOT_FILE):
-        df = pd.read_csv(EXAMS_SNAPSHOT_FILE)
+    df = gh_read(EXAMS_SNAPSHOT_FILE)
+    if not df.empty and "week_date" in df.columns:
         df["week_date"] = pd.to_datetime(df["week_date"])
-        return df
-    return pd.DataFrame()
+    return df
 
 def load_video_snapshots():
-    if os.path.exists(VIDEO_SNAPSHOT_FILE):
-        df = pd.read_csv(VIDEO_SNAPSHOT_FILE)
+    df = gh_read(VIDEO_SNAPSHOT_FILE)
+    if not df.empty and "week_date" in df.columns:
         df["week_date"] = pd.to_datetime(df["week_date"])
-        return df
-    return pd.DataFrame()
+    return df
 
 
 # ─────────────────────────────────────────────
@@ -618,18 +656,16 @@ DEFAULT_THRESHOLDS = {
 }
 
 def load_watchlist():
-    if os.path.exists(WATCHLIST_FILE):
-        df = pd.read_csv(WATCHLIST_FILE)
+    df = gh_read(WATCHLIST_FILE)
+    if not df.empty and "tutor_name" in df.columns:
         return df["tutor_name"].dropna().tolist()
     return []
 
 def save_watchlist(tutor_names):
-    pd.DataFrame({"tutor_name": tutor_names}).to_csv(WATCHLIST_FILE, index=False)
+    gh_write(WATCHLIST_FILE, pd.DataFrame({"tutor_name": tutor_names}))
 
 def load_watchlist_baselines():
-    if os.path.exists(WATCHLIST_BASELINE_FILE):
-        return pd.read_csv(WATCHLIST_BASELINE_FILE)
-    return pd.DataFrame()
+    return gh_read(WATCHLIST_BASELINE_FILE)
 
 def save_watchlist_baseline(tutor_name, arch_count, unsched_hrs, no_grades, stale_grades,
                              no_exam, stale_exams, hours_per_exam, pct_unscheduled,
@@ -655,16 +691,16 @@ def save_watchlist_baseline(tutor_name, arch_count, unsched_hrs, no_grades, stal
             if is_null and val is not None and not (isinstance(val, float) and pd.isna(val)):
                 existing.at[idx, col] = val; patched = True
         if patched:
-            existing.to_csv(WATCHLIST_BASELINE_FILE, index=False)
+            gh_write(WATCHLIST_BASELINE_FILE, existing)
         return
     new_row = pd.DataFrame([{"tutor_name": tutor_name, "added_date": today, **all_cols}])
     updated = pd.concat([existing, new_row], ignore_index=True) if not existing.empty else new_row
-    updated.to_csv(WATCHLIST_BASELINE_FILE, index=False)
+    gh_write(WATCHLIST_BASELINE_FILE, updated)
 
 def remove_watchlist_baseline(tutor_name):
     existing = load_watchlist_baselines()
     if not existing.empty:
-        existing[existing["tutor_name"] != tutor_name].to_csv(WATCHLIST_BASELINE_FILE, index=False)
+        gh_write(WATCHLIST_BASELINE_FILE, existing[existing["tutor_name"] != tutor_name])
 
 def migrate_watchlist_baselines(current_metrics: dict):
     expected_cols = ["arch_count","unsched_hrs","no_grades","stale_grades",
@@ -685,35 +721,34 @@ def migrate_watchlist_baselines(current_metrics: dict):
             if is_missing and col in metrics:
                 existing.at[idx, col] = metrics[col]; changed = True
     if changed:
-        existing.to_csv(WATCHLIST_BASELINE_FILE, index=False)
+        gh_write(WATCHLIST_BASELINE_FILE, existing)
 
 def load_watchlist_notes():
-    if os.path.exists(WATCHLIST_NOTES_FILE):
-        return pd.read_csv(WATCHLIST_NOTES_FILE)
-    return pd.DataFrame(columns=["tutor_name","note","updated_at"])
+    df = gh_read(WATCHLIST_NOTES_FILE)
+    return df if not df.empty else pd.DataFrame(columns=["tutor_name","note","updated_at"])
 
 def save_watchlist_note(tutor_name, note):
     existing = load_watchlist_notes()
     existing = existing[existing["tutor_name"] != tutor_name]
     new_row  = pd.DataFrame([{"tutor_name": tutor_name, "note": note,
                                "updated_at": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M")}])
-    pd.concat([existing, new_row], ignore_index=True).to_csv(WATCHLIST_NOTES_FILE, index=False)
+    gh_write(WATCHLIST_NOTES_FILE, pd.concat([existing, new_row], ignore_index=True))
 
 def delete_watchlist_note(tutor_name):
     existing = load_watchlist_notes()
     if not existing.empty:
-        existing[existing["tutor_name"] != tutor_name].to_csv(WATCHLIST_NOTES_FILE, index=False)
+        gh_write(WATCHLIST_NOTES_FILE, existing[existing["tutor_name"] != tutor_name])
 
 def load_watchlist_thresholds():
-    if os.path.exists(WATCHLIST_THRESHOLDS_FILE):
-        return pd.read_csv(WATCHLIST_THRESHOLDS_FILE)
-    return pd.DataFrame(columns=["tutor_name"] + list(DEFAULT_THRESHOLDS.keys()))
+    df = gh_read(WATCHLIST_THRESHOLDS_FILE)
+    return df if not df.empty else pd.DataFrame(columns=["tutor_name"] + list(DEFAULT_THRESHOLDS.keys()))
 
 def save_watchlist_thresholds(tutor_name, thresholds_dict):
     existing = load_watchlist_thresholds()
     existing = existing[existing["tutor_name"] != tutor_name]
-    pd.concat([existing, pd.DataFrame([{"tutor_name": tutor_name, **thresholds_dict}])],
-              ignore_index=True).to_csv(WATCHLIST_THRESHOLDS_FILE, index=False)
+    gh_write(WATCHLIST_THRESHOLDS_FILE,
+             pd.concat([existing, pd.DataFrame([{"tutor_name": tutor_name, **thresholds_dict}])],
+                       ignore_index=True))
 
 def get_tutor_thresholds(tutor_name):
     df = load_watchlist_thresholds()
@@ -778,13 +813,11 @@ def save_login_snapshot(arch_df, grades_df, exam_df, video_summary_df=None):
         "team_pct_video":       team_pct_video,
         "login_ts":             pd.Timestamp.now().strftime("%Y-%m-%d %H:%M"),
     }])
-    snap.to_csv(LOGIN_SNAPSHOT_FILE, index=False)
+    gh_write(LOGIN_SNAPSHOT_FILE, snap)
     return snap
 
 def load_login_snapshot():
-    if os.path.exists(LOGIN_SNAPSHOT_FILE):
-        return pd.read_csv(LOGIN_SNAPSHOT_FILE)
-    return pd.DataFrame()
+    return gh_read(LOGIN_SNAPSHOT_FILE)
 
 def _login_delta_html(label, current, previous, lower_is_better=True):
     if previous is None or pd.isna(previous):
