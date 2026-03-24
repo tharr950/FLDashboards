@@ -1973,6 +1973,7 @@ def render_app(config):
                     delete_watchlist_note(removed)
                     delete_watchlist_thresholds(removed)
                 save_watchlist(new_watched)
+                st.session_state["_watchlist_cache"] = new_watched
                 st.success(f"Watch list saved — {len(new_watched)} tutor(s) being watched.")
                 st.rerun()
         with col_clear:
@@ -1982,10 +1983,11 @@ def render_app(config):
                     delete_watchlist_note(t)
                     delete_watchlist_thresholds(t)
                 save_watchlist([])
+                st.session_state["_watchlist_cache"] = []
                 st.success("Watch list cleared.")
                 st.rerun()
 
-        watched = load_watchlist()
+        watched = st.session_state.get("_watchlist_cache", load_watchlist())
         if not watched:
             st.info("Your watch list is empty. Select tutors above and click Save.")
             st.stop()
