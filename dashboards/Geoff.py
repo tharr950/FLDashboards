@@ -179,7 +179,8 @@ def load_grades_data():
             from orbit_stitch.study_areas
             left join dw.subjects on orbit_stitch.study_areas.subject_id = dw.subjects.id
             left join orbit_stitch.study_area_snapshots sas on orbit_stitch.study_areas.id = sas.study_area_id
-            where 1=1 AND dw.subjects.category_id in (1,2,3,4,5,8,9,10,11,12)
+            where 1=1 AND dw.subjects.category_id in (1,2,3,4,5,8,9,10,11)
+            AND cast(dw.subjects.high_grade as int) > 8
             AND orbit_stitch.study_areas.archived_at is null
             AND orbit_stitch.study_areas._sdc_deleted_at is null)
         select distinct dw.employees.id as tutor_id,
@@ -203,6 +204,10 @@ def load_grades_data():
         where 1=1 AND dw.tutoring_histories.active = true
         AND dw.enrollments.unenrolled_at IS null AND dw.employees.end_date IS null
         AND dw.team_members.member_type = 'Employee'
+        AND (
+            dw.students.graduation_year IS NULL
+            OR dw.sessions.starts_at >= CAST((dw.students.graduation_year - 4) || '-07-01' AS DATE)
+        )
         group by 1,2,3,4,5,8,9,10
         having min(dw.sessions.starts_at) <= getdate()
            and max(dw.sessions.starts_at) > (getdate() - 30)
@@ -3331,7 +3336,7 @@ def render_app(config):
         st.markdown("### 🔍 Filters")
         fc1, fc2 = st.columns(2)
         with fc1:
-            tutor_opts_g = ["All Tutors"] + sorted(team_grades_df["tutor_name"].dropna().unique().tolist())
+            tutor_opts_g = ["All Tutors"] + sorted(annelies_tutors)
             sel_tutor_g  = st.selectbox("Tutor", tutor_opts_g, key="grades_tutor")
         with fc2:
             grade_filter_opts = ["All Students","Missing Grades Only","Stale Grades Only (>90 days)"]
