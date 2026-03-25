@@ -335,7 +335,7 @@ def build_video_tutor_summary(df):
             "tutor_name":       tutor,
             "updates_required": updates_required,
             "updates_sent":     updates_sent,
-            "parent_update_pct": compliance_rate,
+            "parent_update_pct": parent_update_pct,
             "videos_found":     videos_found,
             "pct_with_video":   pct_with_video,
             "longest_secs":     secs_series.max()    if not secs_series.empty else None,
