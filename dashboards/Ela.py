@@ -327,7 +327,7 @@ def build_video_tutor_summary(df):
         updates_required = int(tdf["update required"].sum()) if "update required" in tdf.columns else 0
         sent_df          = tdf[tdf["parent update sent"].astype(str) == "True"]
         updates_sent     = len(sent_df)
-        compliance_rate  = round(updates_sent / updates_required * 100, 1) if updates_required > 0 else 0.0
+        parent_update_pct = round(updates_sent / updates_required * 100, 1) if updates_required > 0 else 0.0
         videos_found     = int(sent_df["video found"].fillna(False).astype(bool).sum())
         pct_with_video   = round(videos_found / updates_sent * 100, 1) if updates_sent > 0 else 0.0
         secs_series      = sent_df["duration_secs"].dropna()
@@ -335,7 +335,7 @@ def build_video_tutor_summary(df):
             "tutor_name":       tutor,
             "updates_required": updates_required,
             "updates_sent":     updates_sent,
-            "compliance_rate":  compliance_rate,
+            "parent_update_pct": compliance_rate,
             "videos_found":     videos_found,
             "pct_with_video":   pct_with_video,
             "longest_secs":     secs_series.max()    if not secs_series.empty else None,
@@ -1031,7 +1031,7 @@ def render_app(config):
                 raw_video, video_fetched_at_home = load_parent_update_videos()
                 home_video_df = raw_video[
                     (raw_video["faculty leader"] == "Team Cross") &
-                    (raw_video["parent update sent"].astype(str) == "True")
+                    (raw_video["tutor"] != "Ela Cross")
                 ].copy()
                 home_video_df["duration_secs"] = home_video_df["video duration"].apply(duration_to_secs)
                 if not home_video_df.empty:
@@ -1495,8 +1495,19 @@ def render_app(config):
                          f"with no grades entered at all.",
                          color="red", details=_no_grades_students)
 
-            # Low video rate flag
+            # Low parent update rate flag
             if not home_video_summary_df.empty:
+                low_pu = home_video_summary_df[
+                    (home_video_summary_df["parent_update_pct"] < 80) &
+                    (home_video_summary_df["updates_required"] > 0)
+                ].sort_values("parent_update_pct")
+                for _, row in low_pu.head(3).iterrows():
+                    card("📬", "Low Parent Update Rate",
+                         f"<b>{row['tutor_name']}</b> sent only "
+                         f"<b>{row['parent_update_pct']:.0f}%</b> of required parent updates "
+                         f"({int(row['updates_sent'])}/{int(row['updates_required'])}).",
+                         color="red")
+                # Low video rate flag
                 low_video = home_video_summary_df[
                     (home_video_summary_df["pct_with_video"] < 80) &
                     (home_video_summary_df["updates_sent"] > 0)
@@ -1790,6 +1801,8 @@ def render_app(config):
                         issues += 1; lines.append(f"📝 {no_ex} no exam")
                 if not home_video_summary_df.empty and tutor in home_video_summary_df["tutor_name"].values:
                     vrow = home_video_summary_df[home_video_summary_df["tutor_name"] == tutor].iloc[0]
+                    if vrow["parent_update_pct"] < 80:
+                        issues += 1; lines.append(f"📬 {vrow['parent_update_pct']:.0f}% parent update rate")
                     if vrow["pct_with_video"] < 80:
                         issues += 1; lines.append(f"📹 {vrow['pct_with_video']:.0f}% video rate")
                 dot   = "🔴" if issues >= 2 else ("🟡" if issues == 1 else "🟢")
@@ -1891,6 +1904,8 @@ def render_app(config):
                 if _wng > 0: _wl_issues.append(f"{_wng} no grades")
             if not home_video_summary_df.empty and _t in home_video_summary_df["tutor_name"].values:
                 _vr = home_video_summary_df[home_video_summary_df["tutor_name"] == _t].iloc[0]
+                if _vr["parent_update_pct"] < 80:
+                    _wl_issues.append(f"{_vr['parent_update_pct']:.0f}% parent update rate")
                 if _vr["pct_with_video"] < 80:
                     _wl_issues.append(f"{_vr['pct_with_video']:.0f}% video rate")
             if _wl_issues:
@@ -2061,7 +2076,7 @@ def render_app(config):
                 raw_wl_video, _ = load_parent_update_videos()
                 wl_video_df = raw_wl_video[
                     (raw_wl_video["faculty leader"] == "Team Cross") &
-                    (raw_wl_video["parent update sent"].astype(str) == "True")
+                    (raw_wl_video["tutor"] != "Ela Cross")
                 ].copy()
                 wl_video_df["duration_secs"] = wl_video_df["video duration"].apply(duration_to_secs)
                 if not wl_video_df.empty:
@@ -2623,14 +2638,13 @@ def render_app(config):
                 raw_p_video, _ = load_parent_update_videos()
                 p_video_df = raw_p_video[
                     (raw_p_video["faculty leader"] == "Team Cross") &
-                    (raw_p_video["parent update sent"].astype(str) == "True") &
                     (raw_p_video["tutor"] == profile_tutor)
                 ].copy()
                 p_video_df["duration_secs"] = p_video_df["video duration"].apply(duration_to_secs)
                 if not p_video_df.empty:
                     all_video = raw_p_video[
                         (raw_p_video["faculty leader"] == "Team Cross") &
-                        (raw_p_video["parent update sent"].astype(str) == "True")
+                        (raw_p_video["tutor"] != "Ela Cross")
                     ].copy()
                     all_video["duration_secs"] = all_video["video duration"].apply(duration_to_secs)
                     all_summary = build_video_tutor_summary(all_video)
@@ -2802,13 +2816,15 @@ def render_app(config):
         if p_video_row is None or p_video_df.empty:
             st.info("No parent update video data found for this tutor.")
         else:
-            pv1, pv2, pv3, pv4, pv5 = st.columns(5)
-            pv1.metric("Updates Sent",    int(p_video_row["updates_sent"]))
-            pv2.metric("Videos Found",    int(p_video_row["videos_found"]))
-            pv3.metric("Video Rate",      f"{p_video_row['pct_with_video']:.0f}%",
+            pv1, pv2, pv3, pv4, pv5, pv6 = st.columns(6)
+            pv1.metric("Updates Required", int(p_video_row["updates_required"]))
+            pv2.metric("Updates Sent",     int(p_video_row["updates_sent"]))
+            pv3.metric("Parent Update %",  f"{p_video_row['parent_update_pct']:.0f}%",
+                       delta_color="inverse" if p_video_row["parent_update_pct"] < 80 else "off")
+            pv4.metric("Videos Found",     int(p_video_row["videos_found"]))
+            pv5.metric("Video Rate",       f"{p_video_row['pct_with_video']:.0f}%",
                        delta_color="inverse" if p_video_row["pct_with_video"] < 80 else "off")
-            pv4.metric("Median Duration", secs_to_duration(p_video_row["median_secs"]))
-            pv5.metric("Longest Video",   secs_to_duration(p_video_row["longest_secs"]))
+            pv6.metric("Median Duration",  secs_to_duration(p_video_row["median_secs"]))
 
             short_v = p_video_df[p_video_df["duration_secs"] < 10]
             long_v  = p_video_df[p_video_df["duration_secs"] > 300]
@@ -2971,7 +2987,7 @@ def render_app(config):
         sent_video_df      = team_video_df[team_video_df["parent update sent"].astype(str) == "True"]
         total_required_team= int(team_video_df["update required"].sum()) if "update required" in team_video_df.columns else 0
         total_updates_team = len(sent_video_df)
-        compliance_team    = round(total_updates_team / total_required_team * 100, 1) if total_required_team > 0 else 0
+        parent_update_pct_team = round(total_updates_team / total_required_team * 100, 1) if total_required_team > 0 else 0
         total_videos_team  = int(sent_video_df["video found"].fillna(False).astype(bool).sum())
         pct_team           = round(total_videos_team / total_updates_team * 100, 1) \
                              if total_updates_team > 0 else 0
@@ -2982,8 +2998,8 @@ def render_app(config):
         m1, m2, m3, m4, m5, m6, m7, m8, m9 = st.columns(9)
         m1.metric("Updates Required", total_required_team)
         m2.metric("Updates Sent",     total_updates_team)
-        m3.metric("Compliance Rate",  f"{compliance_team:.1f}%",
-                  delta_color="inverse" if compliance_team < 80 else "off")
+        m3.metric("Parent Update %",  f"{parent_update_pct_team:.1f}%",
+                  delta_color="inverse" if parent_update_pct_team < 80 else "off")
         m4.metric("Videos Attached",  total_videos_team)
         m5.metric("% With Video",     f"{pct_team:.1f}%",
                   delta_color="inverse" if pct_team < 80 else "off")
@@ -3000,25 +3016,26 @@ def render_app(config):
         fc1, fc2, fc3, fc4 = st.columns(4)
         medals_v = ["🥇","🥈","🥉","4️⃣","5️⃣"]
         with fc1:
-            st.markdown("**Low Compliance Rate (Top 5)**")
+            st.markdown("**Low Parent Update % (Top 5)**")
             low_comp_t = video_summary_df[
-                (video_summary_df["compliance_rate"] < 80) &
+                (video_summary_df["parent_update_pct"] < 80) &
                 (video_summary_df["updates_required"] > 0)
-            ].sort_values("compliance_rate")
+            ].sort_values("parent_update_pct")
             if low_comp_t.empty:
-                st.success("✅ All tutors at 80%+ compliance.")
+                st.success("✅ All tutors at 80%+ parent update rate.")
             else:
                 for rank, (_, row) in enumerate(low_comp_t.head(5).iterrows()):
                     st.markdown(
                         f"{medals_v[min(rank,4)]} **{row['tutor_name']}** — "
                         f"<span style='color:#cc0000; font-weight:bold'>"
-                        f"{row['compliance_rate']:.0f}%</span> "
+                        f"{row['parent_update_pct']:.0f}%</span> "
                         f"({int(row['updates_sent'])}/{int(row['updates_required'])} sent)",
                         unsafe_allow_html=True)
         with fc2:
             st.markdown("**No Videos Attached (Top 5)**")
             no_video_t = video_summary_df[
-                video_summary_df["videos_found"] == 0
+                (video_summary_df["videos_found"] == 0) &
+                (video_summary_df["updates_sent"] > 0)
             ].sort_values("updates_sent", ascending=False)
             if no_video_t.empty:
                 st.success("✅ All tutors attached at least one video!")
@@ -3094,13 +3111,13 @@ def render_app(config):
         display_summary["shortest"] = display_summary["shortest_secs"].apply(secs_to_duration)
         display_summary["median"]   = display_summary["median_secs"].apply(secs_to_duration)
         display_summary = display_summary[[
-            "tutor_name","updates_required","updates_sent","compliance_rate",
+            "tutor_name","updates_required","updates_sent","parent_update_pct",
             "videos_found","pct_with_video","longest","shortest","median"
         ]].rename(columns={
             "tutor_name":       "Tutor",
             "updates_required": "Required",
             "updates_sent":     "Sent",
-            "compliance_rate":  "Compliance %",
+            "parent_update_pct": "Parent Update %",
             "videos_found":     "Videos Found",
             "pct_with_video":   "% With Video",
             "longest":          "Longest",
