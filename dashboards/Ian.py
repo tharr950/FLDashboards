@@ -324,18 +324,23 @@ def build_video_tutor_summary(df):
     """Build per-tutor video summary from filtered video dataframe."""
     rows = []
     for tutor, tdf in df.groupby("tutor"):
-        total_updates  = len(tdf)
-        videos_found   = int(tdf["video found"].fillna(False).astype(bool).sum())
-        pct_with_video = round(videos_found / total_updates * 100, 1) if total_updates > 0 else 0.0
-        secs_series    = tdf["duration_secs"].dropna()
+        updates_required = int(tdf["update required"].sum()) if "update required" in tdf.columns else 0
+        sent_df          = tdf[tdf["parent update sent"].astype(str) == "True"]
+        updates_sent     = len(sent_df)
+        compliance_rate  = round(updates_sent / updates_required * 100, 1) if updates_required > 0 else 0.0
+        videos_found     = int(sent_df["video found"].fillna(False).astype(bool).sum())
+        pct_with_video   = round(videos_found / updates_sent * 100, 1) if updates_sent > 0 else 0.0
+        secs_series      = sent_df["duration_secs"].dropna()
         rows.append({
-            "tutor_name":    tutor,
-            "updates_sent":  total_updates,
-            "videos_found":  videos_found,
-            "pct_with_video": pct_with_video,
-            "longest_secs":  secs_series.max()    if not secs_series.empty else None,
-            "shortest_secs": secs_series.min()    if not secs_series.empty else None,
-            "median_secs":   secs_series.median() if not secs_series.empty else None,
+            "tutor_name":       tutor,
+            "updates_required": updates_required,
+            "updates_sent":     updates_sent,
+            "compliance_rate":  compliance_rate,
+            "videos_found":     videos_found,
+            "pct_with_video":   pct_with_video,
+            "longest_secs":     secs_series.max()    if not secs_series.empty else None,
+            "shortest_secs":    secs_series.min()    if not secs_series.empty else None,
+            "median_secs":      secs_series.median() if not secs_series.empty else None,
         })
     return pd.DataFrame(rows)
 
@@ -2946,8 +2951,7 @@ def render_app(config):
         st.sidebar.markdown(f"🕐 **Video data last updated**  \n{video_fetched_at}")
 
         team_video_df = raw_video_df[
-            (raw_video_df["faculty leader"] == "Team Plamondon") &
-            (raw_video_df["parent update sent"].astype(str) == "True")
+            raw_video_df["faculty leader"] == "Team Plamondon"
         ].copy()
 
         if team_video_df.empty:
@@ -2964,32 +2968,54 @@ def render_app(config):
         week_of = team_video_df["week of"].iloc[0] if "week of" in team_video_df.columns else "—"
         st.caption(f"Week of: **{week_of}**")
 
-        total_updates_team = len(team_video_df)
-        total_videos_team  = int(team_video_df["video found"].fillna(False).astype(bool).sum())
+        sent_video_df      = team_video_df[team_video_df["parent update sent"].astype(str) == "True"]
+        total_required_team= int(team_video_df["update required"].sum()) if "update required" in team_video_df.columns else 0
+        total_updates_team = len(sent_video_df)
+        compliance_team    = round(total_updates_team / total_required_team * 100, 1) if total_required_team > 0 else 0
+        total_videos_team  = int(sent_video_df["video found"].fillna(False).astype(bool).sum())
         pct_team           = round(total_videos_team / total_updates_team * 100, 1) \
                              if total_updates_team > 0 else 0
-        all_secs           = team_video_df["duration_secs"].dropna()
+        all_secs           = sent_video_df["duration_secs"].dropna()
         short_count        = int((all_secs < 10).sum())
         long_count         = int((all_secs > 300).sum())
 
-        m1, m2, m3, m4, m5, m6, m7 = st.columns(7)
-        m1.metric("Updates Sent",     total_updates_team)
-        m2.metric("Videos Attached",  total_videos_team)
-        m3.metric("% With Video",     f"{pct_team:.1f}%",
+        m1, m2, m3, m4, m5, m6, m7, m8, m9 = st.columns(9)
+        m1.metric("Updates Required", total_required_team)
+        m2.metric("Updates Sent",     total_updates_team)
+        m3.metric("Compliance Rate",  f"{compliance_team:.1f}%",
+                  delta_color="inverse" if compliance_team < 80 else "off")
+        m4.metric("Videos Attached",  total_videos_team)
+        m5.metric("% With Video",     f"{pct_team:.1f}%",
                   delta_color="inverse" if pct_team < 80 else "off")
-        m4.metric("Median Duration",  secs_to_duration(all_secs.median()) if not all_secs.empty else "N/A")
-        m5.metric("Avg Duration",     secs_to_duration(all_secs.mean())   if not all_secs.empty else "N/A")
-        m6.metric("⚡ Short (<10s)",  short_count,
+        m6.metric("Median Duration",  secs_to_duration(all_secs.median()) if not all_secs.empty else "N/A")
+        m7.metric("Avg Duration",     secs_to_duration(all_secs.mean())   if not all_secs.empty else "N/A")
+        m8.metric("⚡ Short (<10s)",  short_count,
                   delta_color="inverse" if short_count > 0 else "off")
-        m7.metric("⏱️ Long (>5min)",  long_count)
+        m9.metric("⏱️ Long (>5min)",  long_count)
 
         st.divider()
 
         # Top concern flags
         st.markdown("### 🚨 Tutors to Address")
-        fc1, fc2, fc3 = st.columns(3)
+        fc1, fc2, fc3, fc4 = st.columns(4)
         medals_v = ["🥇","🥈","🥉","4️⃣","5️⃣"]
         with fc1:
+            st.markdown("**Low Compliance Rate (Top 5)**")
+            low_comp_t = video_summary_df[
+                (video_summary_df["compliance_rate"] < 80) &
+                (video_summary_df["updates_required"] > 0)
+            ].sort_values("compliance_rate")
+            if low_comp_t.empty:
+                st.success("✅ All tutors at 80%+ compliance.")
+            else:
+                for rank, (_, row) in enumerate(low_comp_t.head(5).iterrows()):
+                    st.markdown(
+                        f"{medals_v[min(rank,4)]} **{row['tutor_name']}** — "
+                        f"<span style='color:#cc0000; font-weight:bold'>"
+                        f"{row['compliance_rate']:.0f}%</span> "
+                        f"({int(row['updates_sent'])}/{int(row['updates_required'])} sent)",
+                        unsafe_allow_html=True)
+        with fc2:
             st.markdown("**No Videos Attached (Top 5)**")
             no_video_t = video_summary_df[
                 video_summary_df["videos_found"] == 0
@@ -3003,7 +3029,7 @@ def render_app(config):
                         f"<span style='color:#cc0000; font-weight:bold'>"
                         f"0 / {int(row['updates_sent'])} with video</span>",
                         unsafe_allow_html=True)
-        with fc2:
+        with fc3:
             st.markdown("**Lowest Video Rate (Top 5)**")
             low_rate_t = video_summary_df[
                 (video_summary_df["pct_with_video"] < 80) &
@@ -3068,16 +3094,18 @@ def render_app(config):
         display_summary["shortest"] = display_summary["shortest_secs"].apply(secs_to_duration)
         display_summary["median"]   = display_summary["median_secs"].apply(secs_to_duration)
         display_summary = display_summary[[
-            "tutor_name","updates_sent","videos_found","pct_with_video",
-            "longest","shortest","median"
+            "tutor_name","updates_required","updates_sent","compliance_rate",
+            "videos_found","pct_with_video","longest","shortest","median"
         ]].rename(columns={
-            "tutor_name":    "Tutor",
-            "updates_sent":  "Updates Sent",
-            "videos_found":  "Videos Found",
-            "pct_with_video":"% With Video",
-            "longest":       "Longest",
-            "shortest":      "Shortest",
-            "median":        "Median Duration",
+            "tutor_name":       "Tutor",
+            "updates_required": "Required",
+            "updates_sent":     "Sent",
+            "compliance_rate":  "Compliance %",
+            "videos_found":     "Videos Found",
+            "pct_with_video":   "% With Video",
+            "longest":          "Longest",
+            "shortest":         "Shortest",
+            "median":           "Median Duration",
         })
 
         def highlight_pct(row):
@@ -3138,7 +3166,7 @@ def render_app(config):
 
         # Row-level detail
         st.markdown("### 🔍 Row-Level Detail")
-        tutor_opts_v = ["All Tutors"] + sorted(team_video_df["tutor"].dropna().unique().tolist())
+        tutor_opts_v = ["All Tutors"] + sorted(annelies_tutors)
         sel_tutor_v  = st.selectbox("Filter by Tutor", tutor_opts_v, key="video_tutor_filter")
         view_video_df = team_video_df.copy()
         if sel_tutor_v != "All Tutors":
