@@ -1052,10 +1052,11 @@ def render_app(config):
         if "login_snapshot_saved" not in st.session_state:
             st.session_state["login_snapshot_saved"] = True
             prev_snap = load_login_snapshot()
+            st.session_state["prev_snap"] = prev_snap
             save_login_snapshot(home_arch_df, home_grades_df, home_exam_df,
                                 home_video_summary_df if not home_video_summary_df.empty else None)
         else:
-            prev_snap = pd.DataFrame()
+            prev_snap = st.session_state.get("prev_snap", pd.DataFrame())
 
         cur_arch    = int(home_arch_df["should_archive"].sum()) if not home_arch_df.empty else 0
         cur_unsched = round(float(home_arch_df["unscheduled_hours"].sum()), 1) if not home_arch_df.empty else 0.0
