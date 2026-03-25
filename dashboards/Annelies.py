@@ -2967,7 +2967,8 @@ def render_app(config):
         st.sidebar.markdown(f"🕐 **Video data last updated**  \n{video_fetched_at}")
 
         team_video_df = raw_video_df[
-            raw_video_df["faculty leader"] == "Team De Groot"
+            (raw_video_df["faculty leader"] == "Team De Groot") &
+            (raw_video_df["tutor"] != "Annelies de Groot")
         ].copy()
 
         if team_video_df.empty:
@@ -3061,7 +3062,7 @@ def render_app(config):
                         f"<span style='color:#b35c00; font-weight:bold'>"
                         f"{row['pct_with_video']:.0f}%</span>",
                         unsafe_allow_html=True)
-        with fc3:
+        with fc4:
             st.markdown("**Suspicious Video Lengths**")
             short_vids = team_video_df[team_video_df["duration_secs"] < 10][
                 ["tutor","student","video duration"]]
