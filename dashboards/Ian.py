@@ -823,7 +823,14 @@ def save_login_snapshot(arch_df, grades_df, exam_df, video_summary_df=None):
         "team_pct_video":       team_pct_video,
         "login_ts":             pd.Timestamp.now().strftime("%Y-%m-%d %H:%M"),
     }])
-    gh_write(LOGIN_SNAPSHOT_FILE, snap)
+    # Keep previous snapshot + new one so next login can compare
+    existing = gh_read(LOGIN_SNAPSHOT_FILE)
+    if not existing.empty:
+        # Keep only the most recent previous row + new row (2 rows total)
+        combined = pd.concat([existing.tail(1), snap], ignore_index=True)
+    else:
+        combined = snap
+    gh_write(LOGIN_SNAPSHOT_FILE, combined)
     return snap
 
 def load_login_snapshot():
@@ -1052,10 +1059,11 @@ def render_app(config):
         if "login_snapshot_saved" not in st.session_state:
             st.session_state["login_snapshot_saved"] = True
             prev_snap = load_login_snapshot()
+            st.session_state["prev_snap"] = prev_snap
             save_login_snapshot(home_arch_df, home_grades_df, home_exam_df,
                                 home_video_summary_df if not home_video_summary_df.empty else None)
         else:
-            prev_snap = pd.DataFrame()
+            prev_snap = st.session_state.get("prev_snap", pd.DataFrame())
 
         cur_arch    = int(home_arch_df["should_archive"].sum()) if not home_arch_df.empty else 0
         cur_unsched = round(float(home_arch_df["unscheduled_hours"].sum()), 1) if not home_arch_df.empty else 0.0
