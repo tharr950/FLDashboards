@@ -23,3 +23,10 @@ ModuleNotFoundError: No module named 'mysql'
 [2026-03-25 06:00:30] Pushing to GitHub (tharr950/fl-dashboards-data/data/exam_data.csv)...
 [2026-03-25 06:00:37] Updated existing file.
 [2026-03-25 06:00:37] ✅ Done.
+/Users/tylerharrington/Desktop/Revolution Prep/FL_Dashboards/dashboards/sync_exam_data.py:242: DeprecationWarning: Argument login_or_token is deprecated, please use auth=github.Auth.Token(...) instead
+  g    = Github(GITHUB_TOKEN)
+[2026-03-26 06:00:10] Connecting to MySQL...
+[2026-03-26 06:00:59] Fetched 7,684 rows.
+[2026-03-26 06:00:59] Pushing to GitHub (tharr950/fl-dashboards-data/data/exam_data.csv)...
+[2026-03-26 06:01:02] Updated existing file.
+[2026-03-26 06:01:02] ✅ Done.
