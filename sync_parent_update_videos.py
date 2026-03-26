@@ -33,6 +33,8 @@ from datetime import datetime, timedelta, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from selenium import webdriver
 from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from webdriver_manager.chrome import ChromeDriverManager
@@ -76,10 +78,15 @@ def get_previous_week():
     import zoneinfo
     pacific       = zoneinfo.ZoneInfo("US/Pacific")
     today_pacific = datetime.now(pacific).date()
-    shifted       = today_pacific - timedelta(days=1)
-    monday        = shifted - timedelta(days=shifted.weekday())
-    week_start    = monday - timedelta(days=1)
-    week_end      = monday + timedelta(days=6)  # +1 day buffer for Eastern-time tutors
+    # Find the most recently completed Saturday
+    # weekday(): Mon=0, Tue=1, Wed=2, Thu=3, Fri=4, Sat=5, Sun=6
+    # Days since last Saturday:
+    days_since_saturday = (today_pacific.weekday() + 2) % 7
+    if days_since_saturday == 0:
+        days_since_saturday = 7  # if today IS Saturday, go back to previous Saturday
+    last_saturday = today_pacific - timedelta(days=days_since_saturday)
+    week_start    = last_saturday - timedelta(days=6)  # Previous Sunday
+    week_end      = last_saturday + timedelta(days=1)  # +1 day buffer for video scraping only (Eastern timezone edge cases)
     log.info(f"Previous week: {week_start} -> {week_end}")
     return (
         datetime(week_start.year, week_start.month, week_start.day),
@@ -93,11 +100,17 @@ def get_previous_week():
 SQL = """
 WITH previous_week AS (
   SELECT
-    (DATE_TRUNC('week', (CURRENT_TIMESTAMP AT TIME ZONE 'US/Pacific')::date - INTERVAL '1 day') - INTERVAL '1 day')::date AS week_start,
-    (DATE_TRUNC('week', (CURRENT_TIMESTAMP AT TIME ZONE 'US/Pacific')::date - INTERVAL '1 day') + INTERVAL '5 days')::date AS week_end
+    (CURRENT_TIMESTAMP AT TIME ZONE 'US/Pacific')::date
+      - EXTRACT(DOW FROM (CURRENT_TIMESTAMP AT TIME ZONE 'US/Pacific'))::int
+      - 7 AS week_start,
+    (CURRENT_TIMESTAMP AT TIME ZONE 'US/Pacific')::date
+      - EXTRACT(DOW FROM (CURRENT_TIMESTAMP AT TIME ZONE 'US/Pacific'))::int
+      - 1 AS week_end  -- strict Saturday, no buffer
 ),
 weekly_sessions AS (
   SELECT
+    s.id AS session_id,
+    s.starts_at AS session_start,
     s.attendances_attended_count,
     c.id AS course_id,
     b.name AS brand_name,
@@ -106,6 +119,11 @@ weekly_sessions AS (
     s.supervisor_id,
     u_tutor.first_name || ' ' || u_tutor.last_name AS tutor_name,
     t.name AS faculty_leader_name,
+    CASE
+      WHEN b.name = 'Trial' THEN s.id
+      WHEN b.name IN ('Group Course','Small Group Course','Boot Camp','SGC','Boot Camps') THEN c.id
+      ELSE st.id
+    END AS update_unit_id,
     CASE WHEN s.attendances_attended_count > 0 THEN 1 ELSE 0 END AS update_required_flag
   FROM dw.sessions s
   JOIN dw.courses c         ON s.course_id = c.id
@@ -127,6 +145,7 @@ weekly_sessions AS (
     )
 ),
 updates_sent AS (
+  -- Both types count for compliance rate
   SELECT DISTINCT ca.employee_id, s.course_id
   FROM dw.contact_activities ca
   JOIN dw.sessions s ON ca.regarding_id = s.id
@@ -137,43 +156,82 @@ updates_sent AS (
         (SELECT week_start FROM previous_week)
     AND (SELECT week_end   FROM previous_week)
 ),
-student_week_summary AS (
+parent_updates_only AS (
+  -- Only Parent Updates count for video scraping
+  SELECT DISTINCT ca.employee_id, s.course_id
+  FROM dw.contact_activities ca
+  JOIN dw.sessions s ON ca.regarding_id = s.id
+  WHERE ca.type = 'Contact::Message'
+    AND ca.message_type = 'Parent Update'
+    AND ca.regarding_type = 'Session'
+    AND ca.created_at::date BETWEEN
+        (SELECT week_start FROM previous_week)
+    AND (SELECT week_end   FROM previous_week)
+),
+-- One row per update unit — exactly like the reference query
+-- For 1-on-1: one row per student (update_unit_id = student_id)
+-- For group: one row per course (update_unit_id = course_id)
+-- For trial: one row per session (update_unit_id = session_id)
+unit_summary AS (
   SELECT
-    (SELECT week_start FROM previous_week) AS week_of,
     ws.tutor_name,
     ws.faculty_leader_name,
-    ws.student_name,
-    ws.course_id,
-    ws.supervisor_id,
+    ws.update_unit_id,
     ws.brand_name,
-    COUNT(CASE WHEN ws.attendances_attended_count > 0 THEN 1 END) AS sessions_attended,
-    COUNT(CASE WHEN ws.attendances_attended_count = 0 THEN 1 END) AS sessions_unattended,
+    ws.supervisor_id,
+    -- Pick one representative course_id for scraping
+    MIN(ws.course_id) AS course_id,
+    -- Display name
+    MAX(CASE
+      WHEN ws.brand_name IN ('Group Course','Small Group Course','Boot Camp','SGC','Boot Camps')
+      THEN ws.brand_name || ' (Course ' || ws.course_id::varchar || ')'
+      WHEN ws.brand_name = 'Trial'
+      THEN 'Trial (Session ' || ws.update_unit_id::varchar || ')'
+      ELSE ws.student_name
+    END) AS display_name,
+    MAX(ws.update_required_flag) AS update_required_flag,
+    -- Update was sent if ANY course this student attended had an update sent
     MAX(CASE
       WHEN ws.update_required_flag = 1 AND us.course_id IS NOT NULL THEN 1
       ELSE 0
-    END) AS update_sent_flag
+    END) AS update_sent_flag,
+    MAX(CASE
+      WHEN ws.update_required_flag = 1 AND pu.course_id IS NOT NULL THEN 1
+      ELSE 0
+    END) AS parent_update_sent_flag
   FROM weekly_sessions ws
   LEFT JOIN updates_sent us
-    ON ws.course_id = us.course_id AND ws.supervisor_id = us.employee_id
-  GROUP BY ws.tutor_name, ws.faculty_leader_name, ws.student_name,
-           ws.course_id, ws.supervisor_id, ws.brand_name
+    ON ws.course_id = us.course_id
+    AND ws.supervisor_id = us.employee_id
+  LEFT JOIN parent_updates_only pu
+    ON ws.course_id = pu.course_id
+    AND ws.supervisor_id = pu.employee_id
+  GROUP BY
+    ws.tutor_name, ws.faculty_leader_name, ws.update_unit_id,
+    ws.brand_name, ws.supervisor_id
 )
 SELECT
-  week_of             AS "week of",
+  (SELECT week_start FROM previous_week) AS "week of",
   tutor_name          AS "tutor",
   faculty_leader_name AS "faculty leader",
-  student_name        AS "student",
+  display_name        AS "student",
   course_id           AS "course id",
   brand_name          AS "brand",
-  sessions_attended   AS "sessions attended",
-  sessions_unattended AS "sessions unattended",
+  update_required_flag AS "sessions attended",
+  0                    AS "sessions unattended",
   CASE
-    WHEN sessions_attended = 0 THEN 'N/A'
-    WHEN update_sent_flag  = 1 THEN 'True'
-    ELSE 'False'
-  END AS "parent update sent"
-FROM student_week_summary
-ORDER BY tutor_name, student_name;
+    WHEN update_required_flag = 0 THEN 'N/A'
+    WHEN update_sent_flag     = 1 THEN 'True'
+    ELSE                               'False'
+  END AS "parent update sent",
+  CASE
+    WHEN update_required_flag    = 0 THEN 'N/A'
+    WHEN parent_update_sent_flag = 1 THEN 'True'
+    ELSE                               'False'
+  END AS "parent update only sent",
+  update_required_flag AS "update required"
+FROM unit_summary
+ORDER BY tutor_name, display_name
 """
 
 def fetch_sql_data() -> pd.DataFrame:
@@ -250,6 +308,13 @@ def get_video_info(driver: webdriver.Chrome) -> dict:
         result["duration_fmt"] = None
     return result
 
+def is_logged_out(driver: webdriver.Chrome) -> bool:
+    """Check if we've been redirected to the login page."""
+    try:
+        return "sign_in" in driver.current_url or "login" in driver.current_url
+    except Exception:
+        return False
+
 def scrape_course(
     driver: webdriver.Chrome,
     course_id: int,
@@ -261,22 +326,37 @@ def scrape_course(
 
     try:
         driver.get(f"{RP_BASE_URL}/courses/{course_id}/contact")
-        time.sleep(PAGE_WAIT)
     except Exception as e:
         base["scrape error"] = f"Page load failed: {e}"
         return base
 
+    # Re-login if session expired
+    if is_logged_out(driver):
+        log.warning(f"    Session expired — re-logging in before course {course_id}")
+        try:
+            login(driver)
+            driver.get(f"{RP_BASE_URL}/courses/{course_id}/contact")
+        except Exception as e:
+            base["scrape error"] = f"Re-login failed: {e}"
+            return base
+
+    # Smart wait — poll for sidebar up to 12 seconds instead of fixed sleep
     try:
+        items = WebDriverWait(driver, 12).until(
+            EC.presence_of_all_elements_located((By.CSS_SELECTOR, "li.list-group-item"))
+        )
+    except Exception:
+        # Sidebar never appeared — fall back to checking what's on the page
         items = driver.find_elements(By.CSS_SELECTOR, "li.list-group-item")
-    except Exception as e:
-        base["scrape error"] = f"Sidebar not found: {e}"
-        return base
 
     if not items:
         base["scrape error"] = "No sidebar messages found"
         return base
 
     matched = False
+    parent_update_result = None
+    any_result = None
+
     for item in items:
         try:
             text = item.text.strip()
@@ -291,16 +371,35 @@ def scrape_course(
             if not from_name or tutor_name.lower() not in from_name.lower():
                 continue
             matched = True
+            time.sleep(CLICK_WAIT)  # Wait for message content to load
+            # Check h1 title to determine message type (case-insensitive)
+            try:
+                h1_els = driver.find_elements(By.CSS_SELECTOR, "h1")
+                h1_text = h1_els[0].text.lower() if h1_els else ""
+                item_text_lower = item.text.lower()
+                is_parent_update = "parent update" in h1_text or                     ("parent update" in item_text_lower and "progress update" not in item_text_lower)
+            except Exception:
+                item_text_lower = item.text.lower()
+                is_parent_update = "parent update" in item_text_lower and "progress update" not in item_text_lower
             video = get_video_info(driver)
-            return {
+            result = {
                 "video found":    video["found"],
                 "video duration": video["duration_fmt"] if video["found"] else "N/A",
                 "scrape error":   None,
             }
+            if is_parent_update:
+                parent_update_result = result
+                break  # Found a Parent Update — stop looking
+            elif any_result is None:
+                any_result = result  # Keep Progress Update as fallback
         except Exception as e:
             log.warning(f"    Sidebar item error (course {course_id}): {e}")
             continue
 
+    if parent_update_result:
+        return parent_update_result
+    if any_result:
+        return any_result
     if not matched:
         base["scrape error"] = f"No message from '{tutor_name}' in date range"
     return base
@@ -323,6 +422,8 @@ def worker_scrape_batch(
     Returns a dict keyed by (course_id, tutor_name).
     """
     results = {}
+    # Stagger worker startup to avoid simultaneous Chrome launches crashing macOS
+    time.sleep((worker_id - 1) * 8)
     driver  = build_driver()
 
     try:
@@ -364,8 +465,9 @@ def run() -> pd.DataFrame:
     df = fetch_sql_data()
 
     # Deduplicate — one scrape per unique (course id, tutor) combo
+    # Only scrape rows where a Parent Update (not just Progress Update) was sent
     to_scrape = (
-        df[df["parent update sent"] == "True"][["course id", "tutor"]]
+        df[df["parent update only sent"].astype(str) == "True"][["course id", "tutor"]]
         .drop_duplicates()
         .reset_index(drop=True)
     )
@@ -413,7 +515,7 @@ def run() -> pd.DataFrame:
     scrape_error_col   = []
 
     for _, row in df.iterrows():
-        if row["parent update sent"] == "True":
+        if str(row["parent update only sent"]) == "True":
             key = (int(row["course id"]), str(row["tutor"]))
             res = scrape_cache.get(key, {})
             video_found_col.append(res.get("video found",    False))

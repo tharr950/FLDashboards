@@ -601,6 +601,43 @@ def load_concern_groupings():
         return pd.read_csv(file)
     return pd.DataFrame()
 
+def get_concern_movements(concerns_df, fl_name, min_change=2):
+    """Get tutors who moved 2+ concern groups between latest and previous date."""
+    if concerns_df.empty:
+        return pd.DataFrame(), pd.DataFrame(), None, None
+    import re
+    def extract_end_date(range_str):
+        if pd.isna(range_str): return pd.NaT
+        clean_str = range_str.replace("-","to").replace("\u2013","to").replace("\u2014","to")
+        parts = clean_str.split("to")
+        if len(parts) < 2: return pd.NaT
+        end_str = re.sub(r"(\d+)-(\d+/\d+)", r"\1/\2", parts[-1].strip())
+        try:
+            return pd.to_datetime(end_str, errors="coerce", dayfirst=False)
+        except:
+            return pd.NaT
+    fl_df = concerns_df[concerns_df["Faculty Leader Name"] == fl_name].copy()
+    if fl_df.empty:
+        return pd.DataFrame(), pd.DataFrame(), None, None
+    fl_df["Date"] = fl_df["Date"].apply(extract_end_date)
+    all_dates = sorted(fl_df["Date"].dropna().unique())
+    if len(all_dates) < 2:
+        return pd.DataFrame(), pd.DataFrame(), None, None
+    latest_date = all_dates[-1]
+    prev_date   = all_dates[-2]
+    latest_df   = fl_df[fl_df["Date"] == latest_date]
+    prev_df     = fl_df[fl_df["Date"] == prev_date]
+    merged = latest_df[["Tutor Name","Concern Group","Reasons"]].merge(
+        prev_df[["Tutor Name","Concern Group"]].rename(columns={"Concern Group":"Prev Group"}),
+        on="Tutor Name", how="inner")
+    merged["Change"] = (
+        pd.to_numeric(merged["Concern Group"], errors="coerce") -
+        pd.to_numeric(merged["Prev Group"],    errors="coerce"))
+    big_moves   = merged[merged["Change"].abs() >= min_change].sort_values("Change")
+    worsened    = big_moves[big_moves["Change"] > 0].sort_values("Change", ascending=False)
+    improved    = big_moves[big_moves["Change"] < 0].sort_values("Change")
+    return worsened, improved, prev_date, latest_date
+
 @st.cache_data(ttl=60)
 def load_monthly_metric_annual_reviews():
     file = "December_Annual_Reviews.xlsx"
@@ -782,6 +819,7 @@ def delete_watchlist_thresholds(tutor_name):
 # ─────────────────────────────────────────────
 
 LOGIN_SNAPSHOT_FILE = "ian_login_snapshot.csv"
+LAST_SEEN_FILE      = "ian_last_seen_data.csv"
 
 def save_login_snapshot(arch_df, grades_df, exam_df, video_summary_df=None):
     team_archivable  = int(arch_df["should_archive"].sum()) if not arch_df.empty else 0
@@ -1047,6 +1085,70 @@ def render_app(config):
             with st.expander("⚠️ Some data failed to load — click to see details"):
                 for err in load_errors:
                     st.warning(err)
+
+        # ── New data announcement banner ──────────────────────────────────
+        try:
+            concerns_home_df = load_tutor_concerns()
+            _last_seen_file  = LAST_SEEN_FILE
+            _last_seen_data  = gh_read(_last_seen_file)
+            _latest_concern_date = None
+            _latest_kpi_date     = None
+
+            if not concerns_home_df.empty and "Date" in concerns_home_df.columns:
+                import re as _re
+                def _parse_date(s):
+                    if pd.isna(s): return pd.NaT
+                    s2 = str(s).replace("-","to").replace("\u2013","to")
+                    parts = s2.split("to")
+                    end = parts[-1].strip() if len(parts)>1 else parts[0].strip()
+                    return pd.to_datetime(end, errors="coerce", dayfirst=False)
+                _latest_concern_date = concerns_home_df["Date"].apply(_parse_date).max()
+
+            if not kpi_home_df.empty and "Date Range Parsed" in kpi_home_df.columns:
+                _latest_kpi_date = kpi_home_df["Date Range Parsed"].max()
+
+            _stored_concern = pd.to_datetime(
+                _last_seen_data.iloc[0]["last_concern_date"]
+                if not _last_seen_data.empty and "last_concern_date" in _last_seen_data.columns
+                else None, errors="coerce")
+            _stored_kpi = pd.to_datetime(
+                _last_seen_data.iloc[0]["last_kpi_date"]
+                if not _last_seen_data.empty and "last_kpi_date" in _last_seen_data.columns
+                else None, errors="coerce")
+            _stored_banner_ts = pd.to_datetime(
+                _last_seen_data.iloc[0]["banner_shown_at"]
+                if not _last_seen_data.empty and "banner_shown_at" in _last_seen_data.columns
+                else None, errors="coerce")
+
+            _new_concern = pd.notna(_latest_concern_date) and (
+                pd.isna(_stored_concern) or _latest_concern_date > _stored_concern)
+            _new_kpi = pd.notna(_latest_kpi_date) and (
+                pd.isna(_stored_kpi) or _latest_kpi_date > _stored_kpi)
+
+            _show_banner = False
+            if _new_concern or _new_kpi:
+                _show_banner = True
+                _new_row = pd.DataFrame([{
+                    "last_concern_date": str(_latest_concern_date.date()) if pd.notna(_latest_concern_date) else "",
+                    "last_kpi_date":     str(_latest_kpi_date.date())     if pd.notna(_latest_kpi_date)     else "",
+                    "banner_shown_at":   str(pd.Timestamp.now().date()),
+                }])
+                gh_write(_last_seen_file, _new_row)
+            elif pd.notna(_stored_banner_ts):
+                days_since = (pd.Timestamp.now() - _stored_banner_ts).days
+                _show_banner = days_since <= 3
+
+            if _show_banner:
+                _banner_parts = []
+                if _new_concern and pd.notna(_latest_concern_date):
+                    _banner_parts.append(f"📌 Tutor Concern data updated through **{_latest_concern_date.date()}**")
+                if _new_kpi and pd.notna(_latest_kpi_date):
+                    _banner_parts.append(f"📊 KPI data updated through **{_latest_kpi_date.date()}**")
+                if not _banner_parts:
+                    _banner_parts.append("📊 Monthly KPI & Tutor Concern data has been refreshed")
+                st.info("🆕 **New Monthly Data Available!** &nbsp; " + " &nbsp;|&nbsp; ".join(_banner_parts))
+        except Exception:
+            pass
 
         # Save weekly video snapshot
         if not home_video_summary_df.empty:
@@ -1524,6 +1626,25 @@ def render_app(config):
                          f"({int(row['videos_found'])}/{int(row['updates_sent'])}).",
                          color="red")
 
+            # Concern group movement — worsened
+            try:
+                _cg_df = load_tutor_concerns()
+                _worsened, _improved, _prev_d, _latest_d = get_concern_movements(
+                    _cg_df, faculty_leader_name)
+                if not _worsened.empty:
+                    for _, _crow in _worsened.head(3).iterrows():
+                        _chg = int(_crow["Change"])
+                        _reasons = str(_crow.get("Reasons","")).strip()
+                        card("📌", "Concern Group Worsened",
+                             f"<b>{_crow['Tutor Name']}</b> moved from Group "
+                             f"<b>{int(_crow['Prev Group'])}</b> to Group "
+                             f"<b>{int(_crow['Concern Group'])}</b> "
+                             f"(<span style='color:#cc0000'>▲ {_chg:+d}</span>)"
+                             + (f" — {_reasons}" if _reasons and _reasons != 'nan' else ""),
+                             color="red")
+            except Exception:
+                pass
+
             thresholds = {"% to Delivery Target": 70, "% Sessions on Time": 80}
             for m, thresh in thresholds.items():
                 if m in kpi_avgs and kpi_avgs[m]["curr"] < thresh:
@@ -1591,6 +1712,20 @@ def render_app(config):
                     card("✨", "Clean Dashboards",
                          f"<b>{len(clean_tutors)} tutor{'s' if len(clean_tutors)>1 else ''}</b> "
                          f"have zero archivable students. 👏", color="green")
+
+            # Concern group movement — improved
+            try:
+                if "_improved" in dir() and not _improved.empty:
+                    for _, _crow in _improved.head(3).iterrows():
+                        _chg = int(_crow["Change"])
+                        card("📌", "Concern Group Improved",
+                             f"<b>{_crow['Tutor Name']}</b> moved from Group "
+                             f"<b>{int(_crow['Prev Group'])}</b> to Group "
+                             f"<b>{int(_crow['Concern Group'])}</b> "
+                             f"(<span style='color:#1a6e36'>▼ {_chg}</span>)",
+                             color="green")
+            except Exception:
+                pass
 
             # Perfect video rate win
             if not home_video_summary_df.empty:
