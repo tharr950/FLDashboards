@@ -328,13 +328,17 @@ def build_video_tutor_summary(df):
         sent_df          = tdf[tdf["parent update sent"].astype(str) == "True"]
         updates_sent     = len(sent_df)
         parent_update_pct = round(updates_sent / updates_required * 100, 1) if updates_required > 0 else 0.0
-        videos_found     = int(sent_df["video found"].fillna(False).astype(bool).sum())
-        pct_with_video   = round(videos_found / updates_sent * 100, 1) if updates_sent > 0 else 0.0
+        # Video metrics only for Parent Updates (not Progress Updates)
+        parent_only_df   = tdf[tdf["parent update only sent"].astype(str) == "True"]                            if "parent update only sent" in tdf.columns else sent_df
+        parent_only_sent = len(parent_only_df)
+        videos_found     = int(parent_only_df["video found"].fillna(False).astype(bool).sum())
+        pct_with_video   = round(videos_found / parent_only_sent * 100, 1) if parent_only_sent > 0 else 0.0
         secs_series      = sent_df["duration_secs"].dropna()
         rows.append({
             "tutor_name":       tutor,
             "updates_required": updates_required,
             "updates_sent":     updates_sent,
+            "parent_only_sent":  parent_only_sent,
             "parent_update_pct": parent_update_pct,
             "videos_found":     videos_found,
             "pct_with_video":   pct_with_video,
@@ -2990,10 +2994,12 @@ def render_app(config):
         total_required_team= int(team_video_df["update required"].sum()) if "update required" in team_video_df.columns else 0
         total_updates_team = len(sent_video_df)
         parent_update_pct_team = round(total_updates_team / total_required_team * 100, 1) if total_required_team > 0 else 0
-        total_videos_team  = int(sent_video_df["video found"].fillna(False).astype(bool).sum())
-        pct_team           = round(total_videos_team / total_updates_team * 100, 1) \
-                             if total_updates_team > 0 else 0
-        all_secs           = sent_video_df["duration_secs"].dropna()
+        parent_only_video_df = team_video_df[team_video_df["parent update only sent"].astype(str) == "True"]                                if "parent update only sent" in team_video_df.columns else sent_video_df
+        total_parent_only_team = len(parent_only_video_df)
+        total_videos_team  = int(parent_only_video_df["video found"].fillna(False).astype(bool).sum())
+        pct_team           = round(total_videos_team / total_parent_only_team * 100, 1) \
+                             if total_parent_only_team > 0 else 0
+        all_secs           = parent_only_video_df["duration_secs"].dropna()
         short_count        = int((all_secs < 10).sum())
         long_count         = int((all_secs > 300).sum())
 
@@ -3191,10 +3197,20 @@ def render_app(config):
         if sel_tutor_v != "All Tutors":
             view_video_df = view_video_df[view_video_df["tutor"] == sel_tutor_v]
 
+        # Add progress update indicator
+        if "parent update only sent" in view_video_df.columns:
+            view_video_df["update type"] = view_video_df.apply(
+                lambda r: "Progress Update Only" if (
+                    str(r["parent update sent"]) == "True" and
+                    str(r["parent update only sent"]) != "True"
+                ) else ("Parent Update" if str(r["parent update only sent"]) == "True" else "—"),
+                axis=1
+            )
         detail_cols_v = [c for c in ["tutor","student","brand","week of","sessions attended",
-                                      "parent update sent","video found","video duration",
+                                      "parent update sent","update type","video found","video duration",
                                       "scrape error"] if c in view_video_df.columns]
         detail_display_v = view_video_df[detail_cols_v].rename(columns={
+            "update type":       "Update Type",
             "tutor":              "Tutor",
             "student":            "Student",
             "brand":              "Brand",
