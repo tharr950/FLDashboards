@@ -3047,7 +3047,7 @@ def render_app(config):
             for ci, (metric, (label, is_pct)) in enumerate(kpi_metrics_p.items()):
                 if metric not in p_monthly_t.columns:
                     continue
-                plot_t = p_monthly_t[["Date Range","Date Parsed",metric]].dropna()                     .drop_duplicates(subset=["Date Parsed"], keep="first")                     .sort_values("Date Parsed").tail(6).copy()
+                plot_t = p_monthly_t[["Date Range","Date Parsed",metric]].dropna()                     .drop_duplicates(subset=["Date Parsed"], keep="first")                     .sort_values("Date Parsed").tail(8).copy()
                 if is_pct:
                     plot_t[metric] = plot_t[metric] * 100
                 _p_dates     = plot_t["Date Parsed"].tolist()
