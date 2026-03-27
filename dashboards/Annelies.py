@@ -4946,14 +4946,20 @@ def render_app(config):
                     team_grouped = team_grouped.merge(
                         team_plot_df[["Date Parsed","Date Range"]], on="Date Parsed", how="left"
                     ).drop_duplicates(subset=["Date Parsed"])
-                    fig_team = px.line(team_grouped, x="Date Range", y=metric,
+                    # Use Date Parsed for x-axis to ensure chronological order
+                    # then relabel ticks with Date Range strings
+                    _tick_map = dict(zip(team_grouped["Date Parsed"], team_grouped["Date Range"]))
+                    _tick_map.update(dict(zip(tutor_plot_df["Date Parsed"], tutor_plot_df["Date Range"])))
+                    fig_team = px.line(team_grouped, x="Date Parsed", y=metric,
                                        title="VS Team", markers=True)
                     fig_team.add_scatter(
-                        x=tutor_plot_df["Date Range"], y=tutor_plot_df[metric],
+                        x=tutor_plot_df["Date Parsed"], y=tutor_plot_df[metric],
                         mode="lines+markers", name=selected_tutor, line=dict(width=3))
                     fig_team.update_layout(
                         title=dict(x=0.5, xanchor="center", font=dict(size=16)),
-                        xaxis=dict(tickangle=30), yaxis_title=None, xaxis_title=None,
+                        xaxis=dict(tickangle=30, tickvals=list(_tick_map.keys()),
+                                   ticktext=list(_tick_map.values())),
+                        yaxis_title=None, xaxis_title=None,
                         height=350, margin=dict(l=20, r=20, t=50, b=40))
 
                 if not tier_plot_df.empty:
@@ -4962,14 +4968,18 @@ def render_app(config):
                     tier_grouped = tier_grouped.merge(
                         tier_plot_df[["Date Parsed","Date Range"]], on="Date Parsed", how="left"
                     ).drop_duplicates(subset=["Date Parsed"])
-                    fig_tier = px.line(tier_grouped, x="Date Range", y=metric,
+                    _tick_map_t = dict(zip(tier_grouped["Date Parsed"], tier_grouped["Date Range"]))
+                    _tick_map_t.update(dict(zip(tutor_plot_df["Date Parsed"], tutor_plot_df["Date Range"])))
+                    fig_tier = px.line(tier_grouped, x="Date Parsed", y=metric,
                                        title="VS Tier", markers=True)
                     fig_tier.add_scatter(
-                        x=tutor_plot_df["Date Range"], y=tutor_plot_df[metric],
+                        x=tutor_plot_df["Date Parsed"], y=tutor_plot_df[metric],
                         mode="lines+markers", name=selected_tutor, line=dict(width=3))
                     fig_tier.update_layout(
                         title=dict(x=0.5, xanchor="center", font=dict(size=16)),
-                        xaxis=dict(tickangle=30), yaxis_title=None, xaxis_title=None,
+                        xaxis=dict(tickangle=30, tickvals=list(_tick_map_t.keys()),
+                                   ticktext=list(_tick_map_t.values())),
+                        yaxis_title=None, xaxis_title=None,
                         height=350, margin=dict(l=20, r=20, t=50, b=40))
 
                 row1_col1, row1_col2 = st.columns([1, 3])
