@@ -3066,10 +3066,11 @@ def render_app(config):
                                       line=dict(dash="dash", color="gray"))
                 fig_p.add_hline(y=100, line_dash="dot", line_color="#aaa")
                 fig_p.update_layout(
-                    height=280, margin=dict(l=10,r=10,t=40,b=30),
-                    xaxis=dict(tickangle=30, tickvals=_p_dates, ticktext=_p_ticklabels),
+                    height=280, margin=dict(l=10,r=10,t=40,b=60),
+                    xaxis=dict(tickangle=30, tickvals=_p_dates, ticktext=_p_ticklabels,
+                               tickmode="array", nticks=len(_p_dates)),
                     yaxis_title=None, xaxis_title=None,
-                    legend=dict(orientation="h", y=-0.3),
+                    legend=dict(orientation="h", y=-0.4),
                     title=dict(x=0.5, xanchor="center")
                 )
                 with kpi_cols[ci % 2]:
