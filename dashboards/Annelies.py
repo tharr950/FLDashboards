@@ -3047,27 +3047,28 @@ def render_app(config):
             for ci, (metric, (label, is_pct)) in enumerate(kpi_metrics_p.items()):
                 if metric not in p_monthly_t.columns:
                     continue
-                plot_t = p_monthly_t[["Date Range","Date Parsed",metric]].dropna().tail(8).copy()
+                plot_t = p_monthly_t[["Date Range","Date Parsed",metric]].dropna()                     .drop_duplicates(subset=["Date Parsed"], keep="first")                     .sort_values("Date Parsed").tail(6).copy()
                 if is_pct:
                     plot_t[metric] = plot_t[metric] * 100
-                fig_p = px.line(plot_t, x="Date Range", y=metric,
+                _p_dates     = plot_t["Date Parsed"].tolist()
+                _p_ticklabels = plot_t["Date Range"].tolist()
+                fig_p = px.line(plot_t, x="Date Parsed", y=metric,
                                 title=label, markers=True,
-                                labels={metric: "%", "Date Range": ""})
+                                labels={metric: "%", "Date Parsed": ""})
                 if not team_monthly_p.empty and metric in team_monthly_p.columns:
                     team_plot_p = team_monthly_p.dropna(subset=["Date Parsed"]).copy()
                     if is_pct:
                         team_plot_p[metric] = team_plot_p[metric] * 100
                     tg = team_plot_p.groupby("Date Parsed")[metric].mean().reset_index()
-                    tg = tg.merge(team_plot_p[["Date Parsed","Date Range"]],
-                                  on="Date Parsed", how="left").drop_duplicates("Date Parsed")
-                    tg = tg.sort_values("Date Parsed").tail(8)
-                    fig_p.add_scatter(x=tg["Date Range"], y=tg[metric],
+                    tg = tg[tg["Date Parsed"].isin(_p_dates)].sort_values("Date Parsed")
+                    fig_p.add_scatter(x=tg["Date Parsed"], y=tg[metric],
                                       mode="lines+markers", name="Team Avg",
                                       line=dict(dash="dash", color="gray"))
                 fig_p.add_hline(y=100, line_dash="dot", line_color="#aaa")
                 fig_p.update_layout(
                     height=280, margin=dict(l=10,r=10,t=40,b=30),
-                    xaxis=dict(tickangle=30), yaxis_title=None, xaxis_title=None,
+                    xaxis=dict(tickangle=30, tickvals=_p_dates, ticktext=_p_ticklabels),
+                    yaxis_title=None, xaxis_title=None,
                     legend=dict(orientation="h", y=-0.3),
                     title=dict(x=0.5, xanchor="center")
                 )
