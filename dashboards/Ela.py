@@ -4931,7 +4931,7 @@ def render_app(config):
                     if not tier_df.empty:
                         tier_df[metric] = tier_df[metric] * 100
 
-                tutor_plot_df = tutor_df.dropna(subset=["Date Parsed"]).sort_values("Date Parsed").tail(6)
+                tutor_plot_df = tutor_df.dropna(subset=["Date Parsed"]).drop_duplicates(subset=["Date Parsed"], keep="first").sort_values("Date Parsed").tail(6)
                 team_plot_df  = team_df.dropna(subset=["Date Parsed"]).sort_values("Date Parsed")
                 tier_plot_df  = tier_df.dropna(subset=["Date Parsed"]).sort_values("Date Parsed") \
                                 if not tier_df.empty else pd.DataFrame()
