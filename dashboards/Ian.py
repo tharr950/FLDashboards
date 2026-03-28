@@ -895,7 +895,9 @@ def generate_tutor_pdf(
     p_arch=None, p_grades=None, p_exam=None,
     p_video_row=None, p_video_df=None,
     p_monthly_t=None, p_kpi_df=None,
-    concern_df=None, faculty_leader=None
+    concern_df=None, faculty_leader=None,
+    inc_arch=True, inc_grades=True, inc_exams=True,
+    inc_video=True, inc_kpi=True, inc_concern=True,
 ):
     """Generate a PDF report for a tutor profile page."""
     from reportlab.lib.pagesizes import letter
@@ -975,7 +977,8 @@ def generate_tutor_pdf(
     story.extend(section_divider())
 
     # ── Archivable & Unscheduled ───────────────────────────────────────────
-    story.append(Paragraph("📦 Archivable Students & Unscheduled Hours", h2_style))
+    if inc_arch:
+     story.append(Paragraph("📦 Archivable Students & Unscheduled Hours", h2_style))
     if p_arch is not None and not p_arch.empty:
         arch_students = p_arch[p_arch["should_archive"] == True]
         n_arch        = len(arch_students)
@@ -1018,7 +1021,8 @@ def generate_tutor_pdf(
     story.extend(section_divider())
 
     # ── Grades ────────────────────────────────────────────────────────────
-    story.append(Paragraph("📚 Grades Summary", h2_style))
+    if inc_grades:
+     story.append(Paragraph("📚 Grades Summary", h2_style))
     if p_grades is not None and not p_grades.empty:
         total_g   = p_grades["student_id"].nunique()
         no_grades = int(p_grades.groupby("student_id")["score"].apply(lambda s: s.isna().all()).sum())
@@ -1080,7 +1084,8 @@ def generate_tutor_pdf(
     story.extend(section_divider())
 
     # ── Exams ─────────────────────────────────────────────────────────────
-    story.append(Paragraph("📝 Exam & Test Prep History", h2_style))
+    if inc_exams:
+     story.append(Paragraph("📝 Exam & Test Prep History", h2_style))
     if p_exam is not None and not p_exam.empty:
         p_now      = pd.Timestamp.now(tz="UTC")
         ex_students= p_exam["student_id"].nunique()
@@ -1149,7 +1154,8 @@ def generate_tutor_pdf(
     story.extend(section_divider())
 
     # ── Video ─────────────────────────────────────────────────────────────
-    story.append(Paragraph("📹 Parent Update Videos", h2_style))
+    if inc_video:
+     story.append(Paragraph("📹 Parent Update Videos", h2_style))
     if p_video_row is not None:
         summary_data = [
             ["Required", "Sent", "Parent Update %", "Videos Found", "Video %", "Median Duration"],
@@ -1210,7 +1216,8 @@ def generate_tutor_pdf(
     story.extend(section_divider())
 
     # ── KPI Trends ────────────────────────────────────────────────────────
-    story.append(Paragraph("📈 KPI Trends", h2_style))
+    if inc_kpi:
+     story.append(Paragraph("📈 KPI Trends", h2_style))
     if p_monthly_t is not None and not p_monthly_t.empty:
         import re as _re2
         def _parse_end(s):
@@ -1238,7 +1245,7 @@ def generate_tutor_pdf(
         story.append(Paragraph("No KPI data found.", normal_style))
 
     # ── Concern History ───────────────────────────────────────────────────
-    if concern_df is not None and not concern_df.empty:
+    if inc_concern and concern_df is not None and not concern_df.empty:
         story.extend(section_divider())
         story.append(Paragraph("📌 Concern Group History", h2_style))
         tutor_concerns = concern_df[concern_df["Tutor Name"] == tutor_name].copy()
@@ -3153,15 +3160,21 @@ def render_app(config):
                         pdf_bytes = generate_tutor_pdf(
                             tutor_name     = profile_tutor,
                             generated_date = pd.Timestamp.now().strftime("%B %d, %Y"),
-                            p_arch         = p_arch         if _inc_arch    else None,
-                            p_grades       = p_grades       if _inc_grades  else None,
-                            p_exam         = p_exam         if _inc_exams   else None,
-                            p_video_row    = p_video_row    if _inc_video   else None,
-                            p_video_df     = p_video_df     if _inc_video   else None,
-                            p_monthly_t    = p_monthly_t    if _inc_kpi     else None,
-                            p_kpi_df       = p_kpi_df       if _inc_kpi     else None,
-                            concern_df     = _concern_df_pdf if _inc_concern else None,
+                            p_arch         = p_arch,
+                            p_grades       = p_grades,
+                            p_exam         = p_exam,
+                            p_video_row    = p_video_row,
+                            p_video_df     = p_video_df,
+                            p_monthly_t    = p_monthly_t,
+                            p_kpi_df       = p_kpi_df,
+                            concern_df     = _concern_df_pdf,
                             faculty_leader = faculty_leader_name,
+                            inc_arch       = _inc_arch,
+                            inc_grades     = _inc_grades,
+                            inc_exams      = _inc_exams,
+                            inc_video      = _inc_video,
+                            inc_kpi        = _inc_kpi,
+                            inc_concern    = _inc_concern,
                         )
                         st.download_button(
                             label     = "📄 Click to Download PDF",
