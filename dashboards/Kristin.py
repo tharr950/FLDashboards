@@ -1133,13 +1133,41 @@ def generate_tutor_pdf(
         if t: story.append(t)
         if p_video_df is not None and not p_video_df.empty:
             story.append(Spacer(1, 6))
-            vid_cols = [c for c in ["student","brand","parent update sent","video found","video duration"]
+            vid_cols = [c for c in ["student","brand","parent update sent","parent update only sent","video found","video duration"]
                         if c in p_video_df.columns]
-            sent_df  = p_video_df[p_video_df["parent update sent"].astype(str) == "True"]
-            if not sent_df.empty:
-                rows = [vid_cols] + sent_df[vid_cols].fillna("—").values.tolist()
-                t2 = make_table([[str(v) for v in r] for r in rows])
-                if t2: story.append(t2)
+            # Show all rows — color code by status
+            vid_display_cols = [c for c in ["student","brand","parent update sent","video found","video duration"]
+                                 if c in p_video_df.columns]
+            vid_rows = []
+            vid_row_colors = []
+            for _, vrow in p_video_df.iterrows():
+                sent     = str(vrow.get("parent update sent","")).strip()
+                pu_only  = str(vrow.get("parent update only sent","")).strip()
+                vid      = str(vrow.get("video found","")).strip()
+                if sent != "True":
+                    vid_row_colors.append(colors.HexColor("#ffe5e5"))  # red — not sent
+                elif pu_only == "True" and vid != "True":
+                    vid_row_colors.append(colors.HexColor("#fffbea"))  # yellow — no video
+                else:
+                    vid_row_colors.append(colors.white)
+                vid_rows.append([str(vrow.get(c,"—")) for c in vid_display_cols])
+            if vid_rows:
+                header = [vid_display_cols]
+                rows   = header + vid_rows
+                t2 = Table([[str(v) for v in r] for r in rows], repeatRows=1)
+                style_cmds = [
+                    ("BACKGROUND",  (0,0), (-1,0),  colors.HexColor("#2c5f8a")),
+                    ("TEXTCOLOR",   (0,0), (-1,0),  colors.white),
+                    ("FONTNAME",    (0,0), (-1,0),  "Helvetica-Bold"),
+                    ("FONTSIZE",    (0,0), (-1,-1), 8),
+                    ("GRID",        (0,0), (-1,-1), 0.3, colors.HexColor("#ddd")),
+                    ("VALIGN",      (0,0), (-1,-1), "MIDDLE"),
+                    ("PADDING",     (0,0), (-1,-1), 4),
+                ]
+                for i, bg in enumerate(vid_row_colors):
+                    style_cmds.append(("BACKGROUND", (0, i+1), (-1, i+1), bg))
+                t2.setStyle(TableStyle(style_cmds))
+                story.append(t2)
     else:
         story.append(Paragraph("No video data found.", normal_style))
     story.extend(section_divider())
@@ -1487,13 +1515,41 @@ def generate_tutor_pdf(
         if t: story.append(t)
         if p_video_df is not None and not p_video_df.empty:
             story.append(Spacer(1, 6))
-            vid_cols = [c for c in ["student","brand","parent update sent","video found","video duration"]
+            vid_cols = [c for c in ["student","brand","parent update sent","parent update only sent","video found","video duration"]
                         if c in p_video_df.columns]
-            sent_df  = p_video_df[p_video_df["parent update sent"].astype(str) == "True"]
-            if not sent_df.empty:
-                rows = [vid_cols] + sent_df[vid_cols].fillna("—").values.tolist()
-                t2 = make_table([[str(v) for v in r] for r in rows])
-                if t2: story.append(t2)
+            # Show all rows — color code by status
+            vid_display_cols = [c for c in ["student","brand","parent update sent","video found","video duration"]
+                                 if c in p_video_df.columns]
+            vid_rows = []
+            vid_row_colors = []
+            for _, vrow in p_video_df.iterrows():
+                sent     = str(vrow.get("parent update sent","")).strip()
+                pu_only  = str(vrow.get("parent update only sent","")).strip()
+                vid      = str(vrow.get("video found","")).strip()
+                if sent != "True":
+                    vid_row_colors.append(colors.HexColor("#ffe5e5"))  # red — not sent
+                elif pu_only == "True" and vid != "True":
+                    vid_row_colors.append(colors.HexColor("#fffbea"))  # yellow — no video
+                else:
+                    vid_row_colors.append(colors.white)
+                vid_rows.append([str(vrow.get(c,"—")) for c in vid_display_cols])
+            if vid_rows:
+                header = [vid_display_cols]
+                rows   = header + vid_rows
+                t2 = Table([[str(v) for v in r] for r in rows], repeatRows=1)
+                style_cmds = [
+                    ("BACKGROUND",  (0,0), (-1,0),  colors.HexColor("#2c5f8a")),
+                    ("TEXTCOLOR",   (0,0), (-1,0),  colors.white),
+                    ("FONTNAME",    (0,0), (-1,0),  "Helvetica-Bold"),
+                    ("FONTSIZE",    (0,0), (-1,-1), 8),
+                    ("GRID",        (0,0), (-1,-1), 0.3, colors.HexColor("#ddd")),
+                    ("VALIGN",      (0,0), (-1,-1), "MIDDLE"),
+                    ("PADDING",     (0,0), (-1,-1), 4),
+                ]
+                for i, bg in enumerate(vid_row_colors):
+                    style_cmds.append(("BACKGROUND", (0, i+1), (-1, i+1), bg))
+                t2.setStyle(TableStyle(style_cmds))
+                story.append(t2)
     else:
         story.append(Paragraph("No video data found.", normal_style))
     story.extend(section_divider())
