@@ -3134,31 +3134,44 @@ def render_app(config):
         except Exception:
             _concern_df_pdf = pd.DataFrame()
 
-        if st.button("⬇️ Download Tutor Profile as PDF", key="download_pdf"):
-            with st.spinner("Generating PDF..."):
-                try:
-                    pdf_bytes = generate_tutor_pdf(
-                        tutor_name     = profile_tutor,
-                        generated_date = pd.Timestamp.now().strftime("%B %d, %Y"),
-                        p_arch         = p_arch,
-                        p_grades       = p_grades,
-                        p_exam         = p_exam,
-                        p_video_row    = p_video_row,
-                        p_video_df     = p_video_df,
-                        p_monthly_t    = p_monthly_t,
-                        p_kpi_df       = p_kpi_df,
-                        concern_df     = _concern_df_pdf,
-                        faculty_leader = faculty_leader_name,
-                    )
-                    st.download_button(
-                        label     = "📄 Click to Download PDF",
-                        data      = pdf_bytes,
-                        file_name = f"{profile_tutor.replace(' ','_')}_Profile_{pd.Timestamp.now().strftime('%Y%m%d')}.pdf",
-                        mime      = "application/pdf",
-                        key       = "pdf_download_btn"
-                    )
-                except Exception as e:
-                    st.error(f"Could not generate PDF: {e}")
+        with st.expander("⬇️ Download Tutor Profile as PDF", expanded=False):
+            st.markdown("**Select sections to include:**")
+            _pdf_col1, _pdf_col2, _pdf_col3 = st.columns(3)
+            with _pdf_col1:
+                _inc_arch    = st.checkbox("📦 Archivable & Unscheduled", value=True, key="pdf_inc_arch")
+                _inc_grades  = st.checkbox("📚 Grades Summary",           value=True, key="pdf_inc_grades")
+            with _pdf_col2:
+                _inc_exams   = st.checkbox("📝 Exam History",             value=True, key="pdf_inc_exams")
+                _inc_video   = st.checkbox("📹 Parent Update Videos",     value=True, key="pdf_inc_video")
+            with _pdf_col3:
+                _inc_kpi     = st.checkbox("📈 KPI Trends",               value=True, key="pdf_inc_kpi")
+                _inc_concern = st.checkbox("📌 Concern History",          value=True, key="pdf_inc_concern")
+
+            if st.button("Generate PDF", key="download_pdf"):
+                with st.spinner("Generating PDF..."):
+                    try:
+                        pdf_bytes = generate_tutor_pdf(
+                            tutor_name     = profile_tutor,
+                            generated_date = pd.Timestamp.now().strftime("%B %d, %Y"),
+                            p_arch         = p_arch         if _inc_arch    else None,
+                            p_grades       = p_grades       if _inc_grades  else None,
+                            p_exam         = p_exam         if _inc_exams   else None,
+                            p_video_row    = p_video_row    if _inc_video   else None,
+                            p_video_df     = p_video_df     if _inc_video   else None,
+                            p_monthly_t    = p_monthly_t    if _inc_kpi     else None,
+                            p_kpi_df       = p_kpi_df       if _inc_kpi     else None,
+                            concern_df     = _concern_df_pdf if _inc_concern else None,
+                            faculty_leader = faculty_leader_name,
+                        )
+                        st.download_button(
+                            label     = "📄 Click to Download PDF",
+                            data      = pdf_bytes,
+                            file_name = f"{profile_tutor.replace(' ','_')}_Profile_{pd.Timestamp.now().strftime('%Y%m%d')}.pdf",
+                            mime      = "application/pdf",
+                            key       = "pdf_download_btn"
+                        )
+                    except Exception as e:
+                        st.error(f"Could not generate PDF: {e}")
 
         st.markdown("---")
 
