@@ -977,9 +977,23 @@ def generate_tutor_pdf(
             story.append(Paragraph("Students flagged for archiving:", h3_style))
             show_cols = [c for c in ["student_name","brand","hours_remaining","unscheduled_hours"]
                          if c in arch_students.columns]
-            rows = [show_cols] + arch_students[show_cols].fillna("—").values.tolist()
-            t2 = make_table([[str(v) for v in r] for r in rows])
-            if t2: story.append(t2)
+            arch_sorted = arch_students[show_cols].sort_values("unscheduled_hours", ascending=False)
+            rows = [show_cols] + arch_sorted.fillna("—").values.tolist()
+            t2 = Table([[str(v) for v in r] for r in rows], repeatRows=1)
+            style_cmds = [
+                ("BACKGROUND",  (0,0), (-1,0),  colors.HexColor("#2c5f8a")),
+                ("TEXTCOLOR",   (0,0), (-1,0),  colors.white),
+                ("FONTNAME",    (0,0), (-1,0),  "Helvetica-Bold"),
+                ("FONTSIZE",    (0,0), (-1,-1), 8),
+                ("GRID",        (0,0), (-1,-1), 0.3, colors.HexColor("#ddd")),
+                ("VALIGN",      (0,0), (-1,-1), "MIDDLE"),
+                ("PADDING",     (0,0), (-1,-1), 4),
+            ]
+            # All archivable rows are red
+            for i in range(1, len(rows)):
+                style_cmds.append(("BACKGROUND", (0, i), (-1, i), colors.HexColor("#ffe5e5")))
+            t2.setStyle(TableStyle(style_cmds))
+            story.append(t2)
     else:
         story.append(Paragraph("No archivable/unscheduled data found.", normal_style))
     story.extend(section_divider())
@@ -1003,27 +1017,52 @@ def generate_tutor_pdf(
         if t: story.append(t)
         story.append(Spacer(1, 6))
         grade_rows = []
+        grade_row_colors = []
         for sid, sdf in p_grades.groupby("student_id"):
             sname    = sdf["student_name"].iloc[0] if "student_name" in sdf.columns else str(sid)
-            subjects = sdf[sdf["score"].notna()]["subject"].nunique() if "subject" in sdf.columns else 0
-            days     = sdf["days_since_update"].min() if "days_since_update" in sdf.columns else None
-            grade_rows.append([sname, str(subjects),
-                               f"{int(days)}d" if pd.notna(days) else "—"])
+            subjects = sdf["subject"].nunique() if "subject" in sdf.columns else 0
+            n_entered= int(sdf["score"].notna().sum())
+            days     = sdf["days_since_update"].min() if n_entered > 0 else None
+            if n_entered == 0:
+                status = "No Grades"
+                grade_row_colors.append(colors.HexColor("#ffe5e5"))
+            elif days is not None and days > 90:
+                status = f"Stale ({int(days)}d)"
+                grade_row_colors.append(colors.HexColor("#fffbea"))
+            else:
+                status = f"Current ({int(days)}d)" if days is not None else "—"
+                grade_row_colors.append(colors.white)
+            grade_rows.append([sname, str(subjects), str(n_entered), status])
         if grade_rows:
-            rows = [["Student", "Subjects Graded", "Days Since Update"]] + grade_rows
-            t2 = make_table([[str(v) for v in r] for r in rows])
-            if t2: story.append(t2)
+            header = [["Student", "Subjects", "Grades Entered", "Status"]]
+            rows   = header + grade_rows
+            t2 = Table(rows, repeatRows=1)
+            style_cmds = [
+                ("BACKGROUND",  (0,0), (-1,0),  colors.HexColor("#2c5f8a")),
+                ("TEXTCOLOR",   (0,0), (-1,0),  colors.white),
+                ("FONTNAME",    (0,0), (-1,0),  "Helvetica-Bold"),
+                ("FONTSIZE",    (0,0), (-1,-1), 8),
+                ("GRID",        (0,0), (-1,-1), 0.3, colors.HexColor("#ddd")),
+                ("VALIGN",      (0,0), (-1,-1), "MIDDLE"),
+                ("PADDING",     (0,0), (-1,-1), 4),
+            ]
+            for i, bg in enumerate(grade_row_colors):
+                style_cmds.append(("BACKGROUND", (0, i+1), (-1, i+1), bg))
+            t2.setStyle(TableStyle(style_cmds))
+            story.append(t2)
     else:
         story.append(Paragraph("No grades data found.", normal_style))
     story.extend(section_divider())
 
+    # ── Exams ─────────────────────────────────────────────────────────────
     # ── Exams ─────────────────────────────────────────────────────────────
     story.append(Paragraph("📝 Exam & Test Prep History", h2_style))
     if p_exam is not None and not p_exam.empty:
         p_now      = pd.Timestamp.now(tz="UTC")
         ex_students= p_exam["student_id"].nunique()
         total_hrs  = p_exam["test_prep_hours_delivered"].iloc[0] if not p_exam.empty else 0
-        n_completed= p_exam[p_exam["exam_valid_composite"] == True]["exam_id"].nunique()                      if "exam_id" in p_exam.columns else 0
+        n_completed= p_exam[p_exam["exam_valid_composite"] == True]["exam_id"].nunique() \
+                     if "exam_id" in p_exam.columns else 0
         hrs_per    = round(total_hrs / n_completed, 1) if n_completed > 0 and pd.notna(total_hrs) else None
         summary_data = [
             ["Test Prep Students", "Completed Exams", "Total Hours", "Avg Hrs/Exam"],
@@ -1035,6 +1074,7 @@ def generate_tutor_pdf(
         if t: story.append(t)
         story.append(Spacer(1, 6))
         ex_rows = []
+        ex_row_colors = []
         for sid, sdf in p_exam.groupby("student_id"):
             sname    = sdf["student_name"].iloc[0] if "student_name" in sdf.columns else str(sid)
             hrs      = sdf["test_prep_hours_delivered"].iloc[0]
@@ -1042,15 +1082,37 @@ def generate_tutor_pdf(
             best     = valid["score"].max() if not valid.empty else None
             latest   = pd.to_datetime(valid["exam_date"], utc=True).max() if not valid.empty else None
             days_ago = int((p_now - latest).days) if latest is not None and pd.notna(latest) else None
+            if valid.empty and pd.notna(hrs) and float(hrs) >= 6:
+                status = "No Exam (6+ hrs)"
+                ex_row_colors.append(colors.HexColor("#ffe5e5"))
+            elif days_ago is not None and days_ago > 90:
+                status = f"Stale ({days_ago}d)"
+                ex_row_colors.append(colors.HexColor("#fffbea"))
+            else:
+                status = f"Current ({days_ago}d)" if days_ago is not None else "—"
+                ex_row_colors.append(colors.white)
             ex_rows.append([sname,
                             f"{float(hrs):.1f}" if pd.notna(hrs) else "—",
                             str(len(valid)),
                             str(int(best)) if pd.notna(best) else "—",
-                            f"{days_ago}d" if days_ago is not None else "—"])
+                            status])
         if ex_rows:
-            rows = [["Student","Hours","Valid Exams","Best Score","Days Since Exam"]] + ex_rows
-            t2 = make_table([[str(v) for v in r] for r in rows])
-            if t2: story.append(t2)
+            header = [["Student","Hours","Valid Exams","Best Score","Status"]]
+            rows   = header + ex_rows
+            t2 = Table(rows, repeatRows=1)
+            style_cmds = [
+                ("BACKGROUND",  (0,0), (-1,0),  colors.HexColor("#2c5f8a")),
+                ("TEXTCOLOR",   (0,0), (-1,0),  colors.white),
+                ("FONTNAME",    (0,0), (-1,0),  "Helvetica-Bold"),
+                ("FONTSIZE",    (0,0), (-1,-1), 8),
+                ("GRID",        (0,0), (-1,-1), 0.3, colors.HexColor("#ddd")),
+                ("VALIGN",      (0,0), (-1,-1), "MIDDLE"),
+                ("PADDING",     (0,0), (-1,-1), 4),
+            ]
+            for i, bg in enumerate(ex_row_colors):
+                style_cmds.append(("BACKGROUND", (0, i+1), (-1, i+1), bg))
+            t2.setStyle(TableStyle(style_cmds))
+            story.append(t2)
     else:
         story.append(Paragraph("No exam data found.", normal_style))
     story.extend(section_divider())
@@ -1294,9 +1356,23 @@ def generate_tutor_pdf(
             story.append(Paragraph("Students flagged for archiving:", h3_style))
             show_cols = [c for c in ["student_name","brand","hours_remaining","unscheduled_hours"]
                          if c in arch_students.columns]
-            rows = [show_cols] + arch_students[show_cols].fillna("—").values.tolist()
-            t2 = make_table([[str(v) for v in r] for r in rows])
-            if t2: story.append(t2)
+            arch_sorted = arch_students[show_cols].sort_values("unscheduled_hours", ascending=False)
+            rows = [show_cols] + arch_sorted.fillna("—").values.tolist()
+            t2 = Table([[str(v) for v in r] for r in rows], repeatRows=1)
+            style_cmds = [
+                ("BACKGROUND",  (0,0), (-1,0),  colors.HexColor("#2c5f8a")),
+                ("TEXTCOLOR",   (0,0), (-1,0),  colors.white),
+                ("FONTNAME",    (0,0), (-1,0),  "Helvetica-Bold"),
+                ("FONTSIZE",    (0,0), (-1,-1), 8),
+                ("GRID",        (0,0), (-1,-1), 0.3, colors.HexColor("#ddd")),
+                ("VALIGN",      (0,0), (-1,-1), "MIDDLE"),
+                ("PADDING",     (0,0), (-1,-1), 4),
+            ]
+            # All archivable rows are red
+            for i in range(1, len(rows)):
+                style_cmds.append(("BACKGROUND", (0, i), (-1, i), colors.HexColor("#ffe5e5")))
+            t2.setStyle(TableStyle(style_cmds))
+            story.append(t2)
     else:
         story.append(Paragraph("No archivable/unscheduled data found.", normal_style))
     story.extend(section_divider())
@@ -1320,16 +1396,39 @@ def generate_tutor_pdf(
         if t: story.append(t)
         story.append(Spacer(1, 6))
         grade_rows = []
+        grade_row_colors = []
         for sid, sdf in p_grades.groupby("student_id"):
             sname    = sdf["student_name"].iloc[0] if "student_name" in sdf.columns else str(sid)
-            subjects = sdf[sdf["score"].notna()]["subject"].nunique() if "subject" in sdf.columns else 0
-            days     = sdf["days_since_update"].min() if "days_since_update" in sdf.columns else None
-            grade_rows.append([sname, str(subjects),
-                               f"{int(days)}d" if pd.notna(days) else "—"])
+            subjects = sdf["subject"].nunique() if "subject" in sdf.columns else 0
+            n_entered= int(sdf["score"].notna().sum())
+            days     = sdf["days_since_update"].min() if n_entered > 0 else None
+            if n_entered == 0:
+                status = "No Grades"
+                grade_row_colors.append(colors.HexColor("#ffe5e5"))
+            elif days is not None and days > 90:
+                status = f"Stale ({int(days)}d)"
+                grade_row_colors.append(colors.HexColor("#fffbea"))
+            else:
+                status = f"Current ({int(days)}d)" if days is not None else "—"
+                grade_row_colors.append(colors.white)
+            grade_rows.append([sname, str(subjects), str(n_entered), status])
         if grade_rows:
-            rows = [["Student", "Subjects Graded", "Days Since Update"]] + grade_rows
-            t2 = make_table([[str(v) for v in r] for r in rows])
-            if t2: story.append(t2)
+            header = [["Student", "Subjects", "Grades Entered", "Status"]]
+            rows   = header + grade_rows
+            t2 = Table(rows, repeatRows=1)
+            style_cmds = [
+                ("BACKGROUND",  (0,0), (-1,0),  colors.HexColor("#2c5f8a")),
+                ("TEXTCOLOR",   (0,0), (-1,0),  colors.white),
+                ("FONTNAME",    (0,0), (-1,0),  "Helvetica-Bold"),
+                ("FONTSIZE",    (0,0), (-1,-1), 8),
+                ("GRID",        (0,0), (-1,-1), 0.3, colors.HexColor("#ddd")),
+                ("VALIGN",      (0,0), (-1,-1), "MIDDLE"),
+                ("PADDING",     (0,0), (-1,-1), 4),
+            ]
+            for i, bg in enumerate(grade_row_colors):
+                style_cmds.append(("BACKGROUND", (0, i+1), (-1, i+1), bg))
+            t2.setStyle(TableStyle(style_cmds))
+            story.append(t2)
     else:
         story.append(Paragraph("No grades data found.", normal_style))
     story.extend(section_divider())
