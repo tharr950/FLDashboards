@@ -1103,7 +1103,7 @@ def generate_tutor_pdf(
         for sid, sdf in p_exam.groupby("student_id"):
             sname    = sdf["student_name"].iloc[0] if "student_name" in sdf.columns else str(sid)
             hrs      = sdf["test_prep_hours_delivered"].iloc[0]
-            valid    = sdf[sdf["exam_valid_composite"] == True]
+            valid    = sdf[sdf["exam_valid_composite"].astype(str) == "True"]
             best     = valid["score"].max() if not valid.empty else None
             latest   = pd.to_datetime(valid["exam_date"], utc=True).max() if not valid.empty else None
             days_ago = int((p_now - latest).days) if latest is not None and pd.notna(latest) else None
