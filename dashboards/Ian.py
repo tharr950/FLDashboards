@@ -3193,6 +3193,38 @@ def render_app(config):
 
         st.markdown("---")
 
+        # Active Student Brand Breakdown
+        st.markdown("### 👥 Active Students by Brand")
+        if not p_arch.empty:
+            active_df = p_arch[p_arch["should_archive"] == False]
+            if not active_df.empty:
+                brand_counts = active_df.groupby("brand")["student_name"].nunique().reset_index()
+                brand_counts.columns = ["Brand", "Students"]
+                brand_counts = brand_counts.sort_values("Students", ascending=False)
+                brand_cols = st.columns(min(len(brand_counts), 4))
+                brand_colors = {
+                    "Private Tutoring":    "#1f77b4",
+                    "Back-Up Care Tutoring": "#ff7f0e",
+                    "Academics":           "#2ca02c",
+                    "Trial":               "#9467bd",
+                }
+                for i, (_, row) in enumerate(brand_counts.iterrows()):
+                    with brand_cols[i % len(brand_cols)]:
+                        color = brand_colors.get(row["Brand"], "#888")
+                        st.markdown(f"""
+                        <div style='background:#f7f9fc; border-left:4px solid {color};
+                                    border-radius:6px; padding:10px 14px; margin-bottom:8px;'>
+                            <div style='font-size:0.8rem; color:#666;'>{row["Brand"]}</div>
+                            <div style='font-size:1.6rem; font-weight:700; color:{color};'>{int(row["Students"])}</div>
+                            <div style='font-size:0.75rem; color:#999;'>active student{"s" if row["Students"] != 1 else ""}</div>
+                        </div>""", unsafe_allow_html=True)
+            else:
+                st.info("No active students found for this tutor.")
+        else:
+            st.info("No student data available.")
+
+        st.markdown("---")
+
         # Archivable
         st.markdown("### 📦 Archivable Students & Unscheduled Hours")
         if p_arch.empty:
