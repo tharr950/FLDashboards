@@ -6,4 +6,6 @@ openpyxl
 xlsxwriter
 psycopg2-binary
 pymysql
-mysql.connector
+mysql-connector-python
+reportlab
+kaleido

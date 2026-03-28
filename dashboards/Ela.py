@@ -889,6 +889,257 @@ def _login_delta_html(label, current, previous, lower_is_better=True):
 # MAIN APP
 # ─────────────────────────────────────────────
 
+
+def generate_tutor_pdf(
+    tutor_name, generated_date,
+    p_arch=None, p_grades=None, p_exam=None,
+    p_video_row=None, p_video_df=None,
+    p_monthly_t=None, p_kpi_df=None,
+    concern_df=None, faculty_leader=None
+):
+    """Generate a PDF report for a tutor profile page."""
+    from reportlab.lib.pagesizes import letter
+    from reportlab.lib import colors
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import inch
+    from reportlab.platypus import (SimpleDocTemplate, Paragraph, Spacer, Table,
+                                     TableStyle, HRFlowable, KeepTogether)
+    from reportlab.lib.enums import TA_CENTER, TA_LEFT
+    import io
+
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=letter,
+                            rightMargin=0.5*inch, leftMargin=0.5*inch,
+                            topMargin=0.5*inch, bottomMargin=0.5*inch)
+
+    styles = getSampleStyleSheet()
+    title_style   = ParagraphStyle("title",   parent=styles["Heading1"],
+                                   fontSize=18, spaceAfter=4, textColor=colors.HexColor("#1a3a5c"))
+    h2_style      = ParagraphStyle("h2",      parent=styles["Heading2"],
+                                   fontSize=13, spaceAfter=4, textColor=colors.HexColor("#2c5f8a"))
+    h3_style      = ParagraphStyle("h3",      parent=styles["Heading3"],
+                                   fontSize=11, spaceAfter=2, textColor=colors.HexColor("#444"))
+    normal_style  = ParagraphStyle("normal",  parent=styles["Normal"], fontSize=9)
+    caption_style = ParagraphStyle("caption", parent=styles["Normal"], fontSize=8,
+                                   textColor=colors.gray, alignment=TA_CENTER)
+
+    def section_divider():
+        return [Spacer(1, 8), HRFlowable(width="100%", thickness=0.5, color=colors.HexColor("#ccc")),
+                Spacer(1, 8)]
+
+    def make_table(data, col_widths=None, header=True):
+        if not data or len(data) < 1:
+            return None
+        t = Table(data, colWidths=col_widths, repeatRows=1 if header else 0)
+        style = [
+            ("BACKGROUND",  (0,0), (-1,0),  colors.HexColor("#2c5f8a")),
+            ("TEXTCOLOR",   (0,0), (-1,0),  colors.white),
+            ("FONTNAME",    (0,0), (-1,0),  "Helvetica-Bold"),
+            ("FONTSIZE",    (0,0), (-1,-1), 8),
+            ("ROWBACKGROUNDS", (0,1), (-1,-1), [colors.white, colors.HexColor("#f5f8fc")]),
+            ("GRID",        (0,0), (-1,-1), 0.3, colors.HexColor("#ddd")),
+            ("VALIGN",      (0,0), (-1,-1), "MIDDLE"),
+            ("PADDING",     (0,0), (-1,-1), 4),
+        ] if header else [
+            ("FONTSIZE",    (0,0), (-1,-1), 8),
+            ("GRID",        (0,0), (-1,-1), 0.3, colors.HexColor("#ddd")),
+            ("VALIGN",      (0,0), (-1,-1), "MIDDLE"),
+            ("PADDING",     (0,0), (-1,-1), 4),
+        ]
+        t.setStyle(TableStyle(style))
+        return t
+
+    story = []
+
+    # ── Title ─────────────────────────────────────────────────────────────
+    story.append(Paragraph(f"Tutor Profile: {tutor_name}", title_style))
+    story.append(Paragraph(f"Faculty Leader: {faculty_leader or '—'} &nbsp;|&nbsp; Generated: {generated_date}",
+                           caption_style))
+    story.extend(section_divider())
+
+    # ── Archivable & Unscheduled ───────────────────────────────────────────
+    story.append(Paragraph("📦 Archivable Students & Unscheduled Hours", h2_style))
+    if p_arch is not None and not p_arch.empty:
+        arch_students = p_arch[p_arch["should_archive"] == True]
+        n_arch        = len(arch_students)
+        unsched_total = round(p_arch["unscheduled_hours"].sum(), 1)
+        total_students= p_arch["student_name"].nunique()
+        total_prov    = p_arch["hours_remaining"].sum() + p_arch["unscheduled_hours"].sum()
+        pct_unsched   = round(p_arch["unscheduled_hours"].sum() / total_prov * 100, 1)                         if total_prov > 0 else 0.0
+        summary_data = [
+            ["Active Students", "Archivable", "Unscheduled Hours", "% Hours Unscheduled"],
+            [str(total_students), str(n_arch), f"{unsched_total:.1f}", f"{pct_unsched:.1f}%"]
+        ]
+        t = make_table(summary_data)
+        if t: story.append(t)
+        if not arch_students.empty:
+            story.append(Spacer(1, 6))
+            story.append(Paragraph("Students flagged for archiving:", h3_style))
+            show_cols = [c for c in ["student_name","brand","hours_remaining","unscheduled_hours"]
+                         if c in arch_students.columns]
+            rows = [show_cols] + arch_students[show_cols].fillna("—").values.tolist()
+            t2 = make_table([[str(v) for v in r] for r in rows])
+            if t2: story.append(t2)
+    else:
+        story.append(Paragraph("No archivable/unscheduled data found.", normal_style))
+    story.extend(section_divider())
+
+    # ── Grades ────────────────────────────────────────────────────────────
+    story.append(Paragraph("📚 Grades Summary", h2_style))
+    if p_grades is not None and not p_grades.empty:
+        total_g   = p_grades["student_id"].nunique()
+        no_grades = int(p_grades.groupby("student_id")["score"].apply(lambda s: s.isna().all()).sum())
+        has_any   = p_grades.groupby("student_id")["score"].apply(lambda s: s.notna().any())
+        graded    = p_grades[p_grades["student_id"].isin(has_any[has_any].index)]
+        n_stale   = 0
+        if not graded.empty and "days_since_update" in graded.columns:
+            latest_per = graded.groupby("student_id")["days_since_update"].min()
+            n_stale    = int((latest_per > 90).sum())
+        summary_data = [
+            ["Total Students", "No Grades", "Stale Grades (>90d)"],
+            [str(total_g), str(no_grades), str(n_stale)]
+        ]
+        t = make_table(summary_data)
+        if t: story.append(t)
+        story.append(Spacer(1, 6))
+        grade_rows = []
+        for sid, sdf in p_grades.groupby("student_id"):
+            sname    = sdf["student_name"].iloc[0] if "student_name" in sdf.columns else str(sid)
+            subjects = sdf[sdf["score"].notna()]["subject"].nunique() if "subject" in sdf.columns else 0
+            days     = sdf["days_since_update"].min() if "days_since_update" in sdf.columns else None
+            grade_rows.append([sname, str(subjects),
+                               f"{int(days)}d" if pd.notna(days) else "—"])
+        if grade_rows:
+            rows = [["Student", "Subjects Graded", "Days Since Update"]] + grade_rows
+            t2 = make_table([[str(v) for v in r] for r in rows])
+            if t2: story.append(t2)
+    else:
+        story.append(Paragraph("No grades data found.", normal_style))
+    story.extend(section_divider())
+
+    # ── Exams ─────────────────────────────────────────────────────────────
+    story.append(Paragraph("📝 Exam & Test Prep History", h2_style))
+    if p_exam is not None and not p_exam.empty:
+        p_now      = pd.Timestamp.now(tz="UTC")
+        ex_students= p_exam["student_id"].nunique()
+        total_hrs  = p_exam["test_prep_hours_delivered"].iloc[0] if not p_exam.empty else 0
+        n_completed= p_exam[p_exam["exam_valid_composite"] == True]["exam_id"].nunique()                      if "exam_id" in p_exam.columns else 0
+        hrs_per    = round(total_hrs / n_completed, 1) if n_completed > 0 and pd.notna(total_hrs) else None
+        summary_data = [
+            ["Test Prep Students", "Completed Exams", "Total Hours", "Avg Hrs/Exam"],
+            [str(ex_students), str(n_completed),
+             f"{float(total_hrs):.1f}" if pd.notna(total_hrs) else "—",
+             f"{hrs_per:.1f}" if hrs_per else "—"]
+        ]
+        t = make_table(summary_data)
+        if t: story.append(t)
+        story.append(Spacer(1, 6))
+        ex_rows = []
+        for sid, sdf in p_exam.groupby("student_id"):
+            sname    = sdf["student_name"].iloc[0] if "student_name" in sdf.columns else str(sid)
+            hrs      = sdf["test_prep_hours_delivered"].iloc[0]
+            valid    = sdf[sdf["exam_valid_composite"] == True]
+            best     = valid["score"].max() if not valid.empty else None
+            latest   = pd.to_datetime(valid["exam_date"], utc=True).max() if not valid.empty else None
+            days_ago = int((p_now - latest).days) if latest is not None and pd.notna(latest) else None
+            ex_rows.append([sname,
+                            f"{float(hrs):.1f}" if pd.notna(hrs) else "—",
+                            str(len(valid)),
+                            str(int(best)) if pd.notna(best) else "—",
+                            f"{days_ago}d" if days_ago is not None else "—"])
+        if ex_rows:
+            rows = [["Student","Hours","Valid Exams","Best Score","Days Since Exam"]] + ex_rows
+            t2 = make_table([[str(v) for v in r] for r in rows])
+            if t2: story.append(t2)
+    else:
+        story.append(Paragraph("No exam data found.", normal_style))
+    story.extend(section_divider())
+
+    # ── Video ─────────────────────────────────────────────────────────────
+    story.append(Paragraph("📹 Parent Update Videos", h2_style))
+    if p_video_row is not None:
+        summary_data = [
+            ["Required", "Sent", "Parent Update %", "Videos Found", "Video %", "Median Duration"],
+            [str(int(p_video_row.get("updates_required", 0))),
+             str(int(p_video_row.get("updates_sent", 0))),
+             f"{p_video_row.get('parent_update_pct', 0):.0f}%",
+             str(int(p_video_row.get("videos_found", 0))),
+             f"{p_video_row.get('pct_with_video', 0):.0f}%",
+             str(p_video_row.get("median_secs", "—"))]
+        ]
+        t = make_table(summary_data)
+        if t: story.append(t)
+        if p_video_df is not None and not p_video_df.empty:
+            story.append(Spacer(1, 6))
+            vid_cols = [c for c in ["student","brand","parent update sent","video found","video duration"]
+                        if c in p_video_df.columns]
+            sent_df  = p_video_df[p_video_df["parent update sent"].astype(str) == "True"]
+            if not sent_df.empty:
+                rows = [vid_cols] + sent_df[vid_cols].fillna("—").values.tolist()
+                t2 = make_table([[str(v) for v in r] for r in rows])
+                if t2: story.append(t2)
+    else:
+        story.append(Paragraph("No video data found.", normal_style))
+    story.extend(section_divider())
+
+    # ── KPI Trends ────────────────────────────────────────────────────────
+    story.append(Paragraph("📈 KPI Trends", h2_style))
+    if p_monthly_t is not None and not p_monthly_t.empty:
+        import re as _re2
+        def _parse_end(s):
+            if pd.isna(s): return pd.NaT
+            s2 = str(s).replace("-","to").replace("\u2013","to")
+            parts = s2.split("to")
+            end = parts[-1].strip() if len(parts)>1 else parts[0].strip()
+            return pd.to_datetime(end, errors="coerce", dayfirst=False)
+        kpi_t = p_monthly_t.copy()
+        kpi_t["Date Parsed"] = kpi_t["Date Range"].apply(_parse_end)
+        kpi_t = kpi_t.dropna(subset=["Date Parsed"]).drop_duplicates(
+            subset=["Date Parsed"], keep="first").sort_values("Date Parsed").tail(8)
+        kpi_metrics = ["% to Delivery Target","% to Availability Target",
+                       "% Sessions on Time","% Parents Updates Done on Time"]
+        kpi_cols_avail = ["Date Range"] + [m for m in kpi_metrics if m in kpi_t.columns]
+        kpi_display = kpi_t[kpi_cols_avail].copy()
+        for m in kpi_metrics:
+            if m in kpi_display.columns:
+                kpi_display[m] = kpi_display[m].apply(
+                    lambda v: f"{v*100:.0f}%" if pd.notna(v) else "—")
+        rows = [kpi_cols_avail] + kpi_display.fillna("—").values.tolist()
+        t = make_table([[str(v) for v in r] for r in rows])
+        if t: story.append(t)
+    else:
+        story.append(Paragraph("No KPI data found.", normal_style))
+
+    # ── Concern History ───────────────────────────────────────────────────
+    if concern_df is not None and not concern_df.empty:
+        story.extend(section_divider())
+        story.append(Paragraph("📌 Concern Group History", h2_style))
+        tutor_concerns = concern_df[concern_df["Tutor Name"] == tutor_name].copy()
+        if not tutor_concerns.empty:
+            import re as _re3
+            def _parse_concern_date(s):
+                if pd.isna(s): return pd.NaT
+                s2 = str(s).replace("-","to").replace("\u2013","to")
+                parts = s2.split("to")
+                end = parts[-1].strip() if len(parts)>1 else parts[0].strip()
+                return pd.to_datetime(end, errors="coerce", dayfirst=False)
+            tutor_concerns["Date Parsed"] = tutor_concerns["Date"].apply(_parse_concern_date)
+            tutor_concerns = tutor_concerns.sort_values("Date Parsed").tail(8)
+            rows = [["Date","Concern Group","Reasons"]]
+            for _, row in tutor_concerns.iterrows():
+                rows.append([str(row.get("Date","—")),
+                            str(row.get("Concern Group","—")),
+                            str(row.get("Reasons","—"))[:80]])
+            t = make_table([[str(v) for v in r] for r in rows],
+                           col_widths=[1.5*inch, 1*inch, 5*inch])
+            if t: story.append(t)
+        else:
+            story.append(Paragraph("No concern data found for this tutor.", normal_style))
+
+    doc.build(story)
+    buf.seek(0)
+    return buf.getvalue()
+
 def render_app(config):
 
     st.markdown("""
@@ -954,6 +1205,257 @@ def render_app(config):
 # ─────────────────────────────────────────────
 # MAIN APP
 # ─────────────────────────────────────────────
+
+
+def generate_tutor_pdf(
+    tutor_name, generated_date,
+    p_arch=None, p_grades=None, p_exam=None,
+    p_video_row=None, p_video_df=None,
+    p_monthly_t=None, p_kpi_df=None,
+    concern_df=None, faculty_leader=None
+):
+    """Generate a PDF report for a tutor profile page."""
+    from reportlab.lib.pagesizes import letter
+    from reportlab.lib import colors
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import inch
+    from reportlab.platypus import (SimpleDocTemplate, Paragraph, Spacer, Table,
+                                     TableStyle, HRFlowable, KeepTogether)
+    from reportlab.lib.enums import TA_CENTER, TA_LEFT
+    import io
+
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=letter,
+                            rightMargin=0.5*inch, leftMargin=0.5*inch,
+                            topMargin=0.5*inch, bottomMargin=0.5*inch)
+
+    styles = getSampleStyleSheet()
+    title_style   = ParagraphStyle("title",   parent=styles["Heading1"],
+                                   fontSize=18, spaceAfter=4, textColor=colors.HexColor("#1a3a5c"))
+    h2_style      = ParagraphStyle("h2",      parent=styles["Heading2"],
+                                   fontSize=13, spaceAfter=4, textColor=colors.HexColor("#2c5f8a"))
+    h3_style      = ParagraphStyle("h3",      parent=styles["Heading3"],
+                                   fontSize=11, spaceAfter=2, textColor=colors.HexColor("#444"))
+    normal_style  = ParagraphStyle("normal",  parent=styles["Normal"], fontSize=9)
+    caption_style = ParagraphStyle("caption", parent=styles["Normal"], fontSize=8,
+                                   textColor=colors.gray, alignment=TA_CENTER)
+
+    def section_divider():
+        return [Spacer(1, 8), HRFlowable(width="100%", thickness=0.5, color=colors.HexColor("#ccc")),
+                Spacer(1, 8)]
+
+    def make_table(data, col_widths=None, header=True):
+        if not data or len(data) < 1:
+            return None
+        t = Table(data, colWidths=col_widths, repeatRows=1 if header else 0)
+        style = [
+            ("BACKGROUND",  (0,0), (-1,0),  colors.HexColor("#2c5f8a")),
+            ("TEXTCOLOR",   (0,0), (-1,0),  colors.white),
+            ("FONTNAME",    (0,0), (-1,0),  "Helvetica-Bold"),
+            ("FONTSIZE",    (0,0), (-1,-1), 8),
+            ("ROWBACKGROUNDS", (0,1), (-1,-1), [colors.white, colors.HexColor("#f5f8fc")]),
+            ("GRID",        (0,0), (-1,-1), 0.3, colors.HexColor("#ddd")),
+            ("VALIGN",      (0,0), (-1,-1), "MIDDLE"),
+            ("PADDING",     (0,0), (-1,-1), 4),
+        ] if header else [
+            ("FONTSIZE",    (0,0), (-1,-1), 8),
+            ("GRID",        (0,0), (-1,-1), 0.3, colors.HexColor("#ddd")),
+            ("VALIGN",      (0,0), (-1,-1), "MIDDLE"),
+            ("PADDING",     (0,0), (-1,-1), 4),
+        ]
+        t.setStyle(TableStyle(style))
+        return t
+
+    story = []
+
+    # ── Title ─────────────────────────────────────────────────────────────
+    story.append(Paragraph(f"Tutor Profile: {tutor_name}", title_style))
+    story.append(Paragraph(f"Faculty Leader: {faculty_leader or '—'} &nbsp;|&nbsp; Generated: {generated_date}",
+                           caption_style))
+    story.extend(section_divider())
+
+    # ── Archivable & Unscheduled ───────────────────────────────────────────
+    story.append(Paragraph("📦 Archivable Students & Unscheduled Hours", h2_style))
+    if p_arch is not None and not p_arch.empty:
+        arch_students = p_arch[p_arch["should_archive"] == True]
+        n_arch        = len(arch_students)
+        unsched_total = round(p_arch["unscheduled_hours"].sum(), 1)
+        total_students= p_arch["student_name"].nunique()
+        total_prov    = p_arch["hours_remaining"].sum() + p_arch["unscheduled_hours"].sum()
+        pct_unsched   = round(p_arch["unscheduled_hours"].sum() / total_prov * 100, 1)                         if total_prov > 0 else 0.0
+        summary_data = [
+            ["Active Students", "Archivable", "Unscheduled Hours", "% Hours Unscheduled"],
+            [str(total_students), str(n_arch), f"{unsched_total:.1f}", f"{pct_unsched:.1f}%"]
+        ]
+        t = make_table(summary_data)
+        if t: story.append(t)
+        if not arch_students.empty:
+            story.append(Spacer(1, 6))
+            story.append(Paragraph("Students flagged for archiving:", h3_style))
+            show_cols = [c for c in ["student_name","brand","hours_remaining","unscheduled_hours"]
+                         if c in arch_students.columns]
+            rows = [show_cols] + arch_students[show_cols].fillna("—").values.tolist()
+            t2 = make_table([[str(v) for v in r] for r in rows])
+            if t2: story.append(t2)
+    else:
+        story.append(Paragraph("No archivable/unscheduled data found.", normal_style))
+    story.extend(section_divider())
+
+    # ── Grades ────────────────────────────────────────────────────────────
+    story.append(Paragraph("📚 Grades Summary", h2_style))
+    if p_grades is not None and not p_grades.empty:
+        total_g   = p_grades["student_id"].nunique()
+        no_grades = int(p_grades.groupby("student_id")["score"].apply(lambda s: s.isna().all()).sum())
+        has_any   = p_grades.groupby("student_id")["score"].apply(lambda s: s.notna().any())
+        graded    = p_grades[p_grades["student_id"].isin(has_any[has_any].index)]
+        n_stale   = 0
+        if not graded.empty and "days_since_update" in graded.columns:
+            latest_per = graded.groupby("student_id")["days_since_update"].min()
+            n_stale    = int((latest_per > 90).sum())
+        summary_data = [
+            ["Total Students", "No Grades", "Stale Grades (>90d)"],
+            [str(total_g), str(no_grades), str(n_stale)]
+        ]
+        t = make_table(summary_data)
+        if t: story.append(t)
+        story.append(Spacer(1, 6))
+        grade_rows = []
+        for sid, sdf in p_grades.groupby("student_id"):
+            sname    = sdf["student_name"].iloc[0] if "student_name" in sdf.columns else str(sid)
+            subjects = sdf[sdf["score"].notna()]["subject"].nunique() if "subject" in sdf.columns else 0
+            days     = sdf["days_since_update"].min() if "days_since_update" in sdf.columns else None
+            grade_rows.append([sname, str(subjects),
+                               f"{int(days)}d" if pd.notna(days) else "—"])
+        if grade_rows:
+            rows = [["Student", "Subjects Graded", "Days Since Update"]] + grade_rows
+            t2 = make_table([[str(v) for v in r] for r in rows])
+            if t2: story.append(t2)
+    else:
+        story.append(Paragraph("No grades data found.", normal_style))
+    story.extend(section_divider())
+
+    # ── Exams ─────────────────────────────────────────────────────────────
+    story.append(Paragraph("📝 Exam & Test Prep History", h2_style))
+    if p_exam is not None and not p_exam.empty:
+        p_now      = pd.Timestamp.now(tz="UTC")
+        ex_students= p_exam["student_id"].nunique()
+        total_hrs  = p_exam["test_prep_hours_delivered"].iloc[0] if not p_exam.empty else 0
+        n_completed= p_exam[p_exam["exam_valid_composite"] == True]["exam_id"].nunique()                      if "exam_id" in p_exam.columns else 0
+        hrs_per    = round(total_hrs / n_completed, 1) if n_completed > 0 and pd.notna(total_hrs) else None
+        summary_data = [
+            ["Test Prep Students", "Completed Exams", "Total Hours", "Avg Hrs/Exam"],
+            [str(ex_students), str(n_completed),
+             f"{float(total_hrs):.1f}" if pd.notna(total_hrs) else "—",
+             f"{hrs_per:.1f}" if hrs_per else "—"]
+        ]
+        t = make_table(summary_data)
+        if t: story.append(t)
+        story.append(Spacer(1, 6))
+        ex_rows = []
+        for sid, sdf in p_exam.groupby("student_id"):
+            sname    = sdf["student_name"].iloc[0] if "student_name" in sdf.columns else str(sid)
+            hrs      = sdf["test_prep_hours_delivered"].iloc[0]
+            valid    = sdf[sdf["exam_valid_composite"] == True]
+            best     = valid["score"].max() if not valid.empty else None
+            latest   = pd.to_datetime(valid["exam_date"], utc=True).max() if not valid.empty else None
+            days_ago = int((p_now - latest).days) if latest is not None and pd.notna(latest) else None
+            ex_rows.append([sname,
+                            f"{float(hrs):.1f}" if pd.notna(hrs) else "—",
+                            str(len(valid)),
+                            str(int(best)) if pd.notna(best) else "—",
+                            f"{days_ago}d" if days_ago is not None else "—"])
+        if ex_rows:
+            rows = [["Student","Hours","Valid Exams","Best Score","Days Since Exam"]] + ex_rows
+            t2 = make_table([[str(v) for v in r] for r in rows])
+            if t2: story.append(t2)
+    else:
+        story.append(Paragraph("No exam data found.", normal_style))
+    story.extend(section_divider())
+
+    # ── Video ─────────────────────────────────────────────────────────────
+    story.append(Paragraph("📹 Parent Update Videos", h2_style))
+    if p_video_row is not None:
+        summary_data = [
+            ["Required", "Sent", "Parent Update %", "Videos Found", "Video %", "Median Duration"],
+            [str(int(p_video_row.get("updates_required", 0))),
+             str(int(p_video_row.get("updates_sent", 0))),
+             f"{p_video_row.get('parent_update_pct', 0):.0f}%",
+             str(int(p_video_row.get("videos_found", 0))),
+             f"{p_video_row.get('pct_with_video', 0):.0f}%",
+             str(p_video_row.get("median_secs", "—"))]
+        ]
+        t = make_table(summary_data)
+        if t: story.append(t)
+        if p_video_df is not None and not p_video_df.empty:
+            story.append(Spacer(1, 6))
+            vid_cols = [c for c in ["student","brand","parent update sent","video found","video duration"]
+                        if c in p_video_df.columns]
+            sent_df  = p_video_df[p_video_df["parent update sent"].astype(str) == "True"]
+            if not sent_df.empty:
+                rows = [vid_cols] + sent_df[vid_cols].fillna("—").values.tolist()
+                t2 = make_table([[str(v) for v in r] for r in rows])
+                if t2: story.append(t2)
+    else:
+        story.append(Paragraph("No video data found.", normal_style))
+    story.extend(section_divider())
+
+    # ── KPI Trends ────────────────────────────────────────────────────────
+    story.append(Paragraph("📈 KPI Trends", h2_style))
+    if p_monthly_t is not None and not p_monthly_t.empty:
+        import re as _re2
+        def _parse_end(s):
+            if pd.isna(s): return pd.NaT
+            s2 = str(s).replace("-","to").replace("\u2013","to")
+            parts = s2.split("to")
+            end = parts[-1].strip() if len(parts)>1 else parts[0].strip()
+            return pd.to_datetime(end, errors="coerce", dayfirst=False)
+        kpi_t = p_monthly_t.copy()
+        kpi_t["Date Parsed"] = kpi_t["Date Range"].apply(_parse_end)
+        kpi_t = kpi_t.dropna(subset=["Date Parsed"]).drop_duplicates(
+            subset=["Date Parsed"], keep="first").sort_values("Date Parsed").tail(8)
+        kpi_metrics = ["% to Delivery Target","% to Availability Target",
+                       "% Sessions on Time","% Parents Updates Done on Time"]
+        kpi_cols_avail = ["Date Range"] + [m for m in kpi_metrics if m in kpi_t.columns]
+        kpi_display = kpi_t[kpi_cols_avail].copy()
+        for m in kpi_metrics:
+            if m in kpi_display.columns:
+                kpi_display[m] = kpi_display[m].apply(
+                    lambda v: f"{v*100:.0f}%" if pd.notna(v) else "—")
+        rows = [kpi_cols_avail] + kpi_display.fillna("—").values.tolist()
+        t = make_table([[str(v) for v in r] for r in rows])
+        if t: story.append(t)
+    else:
+        story.append(Paragraph("No KPI data found.", normal_style))
+
+    # ── Concern History ───────────────────────────────────────────────────
+    if concern_df is not None and not concern_df.empty:
+        story.extend(section_divider())
+        story.append(Paragraph("📌 Concern Group History", h2_style))
+        tutor_concerns = concern_df[concern_df["Tutor Name"] == tutor_name].copy()
+        if not tutor_concerns.empty:
+            import re as _re3
+            def _parse_concern_date(s):
+                if pd.isna(s): return pd.NaT
+                s2 = str(s).replace("-","to").replace("\u2013","to")
+                parts = s2.split("to")
+                end = parts[-1].strip() if len(parts)>1 else parts[0].strip()
+                return pd.to_datetime(end, errors="coerce", dayfirst=False)
+            tutor_concerns["Date Parsed"] = tutor_concerns["Date"].apply(_parse_concern_date)
+            tutor_concerns = tutor_concerns.sort_values("Date Parsed").tail(8)
+            rows = [["Date","Concern Group","Reasons"]]
+            for _, row in tutor_concerns.iterrows():
+                rows.append([str(row.get("Date","—")),
+                            str(row.get("Concern Group","—")),
+                            str(row.get("Reasons","—"))[:80]])
+            t = make_table([[str(v) for v in r] for r in rows],
+                           col_widths=[1.5*inch, 1*inch, 5*inch])
+            if t: story.append(t)
+        else:
+            story.append(Paragraph("No concern data found for this tutor.", normal_style))
+
+    doc.build(story)
+    buf.seek(0)
+    return buf.getvalue()
 
 def render_app(config):
 
@@ -2813,6 +3315,40 @@ def render_app(config):
                 st.caption("No notes saved for this tutor.")
         else:
             st.warning(f"⚠️ **{profile_tutor}** is not currently on your watch list.")
+
+        st.markdown("---")
+
+        # ── PDF Download ──────────────────────────────────────────────────
+        try:
+            _concern_df_pdf = load_tutor_concerns()
+        except Exception:
+            _concern_df_pdf = pd.DataFrame()
+
+        if st.button("⬇️ Download Tutor Profile as PDF", key="download_pdf"):
+            with st.spinner("Generating PDF..."):
+                try:
+                    pdf_bytes = generate_tutor_pdf(
+                        tutor_name     = profile_tutor,
+                        generated_date = pd.Timestamp.now().strftime("%B %d, %Y"),
+                        p_arch         = p_arch         if "p_arch"         in dir() else None,
+                        p_grades       = p_grades       if "p_grades"       in dir() else None,
+                        p_exam         = p_exam         if "p_exam"         in dir() else None,
+                        p_video_row    = p_video_row    if "p_video_row"    in dir() else None,
+                        p_video_df     = p_video_df     if "p_video_df"     in dir() else None,
+                        p_monthly_t    = p_monthly_t    if "p_monthly_t"    in dir() else None,
+                        p_kpi_df       = p_kpi_df       if "p_kpi_df"       in dir() else None,
+                        concern_df     = _concern_df_pdf,
+                        faculty_leader = faculty_leader_name,
+                    )
+                    st.download_button(
+                        label     = "📄 Click to Download PDF",
+                        data      = pdf_bytes,
+                        file_name = f"{profile_tutor.replace(' ','_')}_Profile_{pd.Timestamp.now().strftime('%Y%m%d')}.pdf",
+                        mime      = "application/pdf",
+                        key       = "pdf_download_btn"
+                    )
+                except Exception as e:
+                    st.error(f"Could not generate PDF: {e}")
 
         st.markdown("---")
 
