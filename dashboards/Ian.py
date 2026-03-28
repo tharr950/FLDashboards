@@ -927,6 +927,23 @@ def generate_tutor_pdf(
         return [Spacer(1, 8), HRFlowable(width="100%", thickness=0.5, color=colors.HexColor("#ccc")),
                 Spacer(1, 8)]
 
+    def make_legend(items):
+        """items = list of (color_hex, label) tuples"""
+        from reportlab.platypus import HRFlowable
+        legend_data = [[
+            Table([[""]], colWidths=[0.15*inch], rowHeights=[0.15*inch],
+                  style=TableStyle([("BACKGROUND",(0,0),(-1,-1),colors.HexColor(c)),
+                                    ("BOX",(0,0),(-1,-1),0.5,colors.HexColor("#999"))])),
+            Paragraph(label, ParagraphStyle("leg", parent=getSampleStyleSheet()["Normal"],
+                                            fontSize=7, textColor=colors.HexColor("#555")))
+        ] for c, label in items]
+        leg_table = Table(legend_data, colWidths=[0.2*inch, 1.5*inch])
+        leg_table.setStyle(TableStyle([
+            ("VALIGN",(0,0),(-1,-1),"MIDDLE"),
+            ("PADDING",(0,0),(-1,-1),2),
+        ]))
+        return leg_table
+
     def make_table(data, col_widths=None, header=True):
         if not data or len(data) < 1:
             return None
@@ -994,6 +1011,8 @@ def generate_tutor_pdf(
                 style_cmds.append(("BACKGROUND", (0, i), (-1, i), colors.HexColor("#ffe5e5")))
             t2.setStyle(TableStyle(style_cmds))
             story.append(t2)
+        story.append(Spacer(1, 4))
+        story.append(make_legend([("#ffe5e5", "Flagged for archiving")]))
     else:
         story.append(Paragraph("No archivable/unscheduled data found.", normal_style))
     story.extend(section_divider())
@@ -1050,6 +1069,12 @@ def generate_tutor_pdf(
                 style_cmds.append(("BACKGROUND", (0, i+1), (-1, i+1), bg))
             t2.setStyle(TableStyle(style_cmds))
             story.append(t2)
+        story.append(Spacer(1, 4))
+        story.append(make_legend([
+            ("#ffe5e5", "No grades entered"),
+            ("#fffbea", "Stale grades (>90 days)"),
+            ("#ffffff", "Current"),
+        ]))
     else:
         story.append(Paragraph("No grades data found.", normal_style))
     story.extend(section_divider())
@@ -1113,6 +1138,12 @@ def generate_tutor_pdf(
                 style_cmds.append(("BACKGROUND", (0, i+1), (-1, i+1), bg))
             t2.setStyle(TableStyle(style_cmds))
             story.append(t2)
+        story.append(Spacer(1, 4))
+        story.append(make_legend([
+            ("#ffe5e5", "No exam (6+ hours tutoring)"),
+            ("#fffbea", "Stale exam (>90 days)"),
+            ("#ffffff", "Current or < 6 hrs tutoring"),
+        ]))
     else:
         story.append(Paragraph("No exam data found.", normal_style))
     story.extend(section_divider())
@@ -1168,6 +1199,12 @@ def generate_tutor_pdf(
                     style_cmds.append(("BACKGROUND", (0, i+1), (-1, i+1), bg))
                 t2.setStyle(TableStyle(style_cmds))
                 story.append(t2)
+        story.append(Spacer(1, 4))
+        story.append(make_legend([
+            ("#ffe5e5", "Parent update not sent"),
+            ("#fffbea", "Sent but no video attached"),
+            ("#ffffff", "Sent with video"),
+        ]))
     else:
         story.append(Paragraph("No video data found.", normal_style))
     story.extend(section_divider())
@@ -1334,6 +1371,23 @@ def generate_tutor_pdf(
         return [Spacer(1, 8), HRFlowable(width="100%", thickness=0.5, color=colors.HexColor("#ccc")),
                 Spacer(1, 8)]
 
+    def make_legend(items):
+        """items = list of (color_hex, label) tuples"""
+        from reportlab.platypus import HRFlowable
+        legend_data = [[
+            Table([[""]], colWidths=[0.15*inch], rowHeights=[0.15*inch],
+                  style=TableStyle([("BACKGROUND",(0,0),(-1,-1),colors.HexColor(c)),
+                                    ("BOX",(0,0),(-1,-1),0.5,colors.HexColor("#999"))])),
+            Paragraph(label, ParagraphStyle("leg", parent=getSampleStyleSheet()["Normal"],
+                                            fontSize=7, textColor=colors.HexColor("#555")))
+        ] for c, label in items]
+        leg_table = Table(legend_data, colWidths=[0.2*inch, 1.5*inch])
+        leg_table.setStyle(TableStyle([
+            ("VALIGN",(0,0),(-1,-1),"MIDDLE"),
+            ("PADDING",(0,0),(-1,-1),2),
+        ]))
+        return leg_table
+
     def make_table(data, col_widths=None, header=True):
         if not data or len(data) < 1:
             return None
@@ -1401,6 +1455,8 @@ def generate_tutor_pdf(
                 style_cmds.append(("BACKGROUND", (0, i), (-1, i), colors.HexColor("#ffe5e5")))
             t2.setStyle(TableStyle(style_cmds))
             story.append(t2)
+        story.append(Spacer(1, 4))
+        story.append(make_legend([("#ffe5e5", "Flagged for archiving")]))
     else:
         story.append(Paragraph("No archivable/unscheduled data found.", normal_style))
     story.extend(section_divider())
@@ -1457,6 +1513,12 @@ def generate_tutor_pdf(
                 style_cmds.append(("BACKGROUND", (0, i+1), (-1, i+1), bg))
             t2.setStyle(TableStyle(style_cmds))
             story.append(t2)
+        story.append(Spacer(1, 4))
+        story.append(make_legend([
+            ("#ffe5e5", "No grades entered"),
+            ("#fffbea", "Stale grades (>90 days)"),
+            ("#ffffff", "Current"),
+        ]))
     else:
         story.append(Paragraph("No grades data found.", normal_style))
     story.extend(section_divider())
@@ -1495,6 +1557,12 @@ def generate_tutor_pdf(
             rows = [["Student","Hours","Valid Exams","Best Score","Days Since Exam"]] + ex_rows
             t2 = make_table([[str(v) for v in r] for r in rows])
             if t2: story.append(t2)
+        story.append(Spacer(1, 4))
+        story.append(make_legend([
+            ("#ffe5e5", "No exam (6+ hours tutoring)"),
+            ("#fffbea", "Stale exam (>90 days)"),
+            ("#ffffff", "Current or < 6 hrs tutoring"),
+        ]))
     else:
         story.append(Paragraph("No exam data found.", normal_style))
     story.extend(section_divider())
@@ -1550,6 +1618,12 @@ def generate_tutor_pdf(
                     style_cmds.append(("BACKGROUND", (0, i+1), (-1, i+1), bg))
                 t2.setStyle(TableStyle(style_cmds))
                 story.append(t2)
+        story.append(Spacer(1, 4))
+        story.append(make_legend([
+            ("#ffe5e5", "Parent update not sent"),
+            ("#fffbea", "Sent but no video attached"),
+            ("#ffffff", "Sent with video"),
+        ]))
     else:
         story.append(Paragraph("No video data found.", normal_style))
     story.extend(section_divider())
@@ -3485,13 +3559,13 @@ def render_app(config):
                     pdf_bytes = generate_tutor_pdf(
                         tutor_name     = profile_tutor,
                         generated_date = pd.Timestamp.now().strftime("%B %d, %Y"),
-                        p_arch         = p_arch         if "p_arch"         in dir() else None,
-                        p_grades       = p_grades       if "p_grades"       in dir() else None,
-                        p_exam         = p_exam         if "p_exam"         in dir() else None,
-                        p_video_row    = p_video_row    if "p_video_row"    in dir() else None,
-                        p_video_df     = p_video_df     if "p_video_df"     in dir() else None,
-                        p_monthly_t    = p_monthly_t    if "p_monthly_t"    in dir() else None,
-                        p_kpi_df       = p_kpi_df       if "p_kpi_df"       in dir() else None,
+                        p_arch         = p_arch,
+                        p_grades       = p_grades,
+                        p_exam         = p_exam,
+                        p_video_row    = p_video_row,
+                        p_video_df     = p_video_df,
+                        p_monthly_t    = p_monthly_t,
+                        p_kpi_df       = p_kpi_df,
                         concern_df     = _concern_df_pdf,
                         faculty_leader = faculty_leader_name,
                     )
