@@ -117,6 +117,26 @@ def get_rp_connection():
 # ─────────────────────────────────────────────
 
 @st.cache_data(ttl=3600)
+def load_brand_permissions():
+    """Load tutor brand permissions from GitHub CSV."""
+    try:
+        github_repo  = st.secrets["github"]["repo"]
+        github_token = st.secrets["github"]["token"]
+        github_path  = "data/brand_permissions.csv"
+        ts   = int(pd.Timestamp.now().timestamp())
+        url  = f"https://raw.githubusercontent.com/{github_repo}/main/{github_path}?cb={ts}"
+        resp = _requests.get(url, headers={"Authorization": f"token {github_token}"}, timeout=15)
+        if resp.status_code == 404:
+            return pd.DataFrame()
+        resp.raise_for_status()
+        df = pd.read_csv(io.StringIO(resp.text))
+        if "fetched_at" in df.columns:
+            df = df.drop(columns=["fetched_at"])
+        return df
+    except Exception as e:
+        return pd.DataFrame()
+
+@st.cache_data(ttl=3600)
 def load_archivable_unscheduled():
     conn = get_redshift_connection()
     query = """
@@ -3022,6 +3042,42 @@ def render_app(config):
             st.stop()
 
         st.markdown(f"## {profile_tutor}")
+
+        # Brand permissions pills
+        try:
+            bp_df = load_brand_permissions()
+            if not bp_df.empty and "tutor_name" in bp_df.columns:
+                tutor_brands = bp_df[bp_df["tutor_name"] == profile_tutor]["brand_name"].dropna().unique().tolist()
+                tutor_brands = sorted(set(tutor_brands))
+                if tutor_brands:
+                    _brand_colors = {
+                        "Private Tutoring":           "#1f77b4",
+                        "Back-Up Care Tutoring":      "#ff7f0e",
+                        "Academics":                  "#2ca02c",
+                        "Trial":                      "#9467bd",
+                        "Small Group Course":         "#e377c2",
+                        "Group Course":               "#8c564b",
+                        "Boot Camp":                  "#d62728",
+                        "School-Pay Private Tutoring":"#17becf",
+                        "School-Pay Small Group Course":"#bcbd22",
+                        "Test Prep 101":              "#7f7f7f",
+                        "Revolution Now":             "#aec7e8",
+                        "Tutoring":                   "#ffbb78",
+                    }
+                    pills_html = " ".join([
+                        f"<span style='background:{_brand_colors.get(b,'#888')}22; "
+                        f"color:{_brand_colors.get(b,'#888')}; "
+                        f"border:1px solid {_brand_colors.get(b,'#888')}; "
+                        f"border-radius:12px; padding:3px 10px; "
+                        f"font-size:0.78rem; font-weight:600; margin:2px; "
+                        f"display:inline-block;'>{b}</span>"
+                        for b in tutor_brands
+                    ])
+                    st.markdown(f"<div style='margin-bottom:8px;'>{pills_html}</div>",
+                                unsafe_allow_html=True)
+        except Exception:
+            pass
+
         st.markdown("---")
 
         p_errors = []
