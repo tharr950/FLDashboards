@@ -1097,30 +1097,55 @@ def generate_tutor_pdf(
         if t: story.append(t)
         story.append(Spacer(1, 6))
         ex_rows = []
+        ex_row_colors = []
         for sid, sdf in p_exam.groupby("student_id"):
             sname    = sdf["student_name"].iloc[0] if "student_name" in sdf.columns else str(sid)
             hrs      = sdf["test_prep_hours_delivered"].iloc[0]
-            valid    = sdf[sdf["exam_valid_composite"] == True]
+            valid    = sdf[sdf["exam_valid_composite"].astype(str) == "True"]
             best     = valid["score"].max() if not valid.empty else None
-            latest   = pd.to_datetime(valid["exam_date"], utc=True).max() if not valid.empty else None
+            valid_dated = valid[valid["exam_date"].notna()] if not valid.empty else valid
+            latest   = pd.to_datetime(valid_dated["exam_date"], utc=True).max() if not valid_dated.empty else None
             days_ago = int((p_now - latest).days) if latest is not None and pd.notna(latest) else None
+            if valid.empty and pd.notna(hrs) and float(hrs) >= 6:
+                status = "No Exam (6+ hrs)"
+                ex_row_colors.append(colors.HexColor("#ffe5e5"))
+            elif not valid.empty and (days_ago is None or days_ago > 90):
+                status = f"Stale ({days_ago}d)" if days_ago else "Stale"
+                ex_row_colors.append(colors.HexColor("#fffbea"))
+            elif not valid.empty and days_ago is not None and days_ago <= 90:
+                status = f"Current ({days_ago}d)"
+                ex_row_colors.append(colors.white)
+            else:
+                status = "—"
+                ex_row_colors.append(colors.white)
             ex_rows.append([sname,
                             f"{float(hrs):.1f}" if pd.notna(hrs) else "—",
                             str(len(valid)),
                             str(int(best)) if pd.notna(best) else "—",
-                            f"{days_ago}d" if days_ago is not None else "—"])
+                            status])
         if ex_rows:
-            rows = [["Student","Hours","Valid Exams","Best Score","Days Since Exam"]] + ex_rows
-            t2 = make_table([[str(v) for v in r] for r in rows])
-            if t2: story.append(t2)
+            header = [["Student","Hours","Valid Exams","Best Score","Status"]]
+            rows   = header + ex_rows
+            t2 = Table(rows, repeatRows=1)
+            style_cmds = [
+                ("BACKGROUND",  (0,0), (-1,0),  colors.HexColor("#2c5f8a")),
+                ("TEXTCOLOR",   (0,0), (-1,0),  colors.white),
+                ("FONTNAME",    (0,0), (-1,0),  "Helvetica-Bold"),
+                ("FONTSIZE",    (0,0), (-1,-1), 8),
+                ("GRID",        (0,0), (-1,-1), 0.3, colors.HexColor("#ddd")),
+                ("VALIGN",      (0,0), (-1,-1), "MIDDLE"),
+                ("PADDING",     (0,0), (-1,-1), 4),
+            ]
+            for i, bg in enumerate(ex_row_colors):
+                style_cmds.append(("BACKGROUND", (0, i+1), (-1, i+1), bg))
+            t2.setStyle(TableStyle(style_cmds))
+            story.append(t2)
         story.append(Spacer(1, 4))
         story.append(make_legend([
             ("#ffe5e5", "No exam (6+ hours tutoring)"),
             ("#fffbea", "Stale exam (>90 days)"),
             ("#ffffff", "Current or < 6 hrs tutoring"),
         ]))
-    else:
-        story.append(Paragraph("No exam data found.", normal_style))
     story.extend(section_divider())
 
     # ── Video ─────────────────────────────────────────────────────────────
