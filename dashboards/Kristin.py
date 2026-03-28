@@ -938,6 +938,7 @@ def render_app(config):
     )
 
     faculty_leader_name = "Kristin Haase-Alvey"
+    fl_prefix = "Kristin_Haase_Alvey"
     master_tutor_df = load_master_tutor()
     annelies_tutors = master_tutor_df[master_tutor_df["Faculty Leader"] == faculty_leader_name]["Full Name"].sort_values().dropna().unique().tolist()
 
@@ -3373,7 +3374,7 @@ def render_app(config):
         st.download_button(
             label="⬇️ Download Video Detail",
             data=out_v,
-            file_name="Parent_Update_Videos_TeamCross.xlsx",
+            file_name=f"Parent_Update_Videos_{sel_tutor_v.replace(' ','_') if sel_tutor_v != 'All Tutors' else fl_prefix}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
 
@@ -3750,7 +3751,7 @@ def render_app(config):
                 st.download_button(
                     label="⬇️ Download Grades Detail",
                     data=output_g,
-                    file_name="Grades_Detail_TeamCross.xlsx",
+                    file_name=f"Grades_Detail_{sel_tutor_g.replace(' ','_') if sel_tutor_g != 'All Tutors' else fl_prefix}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
         if st.sidebar.button("🔄 Refresh Grades Data", key="refresh_grades"):
@@ -4362,7 +4363,7 @@ def render_app(config):
                 st.download_button(
                     label="⬇️ Download Exam Detail",
                     data=out_e,
-                    file_name="Exam_Detail_TeamCross.xlsx",
+                    file_name=f"Exam_Detail_{sel_tutor_e.replace(' ','_') if sel_tutor_e != 'All Tutors' else fl_prefix}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
         with tab_tr_e:
@@ -4628,7 +4629,7 @@ def render_app(config):
                 archive_display.to_excel(output, index=False); output.seek(0)
                 st.download_button(
                     label="⬇️ Download Archivable Students", data=output,
-                    file_name="Archivable_Students_TeamCross.xlsx",
+                    file_name=f"Archivable_Students_{fl_prefix}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
         with tab2:
@@ -4691,7 +4692,7 @@ def render_app(config):
                 unsched_display.to_excel(output, index=False); output.seek(0)
                 st.download_button(
                     label="⬇️ Download Unscheduled Hours", data=output,
-                    file_name="Unscheduled_Hours_TeamCross.xlsx",
+                    file_name=f"Unscheduled_Hours_{fl_prefix}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
         if st.sidebar.button("🔄 Refresh Live Data"):
