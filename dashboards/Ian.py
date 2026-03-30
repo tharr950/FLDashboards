@@ -3839,7 +3839,7 @@ def render_app(config):
         st.download_button(
             label="⬇️ Download Video Detail",
             data=out_v,
-            file_name=f"Parent_Update_Videos_{sel_tutor_v.replace(' ','_') if sel_tutor_v != 'All Tutors' else fl_prefix}.xlsx",
+            file_name=f"Parent_Update_Videos_{sel_tutor_v.replace(' ','_') if sel_tutor_v != 'All Tutors' else 'Ian_Plamondon'}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
 
