@@ -255,8 +255,7 @@ def load_availability_compliance():
             rp_bi.dates.first_day_of_week_sunday_start as week_start
             from rp_bi.tutor_availabilities_daily
             join rp_bi.dates on rp_bi.tutor_availabilities_daily.full_date = rp_bi.dates.full_date
-            where rp_bi.dates.first_day_of_week_sunday_start >= '{this_sunday}'
-              and rp_bi.dates.first_day_of_week_sunday_start <= '{next_sunday}')
+            where rp_bi.dates.first_day_of_week_sunday_start = '{this_sunday}')
         select dw.users.first_name||' '||dw.users.last_name as tutor_name,
         dw.employees.id as employee_id, dw.addresses.state,
         dw.teams.name as team, avail_deduped.week_start
@@ -268,7 +267,7 @@ def load_availability_compliance():
         join dw.addresses on dw.users.address_id = dw.addresses.id
         where dw.teams.name <> 'Proctors' and dw.employees.end_date IS NULL
         group by 1,2,3,4,5
-        having count(distinct avail_deduped.full_date) > 6
+        having count(distinct avail_deduped.full_date) >= 7
         order by 4,1
     """
     try:
