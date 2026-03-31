@@ -3393,7 +3393,7 @@ def render_app(config):
                     latest_ex = pd.to_datetime(completed["exam_date"], utc=True).max()
                     if pd.notna(latest_ex) and (p_now - latest_ex).days > 90:
                         stale_exam_count += 1
-            total_hrs    = p_exam["test_prep_hours_delivered"].iloc[0] if not p_exam.empty else 0
+            total_hrs    = p_exam.groupby("student_id")["test_prep_hours_delivered"].first().sum() if not p_exam.empty else 0
             n_completed  = p_exam[p_exam["exam_valid_composite"] == True]["exam_id"].nunique() \
                            if "exam_id" in p_exam.columns else len(valid_ids)
             hrs_per_exam = round(total_hrs / n_completed, 1) \
@@ -4237,7 +4237,7 @@ def render_app(config):
                 st.download_button(
                     label="⬇️ Download Grades Detail",
                     data=output_g,
-                    file_name=f"Grades_Detail_{sel_tutor_g.replace(' ','_') if sel_tutor_g != 'All Tutors' else fl_prefix}.xlsx",
+                    file_name=f"Grades_Detail_{sel_tutor_g.replace(' ','_') if sel_tutor_g != 'All Tutors' else 'Ela_Cross'}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
         if st.sidebar.button("🔄 Refresh Grades Data", key="refresh_grades"):
@@ -4849,7 +4849,7 @@ def render_app(config):
                 st.download_button(
                     label="⬇️ Download Exam Detail",
                     data=out_e,
-                    file_name=f"Exam_Detail_{sel_tutor_e.replace(' ','_') if sel_tutor_e != 'All Tutors' else fl_prefix}.xlsx",
+                    file_name=f"Exam_Detail_{sel_tutor_e.replace(' ','_') if sel_tutor_e != 'All Tutors' else 'Ela_Cross'}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
         with tab_tr_e:
@@ -5103,7 +5103,8 @@ def render_app(config):
                                    "first_session_day","last_session_day",
                                    "hours_remaining","unscheduled_hours"]
                 display_cols_a = [c for c in display_cols_a if c in archive_df.columns]
-                archive_display = archive_df[display_cols_a].copy().rename(columns={
+                archive_display = archive_df[display_cols_a].copy().sort_values(
+                    ["tutor_name","student_name"]).rename(columns={
                     "tutor_name":"Tutor","student_name":"Student","brand":"Brand","tier":"Tier",
                     "first_session_day":"First Session","last_session_day":"Last Session",
                     "hours_remaining":"Hours Remaining","unscheduled_hours":"Unscheduled Hours"})
@@ -5115,7 +5116,7 @@ def render_app(config):
                 archive_display.to_excel(output, index=False); output.seek(0)
                 st.download_button(
                     label="⬇️ Download Archivable Students", data=output,
-                    file_name=f"Archivable_Students_{fl_prefix}.xlsx",
+                    file_name=f"Archivable_Students_Ela_Cross.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
         with tab2:
@@ -5178,7 +5179,7 @@ def render_app(config):
                 unsched_display.to_excel(output, index=False); output.seek(0)
                 st.download_button(
                     label="⬇️ Download Unscheduled Hours", data=output,
-                    file_name=f"Unscheduled_Hours_{fl_prefix}.xlsx",
+                    file_name=f"Unscheduled_Hours_Ela_Cross.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
         if st.sidebar.button("🔄 Refresh Live Data"):
@@ -5616,7 +5617,7 @@ def render_app(config):
                 mime="text/csv")
 
             st.markdown("---")
-            tutor_names    = fl_df["Tutor Name"].dropna().unique().tolist()
+            tutor_names    = sorted(fl_df["Tutor Name"].dropna().unique().tolist())
             selected_tutor = st.selectbox("Select a Tutor", tutor_names)
 
             if selected_tutor:
