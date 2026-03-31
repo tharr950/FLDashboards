@@ -1078,6 +1078,14 @@ def generate_tutor_pdf(
                     grade_row_colors.append(colors.white)
                 grade_rows.append([sname, str(subjects), str(n_entered), status])
             if grade_rows:
+                # Sort: no grades first, then stale, then current, alpha within groups
+                _gs_order = {"No Grades": 0, "Stale": 1}
+                grade_combined = list(zip(grade_rows, grade_row_colors))
+                grade_combined.sort(key=lambda x: (
+                    next((v for k,v in _gs_order.items() if k in x[0][-1]), 2),
+                    x[0][0].lower()))
+                grade_rows       = [g[0] for g in grade_combined]
+                grade_row_colors = [g[1] for g in grade_combined]
                 header = [["Student", "Subjects", "Grades Entered", "Status"]]
                 rows   = header + grade_rows
                 t2 = Table(rows, repeatRows=1)
@@ -1151,6 +1159,14 @@ def generate_tutor_pdf(
                                 str(int(best)) if pd.notna(best) else "—",
                                 status])
             if ex_rows:
+                # Sort: no exam first, then stale, then current, alpha within groups
+                _es_order = {"No Exam": 0, "Stale": 1, "Current": 2}
+                ex_combined = list(zip(ex_rows, ex_row_colors))
+                ex_combined.sort(key=lambda x: (
+                    next((v for k,v in _es_order.items() if k in x[0][-1]), 3),
+                    x[0][0].lower()))
+                ex_rows       = [e[0] for e in ex_combined]
+                ex_row_colors = [e[1] for e in ex_combined]
                 header = [["Student","Hours","Valid Exams","Best Score","Status"]]
                 rows   = header + ex_rows
                 t2 = Table(rows, repeatRows=1)
@@ -1333,7 +1349,7 @@ def render_app(config):
 
     faculty_leader_name = "Kristin Haase-Alvey"
     master_tutor_df = load_master_tutor()
-    annelies_tutors = master_tutor_df[master_tutor_df["Faculty Leader"] == faculty_leader_name]["Full Name"].sort_values().dropna().unique().tolist()
+    annelies_tutors = master_tutor_df[(master_tutor_df["Faculty Leader"] == faculty_leader_name) & (~master_tutor_df["Full Name"].isin(["Ela Cross', 'Annelies de Groot', 'Ian Plamondon', 'Geoff St. Marie', 'Kristin Haase-Alvey"]))]["Full Name"].sort_values().dropna().unique().tolist()
 
     st.sidebar.markdown("---")
     st.sidebar.markdown("### 📋 Annual Reviews")
@@ -1341,7 +1357,7 @@ def render_app(config):
     annual_review_df = load_annual_reviews()
     monthly_metric_annual_review_df = load_monthly_metric_annual_reviews()
     repurchase_df = load_repurchases()
-    annelies_tutors = master_tutor_df[master_tutor_df["Faculty Leader"] == "Kristin Haase-Alvey"]["Full Name"].dropna().sort_values().tolist()
+    annelies_tutors = master_tutor_df[(master_tutor_df["Faculty Leader"] == "Kristin Haase-Alvey") & (~master_tutor_df["Full Name"].isin(["Ela Cross', 'Annelies de Groot', 'Ian Plamondon', 'Geoff St. Marie', 'Kristin Haase-Alvey"]))]["Full Name"].dropna().sort_values().tolist()
 
     # ─────────────────────────────────────────────
     # PAGE: HOME
@@ -3349,8 +3365,12 @@ def render_app(config):
                     "Days Since Update": int(last_update) if last_update is not None else "—",
                     "Status":            stale_flag,
                 })
-            g_sum_df = pd.DataFrame(g_summary).sort_values(
-                "Days Since Update", key=lambda x: pd.to_numeric(x, errors="coerce"), ascending=False)
+            g_sum_df = pd.DataFrame(g_summary)
+            _status_order = {"❌": 0, "⚠️": 1, "✅": 2, "—": 3}
+            g_sum_df["_sort_status"] = g_sum_df["Status"].map(_status_order).fillna(3)
+            g_sum_df["_sort_name"]   = g_sum_df["Student"].str.lower()
+            g_sum_df = g_sum_df.sort_values(["_sort_status","_sort_name"]).drop(
+                columns=["_sort_status","_sort_name"])
             st.dataframe(g_sum_df, use_container_width=True, hide_index=True)
 
         st.markdown("---")
@@ -3408,10 +3428,12 @@ def render_app(config):
                     "Days Since Exam": days_ago if days_ago is not None else "—",
                     "Status":          status,
                 })
-            ex_df = pd.DataFrame(ex_rows).sort_values(
-                "Days Since Exam",
-                key=lambda x: pd.to_numeric(x, errors="coerce"),
-                ascending=False, na_position="last")
+            ex_df = pd.DataFrame(ex_rows)
+            _ex_status_order = {"❌ None (6+ hrs)": 0, "⚠️ Stale": 1, "✅ Current": 2, "—": 3}
+            ex_df["_sort_status"] = ex_df["Status"].map(_ex_status_order).fillna(3)
+            ex_df["_sort_name"]   = ex_df["Student"].str.lower()
+            ex_df = ex_df.sort_values(["_sort_status","_sort_name"]).drop(
+                columns=["_sort_status","_sort_name"])
             st.dataframe(ex_df, use_container_width=True, hide_index=True)
 
         st.markdown("---")
