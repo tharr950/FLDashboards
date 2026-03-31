@@ -3319,8 +3319,11 @@ def render_app(config):
                 st.markdown("**Students flagged for archiving:**")
                 show_cols = [c for c in ["student_name","brand","hours_remaining","unscheduled_hours"]
                              if c in arch_students.columns]
-                st.dataframe(arch_students[show_cols].sort_values("unscheduled_hours", ascending=False),
-                             use_container_width=True, hide_index=True)
+                arch_display_p = arch_students[show_cols].sort_values(
+                    ["unscheduled_hours","student_name"], ascending=[False, True]).rename(columns={
+                    "student_name":"Student","brand":"Brand",
+                    "hours_remaining":"Hours Remaining","unscheduled_hours":"Unscheduled Hours"})
+                st.dataframe(arch_display_p, use_container_width=True, hide_index=True)
 
         st.markdown("---")
 
@@ -3393,11 +3396,17 @@ def render_app(config):
                     latest_ex = pd.to_datetime(completed["exam_date"], utc=True).max()
                     if pd.notna(latest_ex) and (p_now - latest_ex).days > 90:
                         stale_exam_count += 1
+            # Avg hrs/exam: average of per-student (hrs / completed_exams), matching Test Prep tab
+            _hpe_vals = []
+            for _sid, _sdf in p_exam.groupby("student_id"):
+                _hrs  = _sdf["test_prep_hours_delivered"].iloc[0]
+                _comp = _sdf[_sdf["exam_valid_composite"] == True]["exam_id"].nunique()                         if "exam_id" in _sdf.columns else _sdf[_sdf["exam_valid_composite"] == True].shape[0]
+                if _comp > 0 and pd.notna(_hrs):
+                    _hpe_vals.append(_hrs / _comp)
+            hrs_per_exam = round(sum(_hpe_vals) / len(_hpe_vals), 1) if _hpe_vals else None
             total_hrs    = p_exam.groupby("student_id")["test_prep_hours_delivered"].first().sum() if not p_exam.empty else 0
             n_completed  = p_exam[p_exam["exam_valid_composite"] == True]["exam_id"].nunique() \
                            if "exam_id" in p_exam.columns else len(valid_ids)
-            hrs_per_exam = round(total_hrs / n_completed, 1) \
-                           if n_completed > 0 and pd.notna(total_hrs) else None
             ec1, ec2, ec3, ec4 = st.columns(4)
             ec1.metric("Test Prep Students", ex_students)
             ec2.metric("No Completed Exam", len(no_exam_ids),
