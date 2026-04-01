@@ -38,6 +38,23 @@ import sys
 import mysql.connector
 import pandas as pd
 from datetime import datetime
+import time
+
+def run_with_retry(func, max_attempts=5, delay=120):
+    """Retry func up to max_attempts times with delay seconds between attempts."""
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return func()
+        except Exception as e:
+            print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] Attempt {attempt}/{max_attempts} failed: {e}")
+            if attempt < max_attempts:
+                print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] Retrying in {delay} seconds...")
+                time.sleep(delay)
+            else:
+                print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] All {max_attempts} attempts failed.")
+                raise
+
+
 
 # ── Load credentials from .env or environment ────────────────
 try:
@@ -256,10 +273,8 @@ def push_to_github(df):
 
 
 if __name__ == "__main__":
-    try:
+    def _run():
         df = fetch_exam_data()
         push_to_github(df)
         print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] ✅ Done.")
-    except Exception as e:
-        print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] ❌ Error: {e}", file=sys.stderr)
-        sys.exit(1)
+    run_with_retry(_run)

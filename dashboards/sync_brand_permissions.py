@@ -12,6 +12,23 @@ import sys
 import mysql.connector
 import pandas as pd
 from datetime import datetime
+import time
+
+def run_with_retry(func, max_attempts=5, delay=120):
+    """Retry func up to max_attempts times with delay seconds between attempts."""
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return func()
+        except Exception as e:
+            print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] Attempt {attempt}/{max_attempts} failed: {e}")
+            if attempt < max_attempts:
+                print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] Retrying in {delay} seconds...")
+                time.sleep(delay)
+            else:
+                print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] All {max_attempts} attempts failed.")
+                raise
+
+
 
 try:
     from dotenv import load_dotenv
@@ -99,7 +116,9 @@ def push_to_github(csv_content):
     log.info(f"Pushed to GitHub: {GITHUB_REPO}/{GITHUB_PATH}")
 
 if __name__ == "__main__":
-    df = fetch_data()
-    csv_content = df.to_csv(index=False)
-    push_to_github(csv_content)
-    log.info("Done ✅")
+    def _run():
+        df = fetch_data()
+        csv_content = df.to_csv(index=False)
+        push_to_github(csv_content)
+        log.info("Done ✅")
+    run_with_retry(_run)
