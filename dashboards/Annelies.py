@@ -352,18 +352,24 @@ def build_video_tutor_summary(df):
         parent_only_sent = len(parent_only_df)
         videos_found     = int(parent_only_df["video found"].fillna(False).astype(bool).sum())
         pct_with_video   = round(videos_found / parent_only_sent * 100, 1) if parent_only_sent > 0 else 0.0
+        # Homework metrics — based on all sent updates
+        hw_df            = sent_df[sent_df["homework mentioned"].astype(str) == "True"]                            if "homework mentioned" in sent_df.columns else pd.DataFrame()
+        homework_count   = len(hw_df)
+        pct_with_homework = round(homework_count / updates_sent * 100, 1) if updates_sent > 0 else 0.0
         secs_series      = sent_df["duration_secs"].dropna()
         rows.append({
-            "tutor_name":       tutor,
-            "updates_required": updates_required,
-            "updates_sent":     updates_sent,
+            "tutor_name":        tutor,
+            "updates_required":  updates_required,
+            "updates_sent":      updates_sent,
             "parent_only_sent":  parent_only_sent,
             "parent_update_pct": parent_update_pct,
-            "videos_found":     videos_found,
-            "pct_with_video":   pct_with_video,
-            "longest_secs":     secs_series.max()    if not secs_series.empty else None,
-            "shortest_secs":    secs_series.min()    if not secs_series.empty else None,
-            "median_secs":      secs_series.median() if not secs_series.empty else None,
+            "videos_found":      videos_found,
+            "pct_with_video":    pct_with_video,
+            "homework_count":    homework_count,
+            "pct_with_homework": pct_with_homework,
+            "longest_secs":      secs_series.max()    if not secs_series.empty else None,
+            "shortest_secs":     secs_series.min()    if not secs_series.empty else None,
+            "median_secs":       secs_series.median() if not secs_series.empty else None,
         })
     return pd.DataFrame(rows)
 
@@ -1985,6 +1991,17 @@ def render_app(config):
                          f"<b>{row['pct_with_video']:.0f}%</b> of parent updates "
                          f"({int(row['videos_found'])}/{int(row['updates_sent'])}).",
                          color="red")
+                # Low homework mention flag
+                low_hw = home_video_summary_df[
+                    (home_video_summary_df["pct_with_homework"] < 80) &
+                    (home_video_summary_df["updates_sent"] > 0)
+                ].sort_values("pct_with_homework")
+                for _, row in low_hw.head(3).iterrows():
+                    card("📝", "Low Homework Mention Rate",
+                         f"<b>{row['tutor_name']}</b> mentioned homework in only "
+                         f"<b>{row['pct_with_homework']:.0f}%</b> of updates "
+                         f"({int(row['homework_count'])}/{int(row['updates_sent'])}).",
+                         color="red")
 
             # Concern group movement — worsened
             try:
@@ -3452,7 +3469,7 @@ def render_app(config):
         if p_video_row is None or p_video_df.empty:
             st.info("No parent update video data found for this tutor.")
         else:
-            pv1, pv2, pv3, pv4, pv5, pv6 = st.columns(6)
+            pv1, pv2, pv3, pv4, pv5, pv6, pv7 = st.columns(7)
             pv1.metric("Updates Required", int(p_video_row["updates_required"]))
             pv2.metric("Updates Sent",     int(p_video_row["updates_sent"]))
             pv3.metric("Parent Update %",  f"{p_video_row['parent_update_pct']:.0f}%",
@@ -3460,7 +3477,11 @@ def render_app(config):
             pv4.metric("Videos Found",     int(p_video_row["videos_found"]))
             pv5.metric("Video Rate",       f"{p_video_row['pct_with_video']:.0f}%",
                        delta_color="inverse" if p_video_row["pct_with_video"] < 80 else "off")
-            pv6.metric("Median Duration",  secs_to_duration(p_video_row["median_secs"]))
+            pv6.metric("HW Mentions",      int(p_video_row.get("homework_count", 0)))
+            pv7.metric("HW %",             f"{p_video_row.get('pct_with_homework', 0):.0f}%",
+                       delta_color="inverse" if p_video_row.get("pct_with_homework", 0) < 80 else "off")
+            pv_med = st.columns(1)[0]
+            pv_med.metric("Median Duration", secs_to_duration(p_video_row["median_secs"]))
 
             short_v = p_video_df[p_video_df["duration_secs"] < 10]
             long_v  = p_video_df[p_video_df["duration_secs"] > 300]
@@ -3632,11 +3653,14 @@ def render_app(config):
         total_videos_team  = int(parent_only_video_df["video found"].fillna(False).astype(bool).sum())
         pct_team           = round(total_videos_team / total_parent_only_team * 100, 1) \
                              if total_parent_only_team > 0 else 0
+        hw_team_df         = sent_video_df[sent_video_df["homework mentioned"].astype(str) == "True"]                              if "homework mentioned" in sent_video_df.columns else pd.DataFrame()
+        hw_team_count      = len(hw_team_df)
+        pct_hw_team        = round(hw_team_count / total_updates_team * 100, 1)                              if total_updates_team > 0 else 0
         all_secs           = parent_only_video_df["duration_secs"].dropna()
         short_count        = int((all_secs < 10).sum())
         long_count         = int((all_secs > 300).sum())
 
-        m1, m2, m3, m4, m5, m6, m7, m8, m9 = st.columns(9)
+        m1, m2, m3, m4, m5, m6, m7, m8, m9, m10 = st.columns(10)
         m1.metric("Updates Required", total_required_team)
         m2.metric("Updates Sent",     total_updates_team)
         m3.metric("Parent Update %",  f"{parent_update_pct_team:.1f}%",
@@ -3644,11 +3668,13 @@ def render_app(config):
         m4.metric("Videos Attached",  total_videos_team)
         m5.metric("% With Video",     f"{pct_team:.1f}%",
                   delta_color="inverse" if pct_team < 80 else "off")
-        m6.metric("Median Duration",  secs_to_duration(all_secs.median()) if not all_secs.empty else "N/A")
-        m7.metric("Avg Duration",     secs_to_duration(all_secs.mean())   if not all_secs.empty else "N/A")
-        m8.metric("⚡ Short (<10s)",  short_count,
+        m6.metric("% Mention HW",     f"{pct_hw_team:.1f}%",
+                  delta_color="inverse" if pct_hw_team < 80 else "off")
+        m7.metric("Median Duration",  secs_to_duration(all_secs.median()) if not all_secs.empty else "N/A")
+        m8.metric("Avg Duration",     secs_to_duration(all_secs.mean())   if not all_secs.empty else "N/A")
+        m9.metric("⚡ Short (<10s)",  short_count,
                   delta_color="inverse" if short_count > 0 else "off")
-        m9.metric("⏱️ Long (>5min)",  long_count)
+        m10.metric("⏱️ Long (>5min)", long_count)
 
         st.divider()
 
@@ -3753,16 +3779,18 @@ def render_app(config):
         display_summary["median"]   = display_summary["median_secs"].apply(secs_to_duration)
         display_summary = display_summary[[
             "tutor_name","updates_required","updates_sent","parent_update_pct",
-            "videos_found","pct_with_video","longest","shortest","median"
+            "videos_found","pct_with_video","homework_count","pct_with_homework","longest","shortest","median"
         ]].rename(columns={
-            "tutor_name":       "Tutor",
-            "updates_required": "Required",
-            "updates_sent":     "Sent",
+            "tutor_name":        "Tutor",
+            "updates_required":  "Required",
+            "updates_sent":      "Sent",
             "parent_update_pct": "Parent Update %",
-            "videos_found":     "Videos Found",
-            "pct_with_video":   "% With Video",
-            "longest":          "Longest",
-            "shortest":         "Shortest",
+            "videos_found":      "Videos Found",
+            "pct_with_video":    "% With Video",
+            "homework_count":    "HW Mentions",
+            "pct_with_homework": "HW %",
+            "longest":           "Longest",
+            "shortest":          "Shortest",
             "median":           "Median Duration",
         })
 
@@ -3840,10 +3868,12 @@ def render_app(config):
                 axis=1
             )
         detail_cols_v = [c for c in ["tutor","student","brand","week of","sessions attended",
-                                      "parent update sent","update type","video found","video duration",
+                                      "parent update sent","update type","homework mentioned",
+                                      "video found","video duration",
                                       "scrape error"] if c in view_video_df.columns]
         detail_display_v = view_video_df[detail_cols_v].rename(columns={
             "update type":       "Update Type",
+            "homework mentioned": "HW Mentioned",
             "tutor":              "Tutor",
             "student":            "Student",
             "brand":              "Brand",
