@@ -5749,7 +5749,7 @@ def render_app(config):
                 f"{prev_range} Avg":   "{:.1f}%",
                 f"{latest_range} Avg": "{:.1f}%",
                 "Change (pp)":         "{:+.1f} pp"
-            }).applymap(style_change, subset=["Change (pp)"])
+            }).map(style_change, subset=["Change (pp)"])
             st.write(styled_df_display)
 
             max_abs_change = max(abs(change_df["Change (pp)"].max()),
@@ -5835,7 +5835,7 @@ def render_app(config):
             styled_df_kpi = team_dashboard_df.style
             for metric in kpi_thresholds.keys():
                 if metric in team_dashboard_df.columns:
-                    styled_df_kpi = styled_df_kpi.applymap(
+                    styled_df_kpi = styled_df_kpi.map(
                         lambda v, m=metric: highlight_kpi(v, m), subset=[metric])
             styled_df_kpi = styled_df_kpi.format({
                 col: "{:.2f}" if "%" not in col else "{:.1%}"
