@@ -3462,6 +3462,39 @@ def render_app(config):
                            delta=f"avg {avg_solo}d since update" if avg_solo else None,
                            delta_color="inverse" if n_stale_solo > 0 else "off")
 
+            # Brand breakdown on tutor profile
+            if "private_tutoring" in p_grades.columns:
+                st.markdown("**Grade Metrics by Brand**")
+                _brand_cols_p = {
+                    "Private Tutoring": "private_tutoring",
+                    "Back-Up Care":     "buc",
+                    "Academics":        "academics",
+                    "School Pay":       "school_pay",
+                }
+                _brand_rows_p = []
+                for _bl, _bc in _brand_cols_p.items():
+                    _b = _brand_grade_summary(_g_df, _bc) if "_brand_grade_summary" in dir() else None
+                    if _b is None and _bc in _g_df.columns:
+                        _bdf = _g_df[_g_df[_bc].astype(str) == "True"]
+                        if not _bdf.empty:
+                            _tot = _bdf["student_id"].nunique()
+                            _no  = int(_bdf.groupby("student_id")["score"].apply(lambda s: s.isna().all()).sum())
+                            _ha  = _bdf.groupby("student_id")["score"].apply(lambda s: s.notna().any())
+                            _gr  = _bdf[_bdf["student_id"].isin(_ha[_ha].index)]
+                            _st  = int((_gr.groupby("student_id")["days_since_update"].min() > 90).sum()) if not _gr.empty else 0
+                            _b   = {"students": _tot, "no_grades": _no, "stale": _st,
+                                    "pct_graded": round((_tot - _no) / _tot * 100, 1) if _tot > 0 else 0}
+                    if _b:
+                        _brand_rows_p.append({
+                            "Brand":         _bl,
+                            "Students":      _b["students"],
+                            "No Grades":     _b["no_grades"],
+                            "Stale (>90d)":  _b["stale"],
+                            "% With Grades": f"{_b['pct_graded']:.0f}%",
+                        })
+                if _brand_rows_p:
+                    st.dataframe(pd.DataFrame(_brand_rows_p), use_container_width=True, hide_index=True)
+
             st.markdown("**Student grade detail:**")
             g_summary = []
             for sid, sdf in _g_df.groupby("student_id"):
@@ -4067,6 +4100,26 @@ def render_app(config):
 
         st.markdown("### 🚨 Top Tutors to Address")
 
+        def _brand_grade_summary(df, brand_col):
+            """Return grade metrics for students with a given brand."""
+            if brand_col not in df.columns:
+                return None
+            bdf = df[df[brand_col].astype(str) == "True"]
+            if bdf.empty:
+                return None
+            total  = bdf["student_id"].nunique()
+            no_ids = bdf.groupby("student_id")["score"].apply(lambda s: s.isna().all())
+            n_no   = int(no_ids.sum())
+            has_any= bdf.groupby("student_id")["score"].apply(lambda s: s.notna().any())
+            graded = bdf[bdf["student_id"].isin(has_any[has_any].index)]
+            if not graded.empty:
+                latest = graded.groupby("student_id")["days_since_update"].min()
+                n_st   = int((latest > 90).sum())
+            else:
+                n_st = 0
+            pct_g  = round((total - n_no) / total * 100, 1) if total > 0 else 0
+            return {"students": total, "no_grades": n_no, "stale": n_st, "pct_graded": pct_g}
+
         def build_tutor_summary(df):
             rows = []
             for tutor, tdf in df.groupby("tutor_name"):
@@ -4309,6 +4362,33 @@ def render_app(config):
                     st.plotly_chart(fig_days, use_container_width=True)
 
         with tab_tutor:
+            # Brand breakdown toggle
+            _show_brand = st.checkbox("Show Brand Breakdown", value=False, key="grades_brand_breakdown")
+            if _show_brand:
+                st.markdown("#### 📊 Grade Metrics by Brand")
+                brand_cols_map = {
+                    "Private Tutoring": "private_tutoring",
+                    "Back-Up Care":     "buc",
+                    "Academics":        "academics",
+                    "School Pay":       "school_pay",
+                }
+                brand_rows = []
+                for brand_label, brand_col in brand_cols_map.items():
+                    b = _brand_grade_summary(view_grades_df, brand_col)
+                    if b:
+                        brand_rows.append({
+                            "Brand":         brand_label,
+                            "Students":      b["students"],
+                            "No Grades":     b["no_grades"],
+                            "Stale (>90d)":  b["stale"],
+                            "% With Grades": f"{b['pct_graded']:.0f}%",
+                        })
+                if brand_rows:
+                    st.dataframe(pd.DataFrame(brand_rows), use_container_width=True, hide_index=True)
+                else:
+                    st.info("No brand data available.")
+                st.divider()
+
             gsnap = load_grades_snapshots()
             tutors_to_show = [sel_tutor_g] if single_tutor_grades else \
                               sorted(team_grades_df["tutor_name"].dropna().unique().tolist())
