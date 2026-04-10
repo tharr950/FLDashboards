@@ -193,45 +193,112 @@ def load_archivable_unscheduled():
 def load_grades_data():
     conn = get_redshift_connection()
     query = """
-        with cte_grades as (
-            select orbit_stitch.study_areas.student_id,
-            dw.subjects.name as subject, sas.score, sas.updated_at
-            from orbit_stitch.study_areas
-            left join dw.subjects on orbit_stitch.study_areas.subject_id = dw.subjects.id
-            left join orbit_stitch.study_area_snapshots sas on orbit_stitch.study_areas.id = sas.study_area_id
-            where 1=1 AND dw.subjects.category_id in (1,2,3,4,5,8,9,10,11)
-            AND cast(dw.subjects.high_grade as int) > 8
-            AND orbit_stitch.study_areas.archived_at is null
-            AND orbit_stitch.study_areas._sdc_deleted_at is null)
-        select distinct dw.employees.id as tutor_id,
-        tutor_users.first_name||' '|| tutor_users.last_name as tutor_name,
-        dw.teams.name as team_name, dw.students.id as student_id,
-        student_users.first_name|| ' '|| student_users.last_name as student_name,
-        min(dw.sessions.starts_at) as first_session_day,
-        max(dw.sessions.starts_at) as last_session_day,
-        cte_grades.subject, cte_grades.score, cte_grades.updated_at
-        from dw.tutoring_histories
-        JOIN dw.enrollments ON dw.enrollments.id = dw.tutoring_histories.enrollment_id
-        join dw.sessions on (dw.sessions.course_id = dw.enrollments.course_id)
-            and (dw.sessions.supervisor_id = dw.tutoring_histories.tutor_id)
-        join dw.students on dw.enrollments.enrollee_id = dw.students.id
-        join dw.users student_users on dw.students.user_id = student_users.id
-        join dw.employees on dw.tutoring_histories.tutor_id = dw.employees.id
-        join dw.users tutor_users on dw.employees.user_id = tutor_users.id
+        WITH cte_grades AS (
+            SELECT orbit_stitch.study_areas.student_id,
+            dw.subjects.name AS subject, sas.score, sas.updated_at
+            FROM orbit_stitch.study_areas
+            LEFT JOIN dw.subjects ON orbit_stitch.study_areas.subject_id = dw.subjects.id
+            LEFT JOIN orbit_stitch.study_area_snapshots sas ON orbit_stitch.study_areas.id = sas.study_area_id
+            WHERE 1=1
+            AND dw.subjects.category_id IN (1,2,3,4,5,8,9,10,11)
+            AND cast(dw.subjects.high_grade AS int) > 8
+            AND orbit_stitch.study_areas.archived_at IS NULL
+            AND orbit_stitch.study_areas._sdc_deleted_at IS NULL
+        ),
+        cte_last_30_days_brands AS (
+            SELECT dw.enrollments.enrollee_id AS student_id,
+            dw.sessions.supervisor_id AS tutor_id,
+            CASE WHEN dw.courses.brand_id = 2 THEN COUNT(DISTINCT dw.sessions.id) END AS private_tutoring_sessions,
+            CASE WHEN dw.courses.brand_id = 42 THEN COUNT(DISTINCT dw.sessions.id) END AS buc_sessions,
+            CASE WHEN dw.courses.brand_id = 43 THEN COUNT(DISTINCT dw.sessions.id) END AS trial_sessions,
+            CASE WHEN dw.courses.brand_id = 41 THEN COUNT(DISTINCT dw.sessions.id) END AS academics_sessions,
+            CASE WHEN dw.courses.brand_id = 47 THEN COUNT(DISTINCT dw.sessions.id) END AS school_pay_sessions
+            FROM dw.sessions
+            JOIN dw.courses ON dw.sessions.course_id = dw.courses.id
+            JOIN dw.enrollments ON dw.enrollments.course_id = dw.courses.id
+            WHERE dw.sessions.starts_at::DATE BETWEEN (GETDATE()::DATE)-31 AND (GETDATE()::DATE)-1
+            AND dw.sessions.attendances_attended_count > 0
+            AND dw.courses.brand_id IN (2,41,42,43,47)
+            GROUP BY dw.enrollments.enrollee_id, dw.sessions.supervisor_id, dw.courses.brand_id
+        ),
+        cte_last_30_days_sessions AS (
+            SELECT dw.enrollments.enrollee_id AS student_id,
+            dw.sessions.supervisor_id AS tutor_id,
+            COUNT(DISTINCT dw.sessions.id) AS session_count
+            FROM dw.sessions
+            JOIN dw.courses ON dw.sessions.course_id = dw.courses.id
+            JOIN dw.enrollments ON dw.enrollments.course_id = dw.courses.id
+            WHERE dw.sessions.starts_at::DATE BETWEEN (GETDATE()::DATE)-31 AND (GETDATE()::DATE)-1
+            AND dw.sessions.attendances_attended_count > 0
+            AND dw.courses.brand_id IN (2,41,42,43,47)
+            GROUP BY dw.enrollments.enrollee_id, dw.sessions.supervisor_id
+        ),
+        cte_future AS (
+            SELECT dw.enrollments.enrollee_id AS student_id,
+            dw.sessions.supervisor_id AS tutor_id,
+            CAST((dw.students.graduation_year||'-06-30') AS DATE) AS grad_date,
+            CASE WHEN dw.courses.brand_id = 2 THEN COUNT(DISTINCT dw.sessions.id) END AS private_tutoring_sessions,
+            CASE WHEN dw.courses.brand_id = 42 THEN COUNT(DISTINCT dw.sessions.id) END AS buc_sessions,
+            CASE WHEN dw.courses.brand_id = 43 THEN COUNT(DISTINCT dw.sessions.id) END AS trial_sessions,
+            CASE WHEN dw.courses.brand_id = 41 THEN COUNT(DISTINCT dw.sessions.id) END AS academics_sessions,
+            CASE WHEN dw.courses.brand_id = 47 THEN COUNT(DISTINCT dw.sessions.id) END AS school_pay_sessions
+            FROM dw.sessions
+            JOIN dw.courses ON dw.sessions.course_id = dw.courses.id
+            JOIN dw.enrollments ON dw.enrollments.course_id = dw.courses.id
+            JOIN dw.students ON dw.students.id = dw.enrollments.enrollee_id
+            WHERE dw.sessions.starts_at >= (GETDATE()::DATE)
+            AND dw.courses.brand_id IN (2,41,42,43,47)
+            AND (dw.students.graduation_year IS NULL
+                OR dw.sessions.starts_at >= CAST((dw.students.graduation_year - 4) || '-07-01' AS DATE))
+            GROUP BY dw.enrollments.enrollee_id, dw.sessions.supervisor_id,
+                dw.courses.brand_id, dw.students.graduation_year
+        )
+        SELECT
+            cte_future.tutor_id,
+            tutor_users.first_name||' '||tutor_users.last_name AS tutor_name,
+            dw.teams.name AS team_name,
+            cte_future.student_id,
+            student_users.first_name||' '||student_users.last_name AS student_name,
+            cte_future.grad_date,
+            CASE WHEN cte_future.grad_date - (getdate()::DATE) >= 0
+                THEN 12 - FLOOR((cte_future.grad_date - (GETDATE()::DATE))::FLOAT/365)
+                ELSE 12 - CEILING((cte_future.grad_date - (GETDATE()::DATE))::FLOAT/365) END AS grade_lvl,
+            COUNT(DISTINCT lds2.tutor_id) AS tutor_count,
+            CASE WHEN MAX(cte_last_30_days_brands.private_tutoring_sessions) > 0
+                OR MAX(cte_future.private_tutoring_sessions) > 0 THEN TRUE ELSE FALSE END AS private_tutoring,
+            CASE WHEN MAX(cte_last_30_days_brands.buc_sessions) > 0
+                OR MAX(cte_future.buc_sessions) > 0 THEN TRUE ELSE FALSE END AS buc,
+            CASE WHEN MAX(cte_last_30_days_brands.academics_sessions) > 0
+                OR MAX(cte_future.academics_sessions) > 0 THEN TRUE ELSE FALSE END AS academics,
+            CASE WHEN MAX(cte_last_30_days_brands.school_pay_sessions) > 0
+                OR MAX(cte_future.school_pay_sessions) > 0 THEN TRUE ELSE FALSE END AS school_pay,
+            cte_grades.subject,
+            cte_grades.score,
+            CAST(cte_grades.updated_at AS DATE) AS updated_at
+        FROM cte_future
+        JOIN cte_last_30_days_brands
+            ON cte_future.student_id = cte_last_30_days_brands.student_id
+            AND cte_future.tutor_id = cte_last_30_days_brands.tutor_id
+        JOIN cte_last_30_days_sessions lds1
+            ON cte_future.student_id = lds1.student_id
+            AND cte_future.tutor_id = lds1.tutor_id
+        JOIN cte_last_30_days_sessions lds2
+            ON cte_future.student_id = lds2.student_id
+        JOIN dw.students ON cte_future.student_id = dw.students.id
+        JOIN dw.users student_users ON dw.students.user_id = student_users.id
+        JOIN dw.employees ON cte_future.tutor_id = dw.employees.id
+        JOIN dw.users tutor_users ON dw.employees.user_id = tutor_users.id
         JOIN dw.team_members ON dw.team_members.member_id = dw.employees.id
         JOIN dw.teams ON dw.teams.id = dw.team_members.team_id
-        left join cte_grades on dw.students.id = cte_grades.student_id
-        where 1=1 AND dw.tutoring_histories.active = true
-        AND dw.enrollments.unenrolled_at IS null AND dw.employees.end_date IS null
+        LEFT JOIN cte_grades ON dw.students.id = cte_grades.student_id
+        WHERE dw.employees.end_date IS NULL
         AND dw.team_members.member_type = 'Employee'
-        AND (
-            dw.students.graduation_year IS NULL
-            OR dw.sessions.starts_at >= CAST((dw.students.graduation_year - 4) || '-07-01' AS DATE)
-        )
-        group by 1,2,3,4,5,8,9,10
-        having min(dw.sessions.starts_at) <= getdate()
-           and max(dw.sessions.starts_at) > (getdate() - 30)
-        order by 4
+        AND tutor_users.title = 'Tutor'
+        GROUP BY cte_future.student_id, student_name, cte_future.tutor_id,
+            tutor_name, team_name, lds1.session_count, cte_grades.subject,
+            cte_grades.score, cte_grades.updated_at, cte_future.grad_date
+        HAVING lds1.session_count > 1
+        ORDER BY 1,4
     """
     try:
         df = pd.read_sql(query, conn)
@@ -3937,6 +4004,19 @@ def render_app(config):
         st.caption(f"🕐 Data last updated: **{grades_fetched_at}**")
         st.sidebar.markdown(f"🕐 **Grades data last updated**  \n{grades_fetched_at}")
 
+        with st.expander("ℹ️ About this data"):
+            st.markdown("""
+**How students appear in this report:**
+- The student attended **at least 2 sessions** with this tutor in the last 30 days (1-on-1 tutoring only)
+- The student has **at least one future session** scheduled with this tutor
+- The student is in **9th grade or higher**
+- Subjects only show if their "high grade" is 9th grade or higher
+
+**Brand** is based on sessions in the last 30 days **or** sessions scheduled going forward. Trials are excluded as a brand filter (can't have 2 past + 1 future with trials only).
+
+**Multiple tutors** is based on the last 30 days. When filtering to "Solo Tutor Only", only students where this tutor is their **only** tutor are shown.
+            """)
+
         team_grades_df = raw_grades_df[raw_grades_df["team_name"] == "Team De Groot"].copy()
 
         if team_grades_df.empty:
@@ -3945,8 +4025,6 @@ def render_app(config):
 
         now = pd.Timestamp.now(tz="UTC")
         team_grades_df["updated_at"]        = pd.to_datetime(team_grades_df["updated_at"],        errors="coerce", utc=True)
-        team_grades_df["first_session_day"] = pd.to_datetime(team_grades_df["first_session_day"], errors="coerce", utc=True)
-        team_grades_df["last_session_day"]  = pd.to_datetime(team_grades_df["last_session_day"],  errors="coerce", utc=True)
         team_grades_df["days_since_update"] = (now - team_grades_df["updated_at"]).dt.days
 
         grades_snap_df = save_grades_weekly_snapshot(team_grades_df)
@@ -4060,15 +4138,20 @@ def render_app(config):
 
         st.divider()
         st.markdown("### 🔍 Filters")
-        fc1, fc2 = st.columns(2)
+        fc1, fc2, fc3 = st.columns(3)
         with fc1:
             tutor_opts_g = ["All Tutors"] + sorted(annelies_tutors)
             sel_tutor_g  = st.selectbox("Tutor", tutor_opts_g, key="grades_tutor")
         with fc2:
             grade_filter_opts = ["All Students","Missing Grades Only","Stale Grades Only (>90 days)"]
             sel_grade_filter  = st.selectbox("Grade Status Filter", grade_filter_opts, key="grades_filter")
+        with fc3:
+            solo_tutor_only = st.checkbox("Solo Tutor Only", value=False, key="grades_solo_tutor",
+                help="Only show students where this tutor is their only tutor in the last 30 days")
 
         view_grades_df = team_grades_df.copy()
+        if solo_tutor_only and "tutor_count" in view_grades_df.columns:
+            view_grades_df = view_grades_df[view_grades_df["tutor_count"] == 1]
         if sel_tutor_g != "All Tutors":
             view_grades_df = view_grades_df[view_grades_df["tutor_name"] == sel_tutor_g]
         if sel_grade_filter == "Missing Grades Only":
