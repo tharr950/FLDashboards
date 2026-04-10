@@ -3411,42 +3411,78 @@ def render_app(config):
 
         st.markdown("---")
 
+
         # Grades
         st.markdown("### 📚 Grades Summary")
         if p_grades.empty:
             st.info("No grades data found for this tutor.")
         else:
-            total_g_students = p_grades["student_id"].nunique()
-            no_grade_ids     = p_grades.groupby("student_id")["score"].apply(lambda s: s.isna().all())
-            n_no_grades      = int(no_grade_ids.sum())
-            has_any          = p_grades.groupby("student_id")["score"].apply(lambda s: s.notna().any())
-            graded_ids       = has_any[has_any].index
-            graded_g         = p_grades[p_grades["student_id"].isin(graded_ids)]
-            if not graded_g.empty:
-                latest_per = graded_g.groupby("student_id")["days_since_update"].min()
-                n_stale    = int((latest_per > 90).sum())
-                avg_days   = round(latest_per.mean(), 1)
-            else:
-                n_stale = 0; avg_days = None
+            # Solo tutor toggle
+            _g_solo = st.checkbox("Solo Tutor Only", value=False, key="profile_grades_solo",
+                help="Only show students where this tutor is their only tutor in the last 30 days")
+            _g_df = p_grades[p_grades["tutor_count"] == 1].copy() \
+                    if _g_solo and "tutor_count" in p_grades.columns else p_grades.copy()
+
+            def _grade_metrics(df):
+                total   = df["student_id"].nunique()
+                no_ids  = df.groupby("student_id")["score"].apply(lambda s: s.isna().all())
+                n_no    = int(no_ids.sum())
+                has_any = df.groupby("student_id")["score"].apply(lambda s: s.notna().any())
+                graded  = df[df["student_id"].isin(has_any[has_any].index)]
+                if not graded.empty:
+                    latest = graded.groupby("student_id")["days_since_update"].min()
+                    n_st   = int((latest > 90).sum())
+                    avg_d  = round(latest.mean(), 1)
+                else:
+                    n_st = 0; avg_d = None
+                return total, n_no, n_st, avg_d
+
+            total_all, n_no_all, n_stale_all, avg_all = _grade_metrics(p_grades)
+            solo_df = p_grades[p_grades["tutor_count"] == 1] if "tutor_count" in p_grades.columns else pd.DataFrame()
+            total_solo, n_no_solo, n_stale_solo, avg_solo = _grade_metrics(solo_df) if not solo_df.empty else (0,0,0,None)
+
+            st.markdown("**All Students**")
             gc1, gc2, gc3 = st.columns(3)
-            gc1.metric("Students with Grades", total_g_students - n_no_grades)
-            gc2.metric("No Grades Entered", n_no_grades,
-                       delta=f"{n_no_grades} missing" if n_no_grades > 0 else None,
+            gc1.metric("Students with Grades", total_all - n_no_all)
+            gc2.metric("No Grades Entered", n_no_all,
+                       delta=f"{n_no_all} missing" if n_no_all > 0 else None,
                        delta_color="inverse")
-            gc3.metric("Stale Grades (>90d)", n_stale,
-                       delta=f"avg {avg_days}d since update" if avg_days else None,
-                       delta_color="inverse" if n_stale > 0 else "off")
+            gc3.metric("Stale Grades (>90d)", n_stale_all,
+                       delta=f"avg {avg_all}d since update" if avg_all else None,
+                       delta_color="inverse" if n_stale_all > 0 else "off")
+
+            if not solo_df.empty:
+                st.markdown("**Solo Tutor Students Only**")
+                gs1, gs2, gs3 = st.columns(3)
+                gs1.metric("Students with Grades", total_solo - n_no_solo)
+                gs2.metric("No Grades Entered", n_no_solo,
+                           delta=f"{n_no_solo} missing" if n_no_solo > 0 else None,
+                           delta_color="inverse")
+                gs3.metric("Stale Grades (>90d)", n_stale_solo,
+                           delta=f"avg {avg_solo}d since update" if avg_solo else None,
+                           delta_color="inverse" if n_stale_solo > 0 else "off")
+
             st.markdown("**Student grade detail:**")
             g_summary = []
-            for sid, sdf in p_grades.groupby("student_id"):
+            for sid, sdf in _g_df.groupby("student_id"):
                 sname       = sdf["student_name"].iloc[0] if "student_name" in sdf.columns else sid
                 n_subjects  = sdf["subject"].nunique() if "subject" in sdf.columns else 0
                 n_entered   = int(sdf["score"].notna().sum())
                 last_update = sdf["days_since_update"].min() if n_entered > 0 else None
                 stale_flag  = "⚠️" if last_update is not None and last_update > 90 else \
                               ("✅" if last_update is not None else "❌")
+                grade_lvl   = int(sdf["grade_lvl"].iloc[0]) if "grade_lvl" in sdf.columns and pd.notna(sdf["grade_lvl"].iloc[0]) else "—"
+                tutor_cnt   = int(sdf["tutor_count"].iloc[0]) if "tutor_count" in sdf.columns and pd.notna(sdf["tutor_count"].iloc[0]) else "—"
+                brands = []
+                if "private_tutoring" in sdf.columns and sdf["private_tutoring"].iloc[0]: brands.append("Private")
+                if "buc" in sdf.columns and sdf["buc"].iloc[0]: brands.append("BUC")
+                if "academics" in sdf.columns and sdf["academics"].iloc[0]: brands.append("Academics")
+                if "school_pay" in sdf.columns and sdf["school_pay"].iloc[0]: brands.append("School Pay")
                 g_summary.append({
                     "Student":           sname,
+                    "Grade Lvl":         grade_lvl,
+                    "# Tutors":          tutor_cnt,
+                    "Brands":            ", ".join(brands) if brands else "—",
                     "Subjects":          n_subjects,
                     "Grades Entered":    n_entered,
                     "Days Since Update": int(last_update) if last_update is not None else "—",
@@ -4317,23 +4353,28 @@ def render_app(config):
                 st.info("No records match the current filters.")
             else:
                 detail_cols_g = [
-                    "tutor_name","student_name","subject","score","updated_at",
-                    "days_since_update","first_session_day","last_session_day"
+                    "tutor_name","student_name","grade_lvl","tutor_count",
+                    "private_tutoring","buc","academics","school_pay",
+                    "subject","score","updated_at","days_since_update"
                 ]
                 detail_cols_g  = [c for c in detail_cols_g if c in view_grades_df.columns]
                 detail_display = view_grades_df[detail_cols_g].copy()
-                for dc in ["updated_at","first_session_day","last_session_day"]:
-                    if dc in detail_display.columns:
-                        detail_display[dc] = detail_display[dc].dt.strftime("%Y-%m-%d")
+                if "updated_at" in detail_display.columns:
+                    detail_display["updated_at"] = detail_display["updated_at"].apply(
+                        lambda x: x.strftime("%Y-%m-%d") if pd.notna(x) else "—")
                 detail_display = detail_display.rename(columns={
                     "tutor_name":        "Tutor",
                     "student_name":      "Student",
+                    "grade_lvl":         "Grade Level",
+                    "tutor_count":       "# Tutors",
+                    "private_tutoring":  "Private",
+                    "buc":               "BUC",
+                    "academics":         "Academics",
+                    "school_pay":        "School Pay",
                     "subject":           "Subject",
                     "score":             "Grade",
                     "updated_at":        "Grade Last Updated",
                     "days_since_update": "Days Since Update",
-                    "first_session_day": "First Session",
-                    "last_session_day":  "Last Session",
                 }).sort_values(["Tutor","Student","Subject"])
 
                 def highlight_grade_row(row):
