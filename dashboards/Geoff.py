@@ -4263,9 +4263,25 @@ def render_app(config):
             "📊 Team Charts", "👤 Tutor Breakdown", "📋 Student Detail"])
 
         with tab_team:
+            # Brand filter for charts
+            _brand_filter_opts = ["All Brands","Private Tutoring","Back-Up Care","Academics","School Pay"]
+            _brand_col_map     = {
+                "Private Tutoring": "private_tutoring",
+                "Back-Up Care":     "buc",
+                "Academics":        "academics",
+                "School Pay":       "school_pay",
+            }
+            _sel_brand_chart = st.selectbox("Filter by Brand", _brand_filter_opts, key="grades_brand_chart_filter")
+            if _sel_brand_chart != "All Brands":
+                _bc = _brand_col_map[_sel_brand_chart]
+                _chart_df = team_grades_df[team_grades_df[_bc].astype(str) == "True"]                             if _bc in team_grades_df.columns else team_grades_df
+                _chart_summary = build_tutor_summary(_chart_df)
+            else:
+                _chart_df      = team_grades_df
+                _chart_summary = tutor_summary
             if not single_tutor_grades:
                 no_grades_chart = (
-                    tutor_summary[tutor_summary["students_no_grades"] > 0]
+                    _chart_summary[_chart_summary["students_no_grades"] > 0]
                     .sort_values("students_no_grades", ascending=True)
                 )
                 if not no_grades_chart.empty:
@@ -4286,7 +4302,7 @@ def render_app(config):
                 else:
                     st.success("✅ All students have at least one grade entered.")
 
-                pct_chart = tutor_summary.sort_values("pct_subjects_graded", ascending=True)
+                pct_chart = _chart_summary.sort_values("pct_subjects_graded", ascending=True)
                 n = len(pct_chart)
                 fig2 = px.bar(
                     pct_chart, x="pct_subjects_graded", y="tutor_name",
@@ -4304,7 +4320,7 @@ def render_app(config):
                 st.plotly_chart(fig2, use_container_width=True)
 
                 stale_chart = (
-                    tutor_summary[tutor_summary["stale_grade_students"] > 0]
+                    _chart_summary[_chart_summary["stale_grade_students"] > 0]
                     .sort_values("stale_grade_students", ascending=True)
                 )
                 if not stale_chart.empty:
@@ -4362,32 +4378,6 @@ def render_app(config):
                     st.plotly_chart(fig_days, use_container_width=True)
 
         with tab_tutor:
-            # Brand breakdown toggle
-            _show_brand = st.checkbox("Show Brand Breakdown", value=False, key="grades_brand_breakdown")
-            if _show_brand:
-                st.markdown("#### 📊 Grade Metrics by Brand")
-                brand_cols_map = {
-                    "Private Tutoring": "private_tutoring",
-                    "Back-Up Care":     "buc",
-                    "Academics":        "academics",
-                    "School Pay":       "school_pay",
-                }
-                brand_rows = []
-                for brand_label, brand_col in brand_cols_map.items():
-                    b = _brand_grade_summary(view_grades_df, brand_col)
-                    if b:
-                        brand_rows.append({
-                            "Brand":         brand_label,
-                            "Students":      b["students"],
-                            "No Grades":     b["no_grades"],
-                            "Stale (>90d)":  b["stale"],
-                            "% With Grades": f"{b['pct_graded']:.0f}%",
-                        })
-                if brand_rows:
-                    st.dataframe(pd.DataFrame(brand_rows), use_container_width=True, hide_index=True)
-                else:
-                    st.info("No brand data available.")
-                st.divider()
 
             gsnap = load_grades_snapshots()
             tutors_to_show = [sel_tutor_g] if single_tutor_grades else \
@@ -4429,6 +4419,28 @@ def render_app(config):
                     st.plotly_chart(fig_t, use_container_width=True)
 
         with tab_detail:
+            # Brand breakdown
+            st.markdown("#### 📊 Grade Metrics by Brand")
+            _brand_cols_map2 = {
+                "Private Tutoring": "private_tutoring",
+                "Back-Up Care":     "buc",
+                "Academics":        "academics",
+                "School Pay":       "school_pay",
+            }
+            _brand_rows2 = []
+            for _bl2, _bc2 in _brand_cols_map2.items():
+                _b2 = _brand_grade_summary(view_grades_df, _bc2)
+                if _b2:
+                    _brand_rows2.append({
+                        "Brand":         _bl2,
+                        "Students":      _b2["students"],
+                        "No Grades":     _b2["no_grades"],
+                        "Stale (>90d)":  _b2["stale"],
+                        "% With Grades": f"{_b2['pct_graded']:.0f}%",
+                    })
+            if _brand_rows2:
+                st.dataframe(pd.DataFrame(_brand_rows2), use_container_width=True, hide_index=True)
+            st.divider()
             if view_grades_df.empty:
                 st.info("No records match the current filters.")
             else:
