@@ -745,14 +745,43 @@ def load_repurchases():
     return pd.DataFrame()
 
 @st.cache_data(ttl=60)
+@st.cache_data(ttl=3600)
 def load_master_tutor():
-    file = "December_Annual_Reviews.xlsx"
-    if os.path.exists(file):
-        try:
-            return pd.read_excel(file, sheet_name="MasterTutor")
-        except Exception as e:
-            st.error(f"Error reading MasterTutor sheet: {e}")
-            return pd.DataFrame()
+    """Load tutor roster live from Redshift."""
+    conn = get_redshift_connection()
+    query = """
+        SELECT DISTINCT
+            e1.id AS user_id,
+            DATE(e1.hire_date) AS hire_date,
+            tutor_users.first_name||' '||tutor_users.last_name AS tutor_name,
+            fl_users.first_name||' '||fl_users.last_name AS faculty_leader,
+            CASE WHEN e1.delivery_target < 30 THEN 'Adjunct' ELSE 'Professional' END AS tutor_type,
+            dw.tiers.name AS tier
+        FROM dw.employees e1
+        JOIN dw.team_members ON dw.team_members.member_id = e1.id
+        JOIN dw.teams ON dw.teams.id = dw.team_members.team_id
+        JOIN dw.users tutor_users ON e1.user_id = tutor_users.id
+        JOIN dw.employees e2 ON e2.id = dw.teams.manager_id
+        JOIN dw.users fl_users ON e2.user_id = fl_users.id
+        JOIN dw.tiers ON e1.tier_id = dw.tiers.id
+        WHERE e1.type = 'Tutor'
+        AND e1.end_date IS NULL
+        AND e1.tier_id IS NOT NULL
+        AND tutor_users.title = 'Tutor'
+        ORDER BY tutor_name
+    """
+    try:
+        df = pd.read_sql(query, conn)
+        # Alias columns to match existing dashboard references
+        df["Full Name"]       = df["tutor_name"]
+        df["Faculty Leader"]  = df["faculty_leader"]
+        df["Tier"]            = df["tier"]
+        return df
+    except Exception as e:
+        st.error(f"Error loading tutor roster: {e}")
+        return pd.DataFrame()
+    finally:
+        conn.close()
     st.error(f"{file} not found")
     return pd.DataFrame()
 
