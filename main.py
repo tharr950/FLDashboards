@@ -172,11 +172,13 @@ st.set_page_config(page_title="Faculty Leader Dashboards", layout="wide")
 
 # --- Mapping of FL -> secrets file ---
 FL_CONFIGS = {
-    "Annelies": "configs/annelies_secrets.toml",
-    "Ela": "configs/ela_secrets.toml",
-    "Ian": "configs/ian_secrets.toml",
-    "Geoff": "configs/geoff_secrets.toml",
-    "Kristin": "configs/kristin_secrets.toml",
+    "Annelies":  "configs/annelies_secrets.toml",
+    "Ela":       "configs/ela_secrets.toml",
+    "Ian":       "configs/ian_secrets.toml",
+    "Geoff":     "configs/geoff_secrets.toml",
+    "Kristin":   "configs/kristin_secrets.toml",
+    "Nikki":     "configs/nikki_secrets.toml",
+    "Katherine": "configs/katherine_secrets.toml",
     #"Jessica": "configs/jessica_secrets.toml",
 }
 
