@@ -1466,7 +1466,7 @@ def render_app(config):
     # ─────────────────────────────────────────────
 
     if page == "🏠 Home":
-        st.markdown('<div class="main-title">Good morning, Ela 👋</div>', unsafe_allow_html=True)
+        st.markdown('<div class="main-title">Good morning, Nikki 👋</div>', unsafe_allow_html=True)
         st.caption("Here's what needs your attention today.")
         _digest_placeholder = st.empty()
 
