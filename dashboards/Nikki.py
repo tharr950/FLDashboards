@@ -1430,7 +1430,7 @@ def render_app(config):
     grade_summary_df     = load_grade_summary()
     concern_groupings_df = load_concern_groupings()
 
-    st.markdown('<div class="main-title">Ela Tutor Data 📊</div>', unsafe_allow_html=True)
+    st.markdown('<div class="main-title">Nikki Tutor Data 📊</div>', unsafe_allow_html=True)
     st.sidebar.markdown("---")
 
     _goto = st.session_state.pop("goto_page", None)
