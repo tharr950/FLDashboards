@@ -1504,7 +1504,7 @@ def render_app(config):
                     home_exam_df["exam_family"] = home_exam_df["subject"].apply(
                         lambda x: "SAT/PSAT" if x in _SAT_H else ("ACT" if x in _ACT_H else "Other"))
                     home_exam_df["exam_valid_composite"] = home_exam_df.apply(
-                        lambda r: (str(r.get("attempt","")) in ("1","1.0") or str(r.get("attempt","")) == "n/a") and (
+                        lambda r: (pd.isna(r.get("attempt")) or str(r.get("attempt","")) in ("1","1.0","n/a","nan")) and (
                                   (pd.notna(r["sat_math"]) and r["sat_math"] >= 300 and
                                    pd.notna(r["sat_rw"])   and r["sat_rw"]   >= 300)
                                   if r["exam_family"] == "SAT/PSAT"
@@ -2023,7 +2023,7 @@ def render_app(config):
                             (pd.isna(r["act_math"]) or r["act_math"] >= 10) and
                             (pd.isna(r["act_reading"]) or r["act_reading"] >= 10))
                 home_exam_df["exam_valid_composite"] = home_exam_df.apply(
-                    lambda r: (str(r.get("attempt","")) in ("1","1.0") or str(r.get("attempt","")) == "n/a") and (
+                    lambda r: (pd.isna(r.get("attempt")) or str(r.get("attempt","")) in ("1","1.0","n/a","nan")) and (
                         sat_composite_ok(r) if r["exam_family"] == "SAT/PSAT"
                         else (act_composite_ok(r) if r["exam_family"] == "ACT" else False)), axis=1)
                 no_exam_by_tutor = {}
@@ -2682,7 +2682,7 @@ def render_app(config):
                             (pd.isna(r["act_math"])    or r["act_math"]    >= 10) and
                             (pd.isna(r["act_reading"]) or r["act_reading"] >= 10))
                 wl_exam_df["exam_valid_composite"] = wl_exam_df.apply(
-                    lambda r: (str(r.get("attempt","")) in ("1","1.0") or str(r.get("attempt","")) == "n/a") and (
+                    lambda r: (pd.isna(r.get("attempt")) or str(r.get("attempt","")) in ("1","1.0","n/a","nan")) and (
                         _sat_ok(r) if r["exam_family"] == "SAT/PSAT"
                         else (_act_ok(r) if r["exam_family"] == "ACT" else False)), axis=1)
             except Exception as e:
@@ -3268,7 +3268,7 @@ def render_app(config):
                             pd.notna(r["act_math"])    and r["act_math"]    >= 10 and
                             pd.notna(r["act_reading"]) and r["act_reading"] >= 10)
                 p_exam["exam_valid_composite"] = p_exam.apply(
-                    lambda r: (str(r.get("attempt","")) in ("1","1.0") or str(r.get("attempt","")) == "n/a") and (
+                    lambda r: (pd.isna(r.get("attempt")) or str(r.get("attempt","")) in ("1","1.0","n/a","nan")) and (
                         _sat_ok_p(r) if r["exam_family"] == "SAT/PSAT"
                         else (_act_ok_p(r) if r["exam_family"] == "ACT" else False)), axis=1)
                 p_exam["is_official"] = p_exam["subject"].str.lower().str.contains("official", na=False)
@@ -4568,7 +4568,8 @@ def render_app(config):
             "Shows exam data for all active test-prep students (met with in the last 30 days). "
             "Students with **6+ hours** of test-prep tutoring should have at least one completed practice exam.\n\n"
             "**Completion rules:** SAT/PSAT sections < 300 or ACT sections < 10 are invalid.\n\n"
-            "**Score improvement** is measured from the most recent exam *before or on* the first session date "
+            "**Score improvement** is measured from the last valid exam *before or on* the first session date "
+            "(or the *first* valid exam after the first session if no prior exam exists) "
             "to the last or highest completed exam with this tutor.\n\n"
             "**Once a week, this data is captured and stored for trend tracking.**",
             icon=None
@@ -4647,7 +4648,7 @@ def render_app(config):
                 team_exam_df.loc[act_validity.index, col] = act_validity[col]
 
         team_exam_df["exam_valid_composite"] = team_exam_df.apply(
-            lambda r: (str(r.get("attempt","")) in ("1","1.0") or str(r.get("attempt","")) == "n/a") and (
+            lambda r: (pd.isna(r.get("attempt")) or str(r.get("attempt","")) in ("1","1.0","n/a","nan")) and (
                 r["sat_composite_valid"] if r["exam_family"] == "SAT/PSAT"
                 else (r["act_composite_valid"] if r["exam_family"] == "ACT" else False)), axis=1)
 
