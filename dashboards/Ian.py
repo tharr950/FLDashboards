@@ -1511,7 +1511,7 @@ def render_app(config):
                                   else ((pd.notna(r["act_english"]) and r["act_english"] >= 10 and
                                          pd.notna(r["act_math"])    and r["act_math"]    >= 10 and
                                          pd.notna(r["act_reading"]) and r["act_reading"] >= 10)
-                                        if r["exam_family"] == "ACT" else False), axis=1)
+                                        if r["exam_family"] == "ACT" else False)), axis=1)
             except Exception as e:
                 home_exam_df = pd.DataFrame(); load_errors.append(f"Exam data: {e}")
 
