@@ -72,154 +72,237 @@ GITHUB_REPO   = os.environ["GITHUB_REPO"]        # e.g. "tylerharrington/fl-dash
 GITHUB_PATH   = os.environ.get("GITHUB_FILE_PATH", "data/exam_data.csv")
 
 QUERY = """
-    with rp_exams as (
-        select
+    WITH cte_exams AS (
+        SELECT
             exams_production.transcripts.id,
             exams_production.transcripts.created_at,
-            orbit_production.students.id as student_id,
+            orbit_production.students.id AS student_id,
             exams_production.exams.exam_type,
             exams_production.transcripts.attempt,
             exams_production.transcripts.score,
-            exams_production.exams.form_code as Exam_Code,
+            exams_production.exams.form_code AS Exam_Code,
             exams_production.transcripts.complete,
             exams_production.transcripts.all_sections_scored,
-            CASE When exams_production.exams.exam_type = 'ACT' and exams_production.subjects.name = 'English'
-            then exams_production.transcript_subjects.scaled_score END as ACTEnglish,
-            CASE When exams_production.exams.exam_type = 'ACT' and exams_production.subjects.name = 'Science'
-            then exams_production.transcript_subjects.scaled_score END as ACTScience,
-            CASE When exams_production.exams.exam_type = 'ACT' and exams_production.subjects.name like ('Math%')
-            then exams_production.transcript_subjects.scaled_score END as ACTMath,
-            CASE When exams_production.exams.exam_type = 'ACT' and exams_production.subjects.name = 'Reading'
-            then exams_production.transcript_subjects.scaled_score END as ACTReading,
-            CASE When exams_production.exams.exam_type like '%SAT%' and exams_production.subjects.name = 'Reading and Writing'
-            then (case when exams_production.transcript_subjects.scaled_score is null
-                then right(exams_production.transcript_subjects.scaled_score_range,locate('..',exams_production.transcript_subjects.scaled_score_range)-1)
-                else exams_production.transcript_subjects.scaled_score end)
-            END as SATReadingWritingHigh,
-            CASE When exams_production.exams.exam_type like '%SAT%' and exams_production.subjects.name = 'Reading and Writing'
-            then (case when exams_production.transcript_subjects.scaled_score is null
-                then left(exams_production.transcript_subjects.scaled_score_range,locate('..',exams_production.transcript_subjects.scaled_score_range)-1)
-                else exams_production.transcript_subjects.scaled_score end)
-            END as SATReadingWritingLow,
-            CASE When exams_production.exams.exam_type like '%SAT%' and exams_production.subjects.name in ('Math', 'Mathematics')
-            then (case when exams_production.transcript_subjects.scaled_score is null
-                then right(exams_production.transcript_subjects.scaled_score_range,locate('..',exams_production.transcript_subjects.scaled_score_range)-1)
-                else exams_production.transcript_subjects.scaled_score end)
-            END as SATMathHigh,
-            CASE When exams_production.exams.exam_type like '%SAT%' and exams_production.subjects.name in ('Math', 'Mathematics')
-            then (case when exams_production.transcript_subjects.scaled_score is null
-                then left(exams_production.transcript_subjects.scaled_score_range,locate('..',exams_production.transcript_subjects.scaled_score_range)-1)
-                else exams_production.transcript_subjects.scaled_score end)
-            END as SATMathLow
-        from exams_production.transcripts
-        join exams_production.exams on exams_production.transcripts.exam_id = exams_production.exams.id
-        join exams_production.users on exams_production.transcripts.user_id = exams_production.users.id
-        join orbit_production.users on orbit_production.users.id = exams_production.users.handle
-        join orbit_production.students on orbit_production.users.id = orbit_production.students.user_id
-        join exams_production.transcript_subjects on exams_production.transcript_subjects.transcript_id = exams_production.transcripts.id
-        join exams_production.exam_subjects on exams_production.exam_subjects.id = exams_production.transcript_subjects.exam_subject_id
-        join exams_production.subjects on exams_production.subjects.id = exams_production.exam_subjects.subject_id
-        where exams_production.transcripts.created_at >= (curdate() - interval 2 year)
+            MAX(CASE WHEN exams_production.exams.exam_type = 'ACT' AND exams_production.subjects.name = 'English'
+                THEN exams_production.transcript_subjects.scaled_score END) AS ACTEnglish,
+            MAX(CASE WHEN exams_production.exams.exam_type = 'ACT' AND exams_production.subjects.name = 'Science'
+                THEN exams_production.transcript_subjects.scaled_score END) AS ACTScience,
+            MAX(CASE WHEN exams_production.exams.exam_type = 'ACT' AND exams_production.subjects.name LIKE ('Math%')
+                THEN exams_production.transcript_subjects.scaled_score END) AS ACTMath,
+            MAX(CASE WHEN exams_production.exams.exam_type = 'ACT' AND exams_production.subjects.name = 'Reading'
+                THEN exams_production.transcript_subjects.scaled_score END) AS ACTReading,
+            MAX(CASE WHEN exams_production.exams.exam_type LIKE '%SAT%' AND exams_production.subjects.name = 'Reading and Writing'
+                THEN (CASE WHEN exams_production.transcript_subjects.scaled_score IS NULL
+                    THEN RIGHT(exams_production.transcript_subjects.scaled_score_range,3)
+                    ELSE exams_production.transcript_subjects.scaled_score END)
+            END) AS SATReadingWritingHigh,
+            MAX(CASE WHEN exams_production.exams.exam_type LIKE '%SAT%' AND exams_production.subjects.name = 'Reading and Writing'
+                THEN (CASE WHEN exams_production.transcript_subjects.scaled_score IS NULL
+                    THEN LEFT(exams_production.transcript_subjects.scaled_score_range,3)
+                    ELSE exams_production.transcript_subjects.scaled_score END)
+            END) AS SATReadingWritingLow,
+            MAX(CASE WHEN exams_production.exams.exam_type LIKE '%SAT%' AND exams_production.subjects.name LIKE ('Math%')
+                THEN (CASE WHEN exams_production.transcript_subjects.scaled_score IS NULL
+                    THEN RIGHT(exams_production.transcript_subjects.scaled_score_range,3)
+                    ELSE exams_production.transcript_subjects.scaled_score END)
+            END) AS SATMathHigh,
+            MAX(CASE WHEN exams_production.exams.exam_type LIKE '%SAT%' AND exams_production.subjects.name LIKE ('Math%')
+                THEN (CASE WHEN exams_production.transcript_subjects.scaled_score IS NULL
+                    THEN LEFT(exams_production.transcript_subjects.scaled_score_range,3)
+                    ELSE exams_production.transcript_subjects.scaled_score END)
+            END) AS SATMathLow
+        FROM exams_production.transcripts
+        JOIN exams_production.exams ON exams_production.transcripts.exam_id = exams_production.exams.id
+        JOIN exams_production.users ON exams_production.transcripts.user_id = exams_production.users.id
+        JOIN orbit_production.users ON orbit_production.users.id = exams_production.users.handle
+        JOIN orbit_production.students ON orbit_production.users.id = orbit_production.students.user_id
+        JOIN exams_production.transcript_subjects ON exams_production.transcript_subjects.transcript_id = exams_production.transcripts.id
+        JOIN exams_production.exam_subjects ON exams_production.exam_subjects.id = exams_production.transcript_subjects.exam_subject_id
+        JOIN exams_production.subjects ON exams_production.subjects.id = exams_production.exam_subjects.subject_id
+        GROUP BY exams_production.transcripts.id
+        UNION ALL
+        SELECT
+            orbit_production.study_area_snapshots.id AS id,
+            orbit_production.study_area_snapshots.date AS created_at,
+            orbit_production.students.id AS student_id,
+            orbit_production.subject_translations.name AS exam_type,
+            'n/a' AS attempt,
+            CAST(orbit_production.study_area_snapshots.score AS decimal) AS score,
+            CASE WHEN orbit_production.subject_translations.name = 'ACT' THEN 'Official Exam'
+                ELSE orbit_production.study_area_snapshots.kind END AS Exam_Code,
+            'n/a' AS complete,
+            'n/a' AS all_sections_scored,
+            CASE WHEN orbit_production.subject_translations.name LIKE '%ACT'
+                THEN SUBSTRING_INDEX(SUBSTRING_INDEX(orbit_production.study_area_snapshots.data,'"',4),'"',-1) END AS ACTEnglish,
+            CASE WHEN orbit_production.subject_translations.name LIKE '%ACT' AND LENGTH(SUBSTRING_INDEX(SUBSTRING_INDEX(replace(orbit_production.study_area_snapshots.data,':',''),'"',16),'"',-1)) <4
+                THEN SUBSTRING_INDEX(SUBSTRING_INDEX(replace(orbit_production.study_area_snapshots.data,':',''),'"',16),'"',-1) END AS ACTScience,
+            CASE WHEN orbit_production.subject_translations.name LIKE '%ACT'
+                THEN SUBSTRING_INDEX(SUBSTRING_INDEX(orbit_production.study_area_snapshots.data,'"',8),'"',-1) END AS ACTMath,
+            CASE WHEN orbit_production.subject_translations.name LIKE '%ACT'
+                THEN SUBSTRING_INDEX(SUBSTRING_INDEX(orbit_production.study_area_snapshots.data,'"',12),'"',-1) END AS ACTReading,
+            CASE WHEN orbit_production.subject_translations.name LIKE '%SAT%'
+                THEN SUBSTRING_INDEX(SUBSTRING_INDEX(orbit_production.study_area_snapshots.data,'"',8),'"',-1) END AS SATReadingWritingHigh,
+            CASE WHEN orbit_production.subject_translations.name LIKE '%SAT%'
+                THEN SUBSTRING_INDEX(SUBSTRING_INDEX(orbit_production.study_area_snapshots.data,'"',8),'"',-1) END AS SATReadingWritingLow,
+            CASE WHEN orbit_production.subject_translations.name LIKE '%SAT%'
+                THEN SUBSTRING_INDEX(SUBSTRING_INDEX(orbit_production.study_area_snapshots.data,'"',4),'"',-1) END AS SATMathHigh,
+            CASE WHEN orbit_production.subject_translations.name LIKE '%SAT%'
+                THEN SUBSTRING_INDEX(SUBSTRING_INDEX(orbit_production.study_area_snapshots.data,'"',4),'"',-1) END AS SATMathLow
+        FROM orbit_production.study_area_snapshots
+        JOIN orbit_production.study_areas ON orbit_production.study_areas.id = orbit_production.study_area_snapshots.study_area_id
+        JOIN orbit_production.subjects ON orbit_production.subjects.id = orbit_production.study_areas.subject_id
+        JOIN orbit_production.subject_translations ON (orbit_production.subject_translations.subject_id = orbit_production.subjects.id AND orbit_production.subject_translations.locale = 'en')
+        JOIN orbit_production.students ON orbit_production.study_areas.student_id = orbit_production.students.id
+        JOIN orbit_production.users studentusers ON orbit_production.students.user_id = studentusers.id
+        WHERE orbit_production.subject_translations.name IN ('ACT','SAT','Digital SAT','PSAT/NMSQT','Digital PSAT','Digital PSAT/NMSQT','PSAT','Digital ACT','PSAT 8/9')
     ),
-    cte_exams as (
-        select
-            rp_exams.id as id,
-            rp_exams.Created_At as created_at,
-            rp_exams.Student_ID as Student_ID,
-            rp_exams.exam_type as exam_type,
-            rp_exams.Exam_Code as Exam_Code,
-            rp_exams.attempt as attempt,
-            rp_exams.complete as complete,
-            rp_exams.all_sections_scored,
-            rp_exams.score as score,
-            max(rp_exams.ACTEnglish) as ACTEnglish,
-            max(rp_exams.ACTMath) as ACTMath,
-            max(rp_exams.ACTReading) as ACTReading,
-            max(rp_exams.ACTScience) as ACTScience,
-            round((max(rp_exams.SATMathHigh) + max(rp_exams.SATMathLow)+1)/2,-1) as SATMath,
-            round((max(rp_exams.SATReadingWritingHigh) + max(rp_exams.SATReadingWritingLow)+1)/2,-1) as SATReadingWriting
-        FROM rp_exams
-        group by 1,2,3,4,5,6,7,8,9
-        UNION
-        select
-            orbit_production.study_area_snapshots.id as id,
-            orbit_production.study_area_snapshots.date as created_at,
-            orbit_production.students.id as student_id,
-            orbit_production.subject_translations.name as exam_type,
-            CASE When orbit_production.subject_translations.name = 'ACT' then 'Official Exam'
-            Else orbit_production.study_area_snapshots.kind END as Exam_Code,
-            'n/a' as attempt,
-            'n/a' as complete,
-            'n/a' as all_sections_scored,
-            cast(orbit_production.study_area_snapshots.score as decimal) as score,
-            CASE When orbit_production.subject_translations.name like '%ACT'
-            then substring_index(substring_index(orbit_production.study_area_snapshots.data,'"',4),'"',-1) END as ACTEnglish,
-            CASE When orbit_production.subject_translations.name like '%ACT'
-            then substring_index(substring_index(orbit_production.study_area_snapshots.data,'"',8),'"',-1) END as ACTMath,
-            CASE When orbit_production.subject_translations.name like '%ACT'
-            then substring_index(substring_index(orbit_production.study_area_snapshots.data,'"',12),'"',-1) END as ACTReading,
-            CASE When orbit_production.subject_translations.name like '%ACT' and length(substring_index(substring_index(replace(orbit_production.study_area_snapshots.data,':',''),'"',16),'"',-1)) <4
-            then substring_index(substring_index(replace(orbit_production.study_area_snapshots.data,':',''),'"',16),'"',-1) END as ACTScience,
-            CASE When orbit_production.subject_translations.name like '%SAT%'
-            then substring_index(substring_index(orbit_production.study_area_snapshots.data,'"',4),'"',-1) END as SATMath,
-            CASE When orbit_production.subject_translations.name like '%SAT%'
-            then substring_index(substring_index(orbit_production.study_area_snapshots.data,'"',8),'"',-1) END as SATReadingWriting
-        from orbit_production.study_area_snapshots
-        join orbit_production.study_areas on orbit_production.study_areas.id = orbit_production.study_area_snapshots.study_area_id
-        join orbit_production.subjects on orbit_production.subjects.id = orbit_production.study_areas.subject_id
-        join orbit_production.subject_translations on (orbit_production.subject_translations.subject_id = orbit_production.subjects.id and orbit_production.subject_translations.locale = 'en')
-        join orbit_production.students on orbit_production.study_areas.student_id = orbit_production.students.id
-        join orbit_production.users studentusers on orbit_production.students.user_id = studentusers.id
-        and orbit_production.subject_translations.name in ('ACT', 'SAT', 'Digital SAT', 'PSAT/NMSQT', 'Digital PSAT','Digital PSAT/NMSQT','PSAT','Digital ACT', 'PSAT 8/9')
-        where orbit_production.study_area_snapshots.date >= (curdate() - interval 2 year)
+    cte_sessions AS (
+        SELECT
+            enrollments.enrollee_id AS student_id,
+            sessions.supervisor_id AS tutor_id,
+            sessions.id AS session_id,
+            sessions.starts_at,
+            courses.brand_id,
+            (courses.provisioned_duration - courses.delivered_duration)/60.0 AS remaining_hours,
+            sa.subject_id,
+            sessions.attendances_attended_count,
+            sa.minutes / 60.0 AS hours
+        FROM sessions
+        JOIN courses ON sessions.course_id = courses.id
+        JOIN enrollments ON enrollments.course_id = courses.id
+        JOIN session_allotments sa ON sessions.id = sa.session_id
+        WHERE courses.brand_id IN (2,41,42,43,44,47)
+    ),
+    cte_past_sessions AS (
+        SELECT
+            cte_sessions.student_id,
+            cte_sessions.tutor_id,
+            MIN(cte_sessions.starts_at) AS first_session,
+            MAX(cte_sessions.starts_at) AS most_recent_session,
+            SUM(cte_sessions.hours) AS attended_hours,
+            CEILING(DATEDIFF(MAX(cte_sessions.starts_at), MIN(cte_sessions.starts_at))/7) AS weeks_attended,
+            MAX(cte_sessions.remaining_hours) AS remaining_hours
+        FROM cte_sessions
+        WHERE cte_sessions.starts_at < CURRENT_DATE()
+          AND cte_sessions.subject_id IN (43,316,342,195,50,51,315,356)
+          AND cte_sessions.hours > 0
+          AND cte_sessions.attendances_attended_count > 0
+        GROUP BY student_id, tutor_id
+    ),
+    cte_last_45_days_brands AS (
+        SELECT
+            cte_sessions.student_id,
+            CASE WHEN students.graduation_year < 20000
+                THEN CAST(CONCAT(students.graduation_year,'-06-30') AS DATE)
+                ELSE NULL END AS grad_date,
+            cte_sessions.tutor_id,
+            CASE WHEN cte_sessions.brand_id = 2 THEN COUNT(DISTINCT cte_sessions.session_id) END AS private_tutoring_sessions,
+            CASE WHEN cte_sessions.brand_id = 42 THEN COUNT(DISTINCT cte_sessions.session_id) END AS buc_sessions,
+            CASE WHEN cte_sessions.brand_id = 43 THEN COUNT(DISTINCT cte_sessions.session_id) END AS trial_sessions,
+            CASE WHEN cte_sessions.brand_id = 41 THEN COUNT(DISTINCT cte_sessions.session_id) END AS academics_sessions,
+            CASE WHEN cte_sessions.brand_id = 47 THEN COUNT(DISTINCT cte_sessions.session_id) END AS school_pay_sessions
+        FROM cte_sessions
+        JOIN students ON students.id = cte_sessions.student_id
+        WHERE cte_sessions.starts_at >= CURRENT_DATE() - INTERVAL 46 DAY
+          AND cte_sessions.starts_at < CURRENT_DATE()
+          AND cte_sessions.attendances_attended_count > 0
+          AND cte_sessions.subject_id IN (43,316,342,195,50,51,315,356)
+          AND cte_sessions.hours > 0
+        GROUP BY student_id, tutor_id, brand_id
+    ),
+    cte_future AS (
+        SELECT
+            cte_sessions.student_id,
+            cte_sessions.tutor_id,
+            MAX(cte_sessions.starts_at) AS last_scheduled_session,
+            CASE WHEN cte_sessions.brand_id = 2 THEN COUNT(DISTINCT cte_sessions.session_id) END AS private_tutoring_sessions,
+            CASE WHEN cte_sessions.brand_id = 42 THEN COUNT(DISTINCT cte_sessions.session_id) END AS buc_sessions,
+            CASE WHEN cte_sessions.brand_id = 43 THEN COUNT(DISTINCT cte_sessions.session_id) END AS trial_sessions,
+            CASE WHEN cte_sessions.brand_id = 47 THEN COUNT(DISTINCT cte_sessions.session_id) END AS school_pay_sessions
+        FROM cte_sessions
+        WHERE cte_sessions.starts_at >= CURRENT_DATE()
+          AND cte_sessions.brand_id IN (2,42,43,47)
+        GROUP BY student_id, tutor_id, brand_id
+    ),
+    cte_last_45_days_sessions AS (
+        SELECT
+            cte_sessions.student_id,
+            cte_sessions.tutor_id,
+            COUNT(DISTINCT cte_sessions.session_id) AS session_count
+        FROM cte_sessions
+        WHERE cte_sessions.starts_at >= CURRENT_DATE() - INTERVAL 46 DAY
+          AND cte_sessions.starts_at < CURRENT_DATE()
+          AND cte_sessions.attendances_attended_count > 0
+          AND cte_sessions.subject_id IN (43,316,342,195,50,51,315,356)
+          AND cte_sessions.hours > 0
+        GROUP BY student_id, tutor_id
     )
-    select distinct
-        orbit_production.employees.id as tutor_id,
-        concat(tutor_users.first_name,' ', tutor_users.last_name) as tutor_name,
-        orbit_production.teams.name as team_name,
-        orbit_production.students.id as student_id,
-        concat(student_users.first_name,' ', student_users.last_name) as student_name,
-        min(orbit_production.sessions.starts_at) as first_session_day,
-        max(orbit_production.sessions.starts_at) as most_recent_session,
-        SUM(orbit_production.sessions.duration/60.0) as test_prep_hours_delivered,
-        cte_exams.id as exam_id,
-        cte_exams.Created_At as exam_date,
-        cte_exams.exam_type as subject,
-        cte_exams.Exam_Code as exam_code,
-        cte_exams.attempt as attempt,
-        cte_exams.complete as complete,
+    SELECT
+        cte_past_sessions.tutor_id,
+        CONCAT(tutor_users.first_name,' ',tutor_users.last_name) AS tutor_name,
+        teams.name AS team_name,
+        cte_past_sessions.student_id,
+        CONCAT(student_users.first_name,' ',student_users.last_name) AS student_name,
+        IFNULL(CASE WHEN DATEDIFF(cte_last_45_days_brands.grad_date, CURRENT_DATE()) >= 0
+            THEN (12 - FLOOR(CAST(DATEDIFF(cte_last_45_days_brands.grad_date, CURRENT_DATE())/365 AS FLOAT)))
+            ELSE (12 - CEILING(CAST(DATEDIFF(cte_last_45_days_brands.grad_date, CURRENT_DATE())/365 AS FLOAT)))
+        END, NULL) AS grade_lvl,
+        cte_past_sessions.first_session AS first_session_day,
+        cte_past_sessions.most_recent_session,
+        MAX(cte_future.last_scheduled_session) AS last_scheduled_session,
+        cte_past_sessions.attended_hours AS attended_test_prep_hours,
+        cte_past_sessions.weeks_attended,
+        cte_past_sessions.attended_hours / cte_past_sessions.weeks_attended AS attended_velocity,
+        cte_past_sessions.remaining_hours AS hours_remaining,
+        COUNT(DISTINCT lds2.tutor_id) AS tutor_count,
+        CASE WHEN MAX(cte_last_45_days_brands.private_tutoring_sessions) > 0
+            OR MAX(cte_future.private_tutoring_sessions) > 0 THEN TRUE ELSE FALSE END AS private_tutoring,
+        CASE WHEN MAX(cte_last_45_days_brands.buc_sessions) > 0
+            OR MAX(cte_future.buc_sessions) > 0 THEN TRUE ELSE FALSE END AS buc,
+        CASE WHEN MAX(cte_last_45_days_brands.school_pay_sessions) > 0
+            OR MAX(cte_future.school_pay_sessions) > 0 THEN TRUE ELSE FALSE END AS school_pay,
+        cte_exams.id AS exam_id,
+        cte_exams.created_at AS exam_date,
+        cte_exams.exam_type AS subject,
+        cte_exams.Exam_Code AS exam_code,
+        cte_exams.attempt,
+        cte_exams.complete,
         cte_exams.all_sections_scored,
-        case when cte_exams.exam_type in ('SAT', 'Digital SAT', 'PSAT/NMSQT', 'Digital PSAT','Digital PSAT/NMSQT','PSAT', 'PSAT 8/9')
-            then cte_exams.SATMath + cte_exams.SATReadingWriting
-            else cte_exams.score
-        end as score,
-        cte_exams.ACTEnglish as act_english,
-        cte_exams.ACTMath as act_math,
-        cte_exams.ACTReading as act_reading,
-        cte_exams.ACTScience as act_science,
-        cte_exams.SATMath as sat_math,
-        cte_exams.SATReadingWriting as sat_rw
-    from orbit_production.tutoring_histories
-    JOIN orbit_production.enrollments ON orbit_production.enrollments.id = orbit_production.tutoring_histories.enrollment_id
-    join orbit_production.sessions on (orbit_production.sessions.course_id = orbit_production.enrollments.course_id)
-        and (orbit_production.sessions.supervisor_id = orbit_production.tutoring_histories.tutor_id)
-    join orbit_production.session_allotments sa on orbit_production.sessions.id = sa.session_id
-    join orbit_production.students on orbit_production.enrollments.enrollee_id = orbit_production.students.id
-    join orbit_production.users student_users on orbit_production.students.user_id = student_users.id
-    join orbit_production.employees on orbit_production.tutoring_histories.tutor_id = orbit_production.employees.id
-    join orbit_production.users tutor_users on orbit_production.employees.user_id = tutor_users.id
-    JOIN orbit_production.team_members ON orbit_production.team_members.member_id = orbit_production.employees.id
-    JOIN orbit_production.teams ON orbit_production.teams.id = orbit_production.team_members.team_id
-    left join cte_exams on cte_exams.student_id = orbit_production.students.id
-    where 1=1
-    AND orbit_production.tutoring_histories.active = true
-    AND orbit_production.enrollments.unenrolled_at IS null
-    AND orbit_production.employees.end_date IS null
-    AND orbit_production.team_members.member_type = 'Employee'
-    and sa.subject_id in (43,316,342,195,50,51,315,356)
-    group by 1,2,3,4,5,9,10,11,12,13,14,15,16,17,18,19,20,21,22
-    having max(orbit_production.sessions.starts_at) > (curdate() - interval 30 day)
-       and min(orbit_production.sessions.starts_at) <= curdate()
+        CASE WHEN cte_exams.exam_type IN ('SAT','Digital SAT','PSAT/NMSQT','Digital PSAT','Digital PSAT/NMSQT','PSAT','PSAT 8/9')
+            THEN (ROUND((cte_exams.SATMathLow + cte_exams.SATMathHigh + 1)/2, -1) + ROUND((cte_exams.SATReadingWritingLow + cte_exams.SATReadingWritingHigh + 1)/2, -1))
+            ELSE cte_exams.score
+        END AS score,
+        cte_exams.ACTEnglish AS act_english,
+        cte_exams.ACTMath AS act_math,
+        cte_exams.ACTReading AS act_reading,
+        cte_exams.ACTScience AS act_science,
+        ROUND((cte_exams.SATMathLow + cte_exams.SATMathHigh + 1)/2, -1) AS sat_math,
+        ROUND((cte_exams.SATReadingWritingLow + cte_exams.SATReadingWritingHigh + 1)/2, -1) AS sat_rw
+    FROM cte_past_sessions
+    JOIN cte_last_45_days_brands
+        ON cte_past_sessions.student_id = cte_last_45_days_brands.student_id
+        AND cte_past_sessions.tutor_id = cte_last_45_days_brands.tutor_id
+    JOIN cte_last_45_days_sessions lds1
+        ON cte_past_sessions.student_id = lds1.student_id
+        AND cte_past_sessions.tutor_id = lds1.tutor_id
+    JOIN cte_last_45_days_sessions lds2
+        ON cte_past_sessions.student_id = lds2.student_id
+    LEFT JOIN cte_future
+        ON cte_past_sessions.student_id = cte_future.student_id
+        AND cte_past_sessions.tutor_id = cte_future.tutor_id
+    JOIN students ON cte_past_sessions.student_id = students.id
+    JOIN users student_users ON students.user_id = student_users.id
+    JOIN employees ON cte_past_sessions.tutor_id = employees.id
+    JOIN users tutor_users ON employees.user_id = tutor_users.id
+    JOIN team_members ON team_members.member_id = employees.id
+    JOIN teams ON teams.id = team_members.team_id
+    LEFT JOIN cte_exams ON students.id = cte_exams.student_id
+    WHERE employees.end_date IS NULL
+      AND team_members.member_type = 'Employee'
+      AND tutor_users.title = 'Tutor'
+      AND lds1.session_count > 1
+      AND (cte_past_sessions.attended_hours >= 4 OR cte_past_sessions.weeks_attended > 3)
+    GROUP BY cte_past_sessions.tutor_id, cte_past_sessions.student_id, cte_exams.id
 """
 
 
@@ -237,6 +320,7 @@ def fetch_exam_data():
     try:
         cursor = conn.cursor(dictionary=True)
         cursor.execute("SET SESSION MAX_EXECUTION_TIME=120000")
+        cursor.execute("USE orbit_production")
         cursor.execute(QUERY)
         rows = cursor.fetchall()
         cursor.close()

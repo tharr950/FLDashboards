@@ -521,7 +521,7 @@ def save_exams_weekly_snapshot(df):
     rows = []
     for tutor, tdf in df.groupby("tutor_name"):
         total_students = tdf["student_id"].nunique()
-        eligible_ids   = tdf[tdf["test_prep_hours_delivered"] >= 6]["student_id"].unique()
+        eligible_ids   = tdf[tdf["attended_test_prep_hours"] >= 6]["student_id"].unique()
         no_exam_count  = 0; stale_exam_count = 0
         for sid in eligible_ids:
             sdf = tdf[tdf["student_id"] == sid]
@@ -1221,7 +1221,7 @@ def generate_tutor_pdf(
         if p_exam is not None and not p_exam.empty:
             p_now      = pd.Timestamp.now(tz="UTC")
             ex_students= p_exam["student_id"].nunique()
-            total_hrs  = p_exam["test_prep_hours_delivered"].iloc[0] if not p_exam.empty else 0
+            total_hrs  = p_exam["attended_test_prep_hours"].iloc[0] if not p_exam.empty else 0
             n_completed= p_exam[p_exam["exam_valid_composite"] == True]["exam_id"].nunique()                      if "exam_id" in p_exam.columns else 0
             hrs_per    = round(total_hrs / n_completed, 1) if n_completed > 0 and pd.notna(total_hrs) else None
             summary_data = [
@@ -1237,7 +1237,7 @@ def generate_tutor_pdf(
             ex_row_colors = []
             for sid, sdf in p_exam.groupby("student_id"):
                 sname    = sdf["student_name"].iloc[0] if "student_name" in sdf.columns else str(sid)
-                hrs      = sdf["test_prep_hours_delivered"].iloc[0]
+                hrs      = sdf["attended_test_prep_hours"].iloc[0]
                 valid    = sdf[sdf["exam_valid_composite"].astype(str) == "True"]
                 best     = valid["score"].max() if not valid.empty else None
                 valid_dated = valid[valid["exam_date"].notna()] if not valid.empty else valid
@@ -1496,7 +1496,7 @@ def render_app(config):
                 for dc in ["first_session_day","most_recent_session","exam_date"]:
                     home_exam_df[dc] = pd.to_datetime(home_exam_df[dc], errors="coerce", utc=True)
                 for nc in ["score","act_english","act_math","act_reading","act_science",
-                           "sat_math","sat_rw","test_prep_hours_delivered"]:
+                           "sat_math","sat_rw","attended_test_prep_hours"]:
                     home_exam_df[nc] = pd.to_numeric(home_exam_df[nc], errors="coerce")
                 if not home_exam_df.empty:
                     _SAT_H = {"SAT","Digital SAT","PSAT/NMSQT","Digital PSAT","Digital PSAT/NMSQT","PSAT","PSAT 8/9"}
@@ -1504,7 +1504,8 @@ def render_app(config):
                     home_exam_df["exam_family"] = home_exam_df["subject"].apply(
                         lambda x: "SAT/PSAT" if x in _SAT_H else ("ACT" if x in _ACT_H else "Other"))
                     home_exam_df["exam_valid_composite"] = home_exam_df.apply(
-                        lambda r: (pd.notna(r["sat_math"]) and r["sat_math"] >= 300 and
+                        lambda r: (str(r.get("attempt","")) in ("1","1.0") or str(r.get("attempt","")) == "n/a") and (
+                                  (pd.notna(r["sat_math"]) and r["sat_math"] >= 300 and
                                    pd.notna(r["sat_rw"])   and r["sat_rw"]   >= 300)
                                   if r["exam_family"] == "SAT/PSAT"
                                   else ((pd.notna(r["act_english"]) and r["act_english"] >= 10 and
@@ -1851,8 +1852,8 @@ def render_app(config):
         if not home_exam_df.empty and "exam_valid_composite" in home_exam_df.columns:
             _now_s2 = pd.Timestamp.now(tz="UTC")
             for _sid, _sdf in home_exam_df.groupby("student_id"):
-                if pd.notna(_sdf["test_prep_hours_delivered"].iloc[0]) and \
-                        _sdf["test_prep_hours_delivered"].iloc[0] >= 6:
+                if pd.notna(_sdf["attended_test_prep_hours"].iloc[0]) and \
+                        _sdf["attended_test_prep_hours"].iloc[0] >= 6:
                     if _sdf[_sdf["exam_valid_composite"] == True].empty:
                         _snap2_ne += 1
                     else:
@@ -2022,12 +2023,13 @@ def render_app(config):
                             (pd.isna(r["act_math"]) or r["act_math"] >= 10) and
                             (pd.isna(r["act_reading"]) or r["act_reading"] >= 10))
                 home_exam_df["exam_valid_composite"] = home_exam_df.apply(
-                    lambda r: sat_composite_ok(r) if r["exam_family"] == "SAT/PSAT"
-                              else (act_composite_ok(r) if r["exam_family"] == "ACT" else None), axis=1)
+                    lambda r: (str(r.get("attempt","")) in ("1","1.0") or str(r.get("attempt","")) == "n/a") and (
+                        sat_composite_ok(r) if r["exam_family"] == "SAT/PSAT"
+                        else (act_composite_ok(r) if r["exam_family"] == "ACT" else False)), axis=1)
                 no_exam_by_tutor = {}
                 for tutor, tdf in home_exam_df.groupby("tutor_name"):
                     count = sum(1 for sid, sdf in tdf.groupby("student_id")
-                                if sdf["test_prep_hours_delivered"].iloc[0] >= 6
+                                if sdf["attended_test_prep_hours"].iloc[0] >= 6
                                 and sdf[sdf["exam_valid_composite"] == True].empty)
                     if count > 0:
                         no_exam_by_tutor[tutor] = count
@@ -2035,7 +2037,7 @@ def render_app(config):
                                            key=lambda x: x[1], reverse=True)[:3]:
                     _no_exam_students = sorted(set(
                         sname for sid, sdf in home_exam_df[home_exam_df["tutor_name"] == tutor].groupby("student_id")
-                        if sdf["test_prep_hours_delivered"].iloc[0] >= 6
+                        if sdf["attended_test_prep_hours"].iloc[0] >= 6
                         and sdf[sdf["exam_valid_composite"] == True].empty
                         for sname in sdf["student_name"].dropna().unique()
                     ))
@@ -2156,9 +2158,16 @@ def render_app(config):
                         if fam.empty: return None
                         before = fam[fam["exam_date"] <= fsd]
                         after  = fam[fam["exam_date"] >  fsd]
-                        if before.empty or after.empty: return None
-                        b = before.sort_values("exam_date").iloc[-1]["score"]
-                        e = after.sort_values("exam_date").iloc[-1]["score"]
+                        if after.empty: return None
+                        if not before.empty:
+                            b_row = before.sort_values("exam_date").iloc[-1]
+                            a_fam = after
+                        else:
+                            b_row = after.sort_values("exam_date").iloc[0]
+                            a_fam = after.iloc[1:]
+                        if a_fam.empty: return None
+                        b = b_row["score"]
+                        e = a_fam.sort_values("exam_date").iloc[-1]["score"]
                         return (e - b) if pd.notna(b) and pd.notna(e) else None
                     imp_rows = []
                     for (tid, tname, sid, sname), sdf in home_exam_df.groupby(
@@ -2258,7 +2267,7 @@ def render_app(config):
                         _now_a = pd.Timestamp.now(tz="UTC")
                         _cur["no_exam"] = sum(
                             1 for sid, sdf in _edf.groupby("student_id")
-                            if sdf["test_prep_hours_delivered"].iloc[0] >= 6
+                            if sdf["attended_test_prep_hours"].iloc[0] >= 6
                             and sdf[sdf["exam_valid_composite"] == True].empty)
                         for sid, sdf in _edf.groupby("student_id"):
                             _comp = sdf[sdf["exam_valid_composite"] == True]
@@ -2364,7 +2373,7 @@ def render_app(config):
                          color="yellow", details=stale_grade_students.get(tutor))
 
             if not home_exam_df.empty:
-                no_session_yet = (home_exam_df[home_exam_df["test_prep_hours_delivered"] == 0]
+                no_session_yet = (home_exam_df[home_exam_df["attended_test_prep_hours"] == 0]
                                   ["student_id"].nunique())
                 if no_session_yet > 0:
                     card("🆕", "New Students — No Sessions Yet",
@@ -2407,7 +2416,7 @@ def render_app(config):
                     tedf = home_exam_df[home_exam_df["tutor_name"] == tutor]
                     no_ex = sum(
                         1 for sid, sdf in tedf.groupby("student_id")
-                        if sdf["test_prep_hours_delivered"].iloc[0] >= 6
+                        if sdf["attended_test_prep_hours"].iloc[0] >= 6
                         and sdf[sdf["exam_valid_composite"] == True].empty
                     )
                     if no_ex > 0:
@@ -2657,7 +2666,7 @@ def render_app(config):
                 for dc in ["first_session_day","most_recent_session","exam_date"]:
                     wl_exam_df[dc] = pd.to_datetime(wl_exam_df[dc], errors="coerce", utc=True)
                 for nc in ["score","act_english","act_math","act_reading","act_science",
-                           "sat_math","sat_rw","test_prep_hours_delivered"]:
+                           "sat_math","sat_rw","attended_test_prep_hours"]:
                     wl_exam_df[nc] = pd.to_numeric(wl_exam_df[nc], errors="coerce")
                 SAT_TYPES_WL = {"SAT","Digital SAT","PSAT/NMSQT","Digital PSAT",
                                 "Digital PSAT/NMSQT","PSAT","PSAT 8/9"}
@@ -2673,8 +2682,9 @@ def render_app(config):
                             (pd.isna(r["act_math"])    or r["act_math"]    >= 10) and
                             (pd.isna(r["act_reading"]) or r["act_reading"] >= 10))
                 wl_exam_df["exam_valid_composite"] = wl_exam_df.apply(
-                    lambda r: _sat_ok(r) if r["exam_family"] == "SAT/PSAT"
-                              else (_act_ok(r) if r["exam_family"] == "ACT" else None), axis=1)
+                    lambda r: (str(r.get("attempt","")) in ("1","1.0") or str(r.get("attempt","")) == "n/a") and (
+                        _sat_ok(r) if r["exam_family"] == "SAT/PSAT"
+                        else (_act_ok(r) if r["exam_family"] == "ACT" else False)), axis=1)
             except Exception as e:
                 wl_exam_df = pd.DataFrame(); load_errors_wl.append(f"Exams: {e}")
 
@@ -2766,7 +2776,7 @@ def render_app(config):
                 now_wl2 = pd.Timestamp.now(tz="UTC")
                 no_exam_count = sum(
                     1 for sid, sdf in tedf.groupby("student_id")
-                    if sdf["test_prep_hours_delivered"].iloc[0] >= 6
+                    if sdf["attended_test_prep_hours"].iloc[0] >= 6
                     and sdf[sdf["exam_valid_composite"] == True].empty
                 )
                 for sid, sdf in tedf.groupby("student_id"):
@@ -2775,7 +2785,7 @@ def render_app(config):
                         latest_ex = pd.to_datetime(completed["exam_date"], utc=True).max()
                         if pd.notna(latest_ex) and (now_wl2 - latest_ex).days > 90:
                             stale_exam_count_wl += 1
-                total_hrs_wl = tedf["test_prep_hours_delivered"].iloc[0] if not tedf.empty else 0
+                total_hrs_wl = tedf["attended_test_prep_hours"].iloc[0] if not tedf.empty else 0
                 completed_ex = tedf[tedf["exam_valid_composite"] == True]["exam_id"].nunique() \
                                if "exam_id" in tedf.columns else 0
                 if completed_ex > 0 and pd.notna(total_hrs_wl):
@@ -3054,7 +3064,7 @@ def render_app(config):
                 _no_ex_names = sorted(set(
                     sname
                     for sid, sdf in _tedf.groupby("student_id")
-                    if sdf["test_prep_hours_delivered"].iloc[0] >= 6
+                    if sdf["attended_test_prep_hours"].iloc[0] >= 6
                     and sdf[sdf["exam_valid_composite"] == True].empty
                     for sname in sdf["student_name"].dropna().unique()
                 ))
@@ -3242,7 +3252,7 @@ def render_app(config):
                 for dc in ["first_session_day","most_recent_session","exam_date"]:
                     p_exam[dc] = pd.to_datetime(p_exam[dc], errors="coerce", utc=True)
                 for nc in ["score","act_english","act_math","act_reading","act_science",
-                           "sat_math","sat_rw","test_prep_hours_delivered"]:
+                           "sat_math","sat_rw","attended_test_prep_hours"]:
                     p_exam[nc] = pd.to_numeric(p_exam[nc], errors="coerce")
                 SAT_TYPES_P = {"SAT","Digital SAT","PSAT/NMSQT","Digital PSAT",
                                "Digital PSAT/NMSQT","PSAT","PSAT 8/9"}
@@ -3258,8 +3268,9 @@ def render_app(config):
                             pd.notna(r["act_math"])    and r["act_math"]    >= 10 and
                             pd.notna(r["act_reading"]) and r["act_reading"] >= 10)
                 p_exam["exam_valid_composite"] = p_exam.apply(
-                    lambda r: _sat_ok_p(r) if r["exam_family"] == "SAT/PSAT"
-                              else (_act_ok_p(r) if r["exam_family"] == "ACT" else False), axis=1)
+                    lambda r: (str(r.get("attempt","")) in ("1","1.0") or str(r.get("attempt","")) == "n/a") and (
+                        _sat_ok_p(r) if r["exam_family"] == "SAT/PSAT"
+                        else (_act_ok_p(r) if r["exam_family"] == "ACT" else False)), axis=1)
                 p_exam["is_official"] = p_exam["subject"].str.lower().str.contains("official", na=False)
             except Exception as e:
                 p_exam = pd.DataFrame(); p_errors.append(f"Exams: {e}")
@@ -3569,7 +3580,7 @@ def render_app(config):
             ex_students = p_exam["student_id"].nunique() if "student_id" in p_exam.columns else 0
             valid_ids   = p_exam[p_exam["exam_valid_composite"] == True]["student_id"].unique()
             no_exam_ids = [sid for sid, sdf in p_exam.groupby("student_id")
-                           if sdf["test_prep_hours_delivered"].iloc[0] >= 6
+                           if sdf["attended_test_prep_hours"].iloc[0] >= 6
                            and sdf[sdf["exam_valid_composite"] == True].empty]
             stale_exam_count = 0
             for sid, sdf in p_exam.groupby("student_id"):
@@ -3581,12 +3592,12 @@ def render_app(config):
             # Avg hrs/exam: average of per-student (hrs / completed_exams), matching Test Prep tab
             _hpe_vals = []
             for _sid, _sdf in p_exam.groupby("student_id"):
-                _hrs  = _sdf["test_prep_hours_delivered"].iloc[0]
+                _hrs  = _sdf["attended_test_prep_hours"].iloc[0]
                 _comp = _sdf[_sdf["exam_valid_composite"] == True]["exam_id"].nunique()                         if "exam_id" in _sdf.columns else _sdf[_sdf["exam_valid_composite"] == True].shape[0]
                 if _comp > 0 and pd.notna(_hrs):
                     _hpe_vals.append(_hrs / _comp)
             hrs_per_exam = round(sum(_hpe_vals) / len(_hpe_vals), 1) if _hpe_vals else None
-            total_hrs    = p_exam.groupby("student_id")["test_prep_hours_delivered"].first().sum() if not p_exam.empty else 0
+            total_hrs    = p_exam.groupby("student_id")["attended_test_prep_hours"].first().sum() if not p_exam.empty else 0
             n_completed  = p_exam[p_exam["exam_valid_composite"] == True]["exam_id"].nunique() \
                            if "exam_id" in p_exam.columns else len(valid_ids)
             ec1, ec2, ec3, ec4 = st.columns(4)
@@ -3600,7 +3611,7 @@ def render_app(config):
             ex_rows = []
             for sid, sdf in p_exam.groupby("student_id"):
                 sname       = sdf["student_name"].iloc[0] if "student_name" in sdf.columns else str(sid)
-                hrs         = sdf["test_prep_hours_delivered"].iloc[0]
+                hrs         = sdf["attended_test_prep_hours"].iloc[0]
                 valid       = sdf[sdf["exam_valid_composite"] == True]
                 n_valid     = len(valid)
                 latest_date = pd.to_datetime(valid["exam_date"], utc=True).max() \
@@ -4534,6 +4545,23 @@ def render_app(config):
 
     if page == "Test Prep & Exams":
         st.markdown('<div class="main-title">Test Prep & Exams 📝</div>', unsafe_allow_html=True)
+        with st.expander("ℹ️ About this data"):
+            st.markdown("""
+**For a student to show:**
+- Tutor and student must have **at least 1 attended test prep session in the last 45 days**
+- Have completed **at least 4 hours** of attended test prep tutoring **OR** have had sessions over the course of **4 weeks**
+
+**Notes:**
+- If a tutor doesn't complete subject allocation for a session (e.g. auto-attendance), the session will not be included in completed test prep hours or velocity calculations
+- **Valid exams** are defined as:
+  - Student made an attempt in all sections
+  - On SAT/PSAT: all section scores must be ≥ 300
+  - On ACT: all section scores (except Science) must be ≥ 10
+  - Only **first attempts** of exams count
+- **Baseline exam**: the last valid exam before/on first tutoring session. If none exists, the first valid exam after the first tutoring session is used
+- If test prep is covered in **multiple brands**: hours are combined, session dates use the earliest across all brands, hours remaining is based on the brand with the most hours remaining
+- If test prep is covered in an **Academics session**: it is counted in delivered sessions, but Academics are not included for sessions scheduled in the future
+            """)
 
         st.info(
             "ℹ️ **About this page**\n\n"
@@ -4568,7 +4596,7 @@ def render_app(config):
         for dc in ["first_session_day","most_recent_session","exam_date"]:
             team_exam_df[dc] = pd.to_datetime(team_exam_df[dc], errors="coerce", utc=True)
         for nc in ["score","act_english","act_math","act_reading","act_science",
-                   "sat_math","sat_rw","test_prep_hours_delivered"]:
+                   "sat_math","sat_rw","attended_test_prep_hours"]:
             team_exam_df[nc] = pd.to_numeric(team_exam_df[nc], errors="coerce")
 
         SAT_TYPES = {"SAT","Digital SAT","PSAT/NMSQT","Digital PSAT","Digital PSAT/NMSQT","PSAT","PSAT 8/9"}
@@ -4619,8 +4647,9 @@ def render_app(config):
                 team_exam_df.loc[act_validity.index, col] = act_validity[col]
 
         team_exam_df["exam_valid_composite"] = team_exam_df.apply(
-            lambda r: r["sat_composite_valid"] if r["exam_family"] == "SAT/PSAT"
-                      else (r["act_composite_valid"] if r["exam_family"] == "ACT" else None), axis=1)
+            lambda r: (str(r.get("attempt","")) in ("1","1.0") or str(r.get("attempt","")) == "n/a") and (
+                r["sat_composite_valid"] if r["exam_family"] == "SAT/PSAT"
+                else (r["act_composite_valid"] if r["exam_family"] == "ACT" else False)), axis=1)
 
         def invalidity_reason(r):
             reasons = []
@@ -4652,7 +4681,7 @@ def render_app(config):
             rows = []
             for tutor, tdf in df.groupby("tutor_name"):
                 total_students = tdf["student_id"].nunique()
-                eligible_mask  = tdf.groupby("student_id")["test_prep_hours_delivered"].first() >= 6
+                eligible_mask  = tdf.groupby("student_id")["attended_test_prep_hours"].first() >= 6
                 eligible_ids   = eligible_mask[eligible_mask].index.tolist()
                 no_exam_ids    = []; stale_exam_ids = []
                 for sid in eligible_ids:
@@ -4686,9 +4715,16 @@ def render_app(config):
             fam_df      = fam_df.sort_values("exam_date")
             baseline_df = fam_df[fam_df["exam_date"] <= fsd]
             after_df    = fam_df[fam_df["exam_date"] >  fsd]
-            if baseline_df.empty or after_df.empty:
+            if after_df.empty:
                 return None, None, None, None, None
-            baseline_row    = baseline_df.sort_values("exam_date").iloc[-1]
+            # Baseline: last exam before/on first session, or if none, first exam after
+            if not baseline_df.empty:
+                baseline_row = baseline_df.sort_values("exam_date").iloc[-1]
+            else:
+                baseline_row = after_df.sort_values("exam_date").iloc[0]
+                after_df     = after_df.iloc[1:]  # remove baseline from after
+                if after_df.empty:
+                    return None, None, None, None, None
             official_after  = after_df[after_df["is_official"] == True].dropna(subset=[score_col])
             after_df_valid  = after_df.dropna(subset=[score_col])
             if after_df_valid.empty:
@@ -4706,7 +4742,7 @@ def render_app(config):
             records = []
             for (tutor_id, tutor_name, student_id, student_name), sdf in df.groupby(
                     ["tutor_id","tutor_name","student_id","student_name"]):
-                hours = sdf["test_prep_hours_delivered"].iloc[0]
+                hours = sdf["attended_test_prep_hours"].iloc[0]
                 fsd   = sdf["first_session_day"].iloc[0]
                 mrs   = sdf["most_recent_session"].iloc[0]
                 for fam in ["SAT/PSAT", "ACT"]:
@@ -4900,11 +4936,11 @@ def render_app(config):
         if sel_exam_fam != "All Exam Types":
             view_exam_df = view_exam_df[view_exam_df["exam_family"] == sel_exam_fam]
         if sel_exam_status == "Eligible (6+ hrs) Only":
-            elig_ids     = view_exam_df.groupby("student_id")["test_prep_hours_delivered"].first()
+            elig_ids     = view_exam_df.groupby("student_id")["attended_test_prep_hours"].first()
             view_exam_df = view_exam_df[view_exam_df["student_id"].isin(elig_ids[elig_ids >= 6].index)]
         elif sel_exam_status == "No Completed Exam":
             no_exam_ids  = [sid for sid, sdf in view_exam_df.groupby("student_id")
-                            if sdf["test_prep_hours_delivered"].iloc[0] >= 6
+                            if sdf["attended_test_prep_hours"].iloc[0] >= 6
                             and sdf[sdf["exam_valid_composite"] == True].empty]
             view_exam_df = view_exam_df[view_exam_df["student_id"].isin(no_exam_ids)]
         elif sel_exam_status == "Stale Exam (>90 days)":
@@ -5087,7 +5123,7 @@ def render_app(config):
 
                 detail_e["exam_status"] = detail_e.apply(exam_status_label, axis=1)
                 display_cols_e = [
-                    "tutor_name","student_name","test_prep_hours_delivered",
+                    "tutor_name","student_name","attended_test_prep_hours",
                     "first_session_day","most_recent_session","exam_date",
                     "subject","exam_code","exam_status","score",
                     "act_english","act_math","act_reading","act_science",
@@ -5097,7 +5133,7 @@ def render_app(config):
                 detail_display_e = detail_e[display_cols_e].rename(columns={
                     "tutor_name":               "Tutor",
                     "student_name":             "Student",
-                    "test_prep_hours_delivered":"Hours Delivered",
+                    "attended_test_prep_hours":"Hours Delivered",
                     "first_session_day":        "First Session",
                     "most_recent_session":      "Most Recent Session",
                     "exam_date":                "Exam Date",
