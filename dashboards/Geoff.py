@@ -3778,15 +3778,6 @@ def render_app(config):
     if page == "📹 Parent Update Videos":
         st.markdown('<div class="main-title">📹 Parent Update Videos</div>', unsafe_allow_html=True)
 
-        st.info(
-            "ℹ️ **About this page**\n\n"
-            "Shows whether tutors attached a video to their parent updates for the most recent week. "
-            "Only rows where **Parent Update Sent = True** are included. "
-            "Video duration is captured directly from the video player on the course contact page.\n\n"
-            "**Flags:** Video rate below 80% is flagged red. Videos under 10 seconds or over 5 minutes "
-            "are flagged as suspicious. **Once a week, this data is captured for trend tracking.**",
-            icon=None
-        )
 
         try:
             raw_video_df, video_fetched_at = load_parent_update_videos()
@@ -4090,14 +4081,6 @@ def render_app(config):
     if page == "Grades Summary":
         st.markdown('<div class="main-title">Grades Summary 📝</div>', unsafe_allow_html=True)
 
-        st.info(
-            "ℹ️ **About this page**\n\n"
-            "Shows grade entry health for all active students (those met with in the last 30 days, "
-            "with at least one session already completed). "
-            "Tutors should update grades **at least quarterly** — students with no update in 90+ days are flagged. "
-            "Students who have never had a grade entered are also surfaced.",
-            icon=None
-        )
 
         with st.spinner("Loading live grades data from Redshift..."):
             try:
@@ -4563,17 +4546,6 @@ def render_app(config):
 - If test prep is covered in an **Academics session**: it is counted in delivered sessions, but Academics are not included for sessions scheduled in the future
             """)
 
-        st.info(
-            "ℹ️ **About this page**\n\n"
-            "Shows exam data for all active test-prep students (met with in the last 30 days). "
-            "Students with **6+ hours** of test-prep tutoring should have at least one completed practice exam.\n\n"
-            "**Completion rules:** SAT/PSAT sections < 300 or ACT sections < 10 are invalid.\n\n"
-            "**Score improvement** is measured from the last valid exam *before or on* the first session date "
-            "(or the *first* valid exam after the first session if no prior exam exists) "
-            "to the last or highest completed exam with this tutor.\n\n"
-            "**Once a week, this data is captured and stored for trend tracking.**",
-            icon=None
-        )
 
         with st.spinner("Loading live exam data from Revolution Prep database..."):
             try:
@@ -5124,7 +5096,8 @@ def render_app(config):
 
                 detail_e["exam_status"] = detail_e.apply(exam_status_label, axis=1)
                 display_cols_e = [
-                    "tutor_name","student_name","attended_test_prep_hours",
+                    "tutor_name","student_name","grade_lvl","attended_test_prep_hours",
+                    "attended_velocity","hours_remaining",
                     "first_session_day","most_recent_session","exam_date",
                     "subject","exam_code","exam_status","score",
                     "act_english","act_math","act_reading","act_science",
@@ -5134,7 +5107,10 @@ def render_app(config):
                 detail_display_e = detail_e[display_cols_e].rename(columns={
                     "tutor_name":               "Tutor",
                     "student_name":             "Student",
-                    "attended_test_prep_hours":"Hours Delivered",
+                    "grade_lvl":                "Grade",
+                    "attended_test_prep_hours": "Hours Delivered",
+                    "attended_velocity":        "Hrs/Week",
+                    "hours_remaining":          "Hours Remaining",
                     "first_session_day":        "First Session",
                     "most_recent_session":      "Most Recent Session",
                     "exam_date":                "Exam Date",
