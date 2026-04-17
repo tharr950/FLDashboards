@@ -1444,7 +1444,8 @@ def render_app(config):
         "Grades Summary",
         "Test Prep & Exams",
         "📹 Parent Update Videos",
-        "Archivable Students & Unscheduled Hours"
+        "Archivable Students & Unscheduled Hours",
+        "📋 Annual Reviews",
     ]
     _default_index = _page_options.index(_goto) if _goto in _page_options else 0
     page = st.sidebar.radio("\U0001f4c2 Navigation", _page_options, index=_default_index)
@@ -6157,3 +6158,437 @@ def render_app(config):
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
             else:
                 st.info(f"No Progress Update Emails found for {leader_name}.")
+    # ─────────────────────────────────────────────────────────────────────────
+    # ANNUAL REVIEWS PAGE
+    # ─────────────────────────────────────────────────────────────────────────
+    if page == "📋 Annual Reviews":
+        st.markdown('<div class="main-title">📋 Annual Reviews</div>', unsafe_allow_html=True)
+
+        # IN PROGRESS banner
+        st.warning("⚠️ **This page is currently IN PROGRESS.** Data and layout are not finalized — please do not use this for reviews yet.", icon="🚧")
+
+        # ── Date ranges (hardcoded) ──────────────────────────────────────────
+        AR_12M_START = "2025-04-17"
+        AR_12M_END   = "2026-04-17"
+        AR_3M_START  = "2026-01-17"
+        AR_3M_END    = "2026-04-17"
+
+        st.caption(f"📅 12-month period: **{AR_12M_START}** to **{AR_12M_END}** | 3-month period: **{AR_3M_START}** to **{AR_3M_END}**")
+
+        # ── Tutor selector ───────────────────────────────────────────────────
+        ar_tutor = st.selectbox("Select Tutor", ["— Select —"] + sorted(annelies_tutors), key="ar_tutor_select")
+        if ar_tutor == "— Select —":
+            st.info("Select a tutor above to load their annual review.")
+            st.stop()
+
+        st.divider()
+
+        # ── Load KPI data from Redshift ──────────────────────────────────────
+        @st.cache_data(ttl=3600)
+        def load_ar_kpi(start, end):
+            conn = get_redshift_connection()
+            query = f"""
+                WITH time_period AS (
+                    SELECT '{start}'::date AS day_start, '{end}'::date AS day_end
+                ),
+                cte_sessions AS (
+                    SELECT id as session_id, starts_at, launched_at, supervisor_id, duration, course_id,
+                        DATEDIFF(minute, starts_at, launched_at) minutes_launched_late,
+                        attendances_attended_count,
+                        CASE WHEN automatic_attendance IS TRUE THEN 1 ELSE 0 END AS automatic_attendance
+                    FROM dw.sessions
+                    WHERE sessions.starts_at >= (SELECT day_start FROM time_period)
+                      AND sessions.starts_at < (SELECT day_end FROM time_period)
+                ),
+                cte_deliveries AS (
+                    SELECT employee_id, first_day_of_week_sunday_start AS first_day_of_week,
+                        instruction_actual AS delivery, instruction_target AS delivery_target,
+                        CASE WHEN instruction_actual >= instruction_target THEN 1 ELSE 0 END AS meeting_target,
+                        availability_target
+                    FROM rp_bi.tutor_capacity
+                    WHERE first_day_of_week_sunday_start >= (SELECT day_start FROM time_period)
+                      AND first_day_of_week_sunday_start < (SELECT day_end FROM time_period)
+                ),
+                cte_availabilities AS (
+                    SELECT employee_id, first_day_of_week_sunday_start AS first_day_of_week,
+                        SUM(availability_hours) AS availability
+                    FROM rp_bi.tutor_availabilities_weekly
+                    WHERE first_day_of_week_sunday_start >= (SELECT day_start FROM time_period)
+                      AND first_day_of_week_sunday_start < (SELECT day_end FROM time_period)
+                    GROUP BY employee_id, first_day_of_week_sunday_start
+                ),
+                cte_sessiondelivery AS (
+                    SELECT supervisor_id AS employee_id,
+                        (SUM(duration)/60.0) AS delivery_hours,
+                        COUNT(launched_at)*1.0 AS launched_sessions,
+                        COUNT(DISTINCT course_id) AS course_count
+                    FROM cte_sessions GROUP BY supervisor_id
+                ),
+                cte_ontime AS (
+                    SELECT supervisor_id AS employee_id,
+                        COUNT(DISTINCT session_id)*1.0 AS ontime_sessions
+                    FROM cte_sessions WHERE minutes_launched_late < 2
+                    GROUP BY supervisor_id
+                ),
+                weekly_sessions AS (
+                    SELECT s.id AS session_id, s.starts_at AS session_start,
+                        d.first_day_of_week_sunday_start, s.attendances_attended_count,
+                        c.id AS course_id, b.name AS brand_name, st.id AS student_id,
+                        s.supervisor_id,
+                        CASE WHEN b.name = 'Trial' THEN s.id
+                             WHEN b.name IN ('Group Course','Small Group Course','Boot Camp','SGC','Boot Camps') THEN c.id
+                             ELSE st.id END AS update_unit_id,
+                        CASE WHEN s.attendances_attended_count > 0 THEN 1 ELSE 0 END AS update_required_flag
+                    FROM dw.sessions s
+                    JOIN dw.courses c ON s.course_id = c.id
+                    JOIN dw.brands b ON b.id = c.brand_id
+                    JOIN dw.enrollments en ON en.course_id = c.id
+                    JOIN dw.students st ON st.id = en.enrollee_id
+                    JOIN rp_bi.dates d ON s.starts_at::date = d.full_date
+                    WHERE s.starts_at::date >= (SELECT day_start FROM time_period)
+                      AND s.starts_at::date < (SELECT day_end FROM time_period)
+                      AND b.name NOT IN ('Special Events','Seminar','Professional Development',
+                          '1-on-1 Meetings','Group Meetings','Special Event','Self Study','Parent Event')
+                ),
+                updates_sent AS (
+                    SELECT DISTINCT ca.employee_id, s.course_id, d.first_day_of_week_sunday_start
+                    FROM dw.contact_activities ca
+                    JOIN dw.sessions s ON ca.regarding_id = s.id
+                    JOIN rp_bi.dates d ON ca.created_at::date = d.full_date
+                    WHERE ca.type = 'Contact::Message'
+                      AND ca.message_type IN ('Parent Update','Progress Update')
+                      AND ca.regarding_type = 'Session'
+                      AND ca.created_at::date >= (SELECT day_start FROM time_period)
+                      AND ca.created_at::date < (SELECT day_end FROM time_period)
+                    UNION ALL
+                    SELECT DISTINCT ca.employee_id, ca.regarding_id AS course_id, d.first_day_of_week_sunday_start
+                    FROM dw.contact_activities ca
+                    JOIN rp_bi.dates d ON CAST(ca.created_at AS DATE) = d.full_date
+                    WHERE ca.type = 'Contact::Message'
+                      AND ca.message_type IN ('Parent Update','Progress Update')
+                      AND ca.regarding_type = 'Course'
+                      AND CAST(ca.created_at AS DATE) >= (SELECT day_start FROM time_period)
+                      AND CAST(ca.created_at AS DATE) < (SELECT day_end FROM time_period)
+                ),
+                tutor_updates AS (
+                    SELECT ws.supervisor_id, ws.first_day_of_week_sunday_start AS week,
+                        COUNT(DISTINCT CASE WHEN ws.update_required_flag = 1 THEN ws.update_unit_id END) AS updates_required,
+                        COUNT(DISTINCT CASE WHEN ws.update_required_flag = 1 AND us.course_id IS NOT NULL THEN ws.update_unit_id END) AS updates_sent_on_time
+                    FROM weekly_sessions ws
+                    LEFT JOIN updates_sent us ON ws.course_id = us.course_id
+                        AND ws.supervisor_id = us.employee_id
+                        AND ws.first_day_of_week_sunday_start = us.first_day_of_week_sunday_start
+                    GROUP BY ws.supervisor_id, ws.first_day_of_week_sunday_start
+                ),
+                cte_parent_updates AS (
+                    SELECT supervisor_id,
+                        ROUND((SUM(updates_sent_on_time::decimal) / NULLIF(SUM(updates_required),0)), 3) AS percent_parent_updates
+                    FROM tutor_updates WHERE updates_required >= 0
+                    GROUP BY supervisor_id
+                ),
+                cte_NPS AS (
+                    SELECT employees.id AS tutor_id,
+                        COUNT(DISTINCT nps_histories.id) AS number_of_nps,
+                        SUM(nps_histories.score*1.0)/COUNT(DISTINCT nps_histories.id)*1.0 AS avg_nps_score
+                    FROM dw.nps_histories
+                    JOIN dw.employees ON employees.id = nps_histories.tutor_id
+                    WHERE nps_histories.created_at >= (SELECT day_start FROM time_period)
+                      AND nps_histories.created_at < (SELECT day_end FROM time_period)
+                    GROUP BY employees.id
+                ),
+                cte_prep1 AS (
+                    SELECT cte_sessions.supervisor_id AS tutor_id, cte_sessions.starts_at,
+                        brands.name AS category,
+                        CASE WHEN cte_sessions.attendances_attended_count = 0 THEN 'PrepTime' ELSE 'Attended Session' END AS type,
+                        cte_sessions.duration/60.0 AS duration_hours,
+                        dates.first_day_of_week_sunday_start AS week_of
+                    FROM cte_sessions
+                    JOIN rp_bi.dates ON (datepart(year,cte_sessions.starts_at)=dates.year
+                        AND datepart(month,cte_sessions.starts_at)=dates.month
+                        AND datepart(day,cte_sessions.starts_at)=dates.day)
+                    JOIN dw.courses ON cte_sessions.course_id = courses.id
+                    JOIN dw.brands ON courses.brand_id = brands.id
+                    UNION ALL
+                    SELECT events.attendee_id, events.starts_at, events.category,
+                        REPLACE(events.type,'Event::',''), events.duration/60.0,
+                        dates.first_day_of_week_sunday_start
+                    FROM dw.events
+                    JOIN rp_bi.dates ON (datepart(year,events.starts_at)=dates.year
+                        AND datepart(month,events.starts_at)=dates.month
+                        AND datepart(day,events.starts_at)=dates.day)
+                    WHERE events.starts_at >= (SELECT day_start FROM time_period)
+                      AND events.starts_at < (SELECT day_end FROM time_period)
+                      AND events.category IN ('Session Preparation','Email or Slack Communication')
+                ),
+                cte_prep2 AS (
+                    SELECT tutor_id,
+                        CASE WHEN type='PrepTime' THEN SUM(duration_hours) ELSE NULL END AS Total_Prep,
+                        CASE WHEN type='Attended Session' THEN SUM(duration_hours) ELSE NULL END AS Attended_Sessions
+                    FROM cte_prep1 GROUP BY tutor_id, type
+                )
+                SELECT DISTINCT
+                    dw.employees.id,
+                    tutor_users.first_name||' '||tutor_users.last_name AS tutor_name,
+                    dw.tiers.name AS tier,
+                    dw.employees.skill_score AS current_sci,
+                    manager_users.first_name||' '||manager_users.last_name AS fl_name,
+                    DATE(dw.employees.hire_date) AS hire_date,
+                    dw.employees.delivery_target,
+                    ROUND(AVG(cte_deliveries.delivery),2) AS avg_delivery,
+                    ROUND(AVG(cte_deliveries.delivery)/(dw.employees.delivery_target),4) AS delivery_pct,
+                    COUNT(DISTINCT CASE WHEN cte_deliveries.meeting_target=1 THEN cte_deliveries.first_day_of_week END) AS weeks_at_target,
+                    ROUND(AVG(cte_availabilities.availability),2) AS avg_availability,
+                    ROUND(AVG(cte_availabilities.availability)/(dw.employees.availability_target),4) AS availability_pct,
+                    (cte_ontime.ontime_sessions/cte_sessiondelivery.launched_sessions)*1.00 AS sessions_on_time_pct,
+                    cte_parent_updates.percent_parent_updates AS parent_update_pct,
+                    cte_NPS.number_of_nps,
+                    CASE WHEN cte_NPS.number_of_nps>0 THEN cte_NPS.avg_nps_score END AS avg_nps,
+                    COUNT(DISTINCT CASE WHEN cte_sessions.automatic_attendance=1 THEN cte_sessions.session_id END) AS autoattendance_sessions,
+                    CASE WHEN MAX(cte_prep2.Attended_Sessions)>0
+                        THEN MAX(cte_prep2.Total_Prep)/MAX(cte_prep2.Attended_Sessions) END AS prep_time_ratio
+                FROM dw.employees
+                JOIN dw.users tutor_users ON employees.user_id = tutor_users.id
+                JOIN dw.tiers ON employees.tier_id = tiers.id
+                JOIN dw.team_members ON employees.id = team_members.member_id
+                JOIN dw.teams ON team_members.team_id = teams.id
+                JOIN dw.employees managers ON teams.manager_id = managers.id
+                JOIN dw.users manager_users ON managers.user_id = manager_users.id
+                LEFT JOIN cte_sessions ON employees.id = cte_sessions.supervisor_id
+                LEFT JOIN cte_ontime ON employees.id = cte_ontime.employee_id
+                LEFT JOIN cte_sessiondelivery ON employees.id = cte_sessiondelivery.employee_id
+                LEFT JOIN cte_parent_updates ON employees.id = cte_parent_updates.supervisor_id
+                LEFT JOIN cte_deliveries ON employees.id = cte_deliveries.employee_id
+                LEFT JOIN cte_availabilities ON employees.id = cte_availabilities.employee_id
+                LEFT JOIN cte_NPS ON cte_NPS.tutor_id = employees.id
+                LEFT JOIN cte_prep2 ON employees.id = cte_prep2.tutor_id
+                WHERE employees.end_date IS NULL
+                  AND employees.delivery_target > 0
+                  AND employees.type = 'Tutor'
+                  AND tutor_users.title = 'Tutor'
+                GROUP BY employees.id, tutor_users.first_name, tutor_users.last_name,
+                    dw.tiers.name, employees.skill_score, manager_users.first_name, manager_users.last_name,
+                    employees.hire_date, employees.delivery_target, cte_ontime.ontime_sessions,
+                    cte_sessiondelivery.launched_sessions, cte_nps.number_of_nps, cte_nps.avg_nps_score,
+                    employees.availability_target, cte_parent_updates.percent_parent_updates
+            """
+            try:
+                df = pd.read_sql(query, conn)
+            finally:
+                conn.close()
+            return df
+
+        with st.spinner("Loading annual review data..."):
+            try:
+                ar_12m = load_ar_kpi(AR_12M_START, AR_12M_END)
+                ar_3m  = load_ar_kpi(AR_3M_START,  AR_3M_END)
+            except Exception as e:
+                st.error(f"Could not load annual review data: {e}")
+                st.stop()
+
+        # Get tutor rows
+        t12 = ar_12m[ar_12m["tutor_name"] == ar_tutor]
+        t3  = ar_3m[ar_3m["tutor_name"]   == ar_tutor]
+        if t12.empty:
+            st.warning(f"No annual review data found for {ar_tutor}.")
+            st.stop()
+
+        t12r = t12.iloc[0]
+        t3r  = t3.iloc[0] if not t3.empty else None
+
+        # Peer group: same tier + delivery target
+        tier_val   = t12r["tier"]
+        del_target = t12r["delivery_target"]
+        peers_12m  = ar_12m[(ar_12m["tier"] == tier_val) & (ar_12m["delivery_target"] == del_target)]
+        peers_3m   = ar_3m[(ar_3m["tier"]   == tier_val) & (ar_3m["delivery_target"]  == del_target)]
+        all_12m    = ar_12m.copy()
+
+        def fmt_pct(v, decimals=1):
+            if v is None or pd.isna(v): return "—"
+            return f"{float(v)*100:.{decimals}f}%"
+
+        def fmt_num(v, decimals=1):
+            if v is None or pd.isna(v): return "—"
+            return f"{float(v):.{decimals}f}"
+
+        def peer_avg(df, col):
+            if col not in df.columns or df[col].dropna().empty: return None
+            return df[col].dropna().mean()
+
+        def ar_metric_row(label, tutor_12m, tutor_3m, peer_12m_val=None, peer_3m_val=None,
+                          target=None, fmt=fmt_pct, higher_is_better=True):
+            """Render a metric row with 12m, 3m, peer comparisons."""
+            cols = st.columns([2,1,1,1,1])
+            cols[0].markdown(f"**{label}**")
+            cols[1].markdown(fmt(tutor_12m))
+            cols[2].markdown(fmt(tutor_3m))
+            if peer_12m_val is not None:
+                delta_12 = (float(tutor_12m) - float(peer_12m_val)) if tutor_12m and not pd.isna(tutor_12m) else None
+                arrow = ("🟢" if (delta_12 > 0) == higher_is_better else "🔴") if delta_12 is not None else ""
+                cols[3].markdown(f"{fmt(peer_12m_val)} {arrow}")
+            else:
+                cols[3].markdown(f"{fmt(target) if target else '—'} *(target)*" if target else "—")
+            cols[4].markdown(fmt(peer_3m_val) if peer_3m_val is not None else "—")
+
+        # ── Header row ──────────────────────────────────────────────────────
+        st.markdown(f"### {ar_tutor} — Annual Review")
+        st.caption(f"Tier: **{tier_val}** | Delivery Target: **{del_target}h/wk** | Peer group size: **{len(peers_12m)}** tutors")
+        hc = st.columns([2,1,1,1,1])
+        hc[0].markdown("**Metric**")
+        hc[1].markdown("**12-Month**")
+        hc[2].markdown("**3-Month**")
+        hc[3].markdown("**Peer Avg (12M)**")
+        hc[4].markdown("**Peer Avg (3M)**")
+        st.divider()
+
+        # ── 1. Sessions Launched on Time ─────────────────────────────────────
+        st.markdown("#### 1. Sessions Launched on Time")
+        ar_metric_row("% On Time",
+            t12r.get("sessions_on_time_pct"), t3r.get("sessions_on_time_pct") if t3r is not None else None,
+            target=0.90, higher_is_better=True)
+        st.caption("Target: 90%+. Not compared to peers.")
+        st.divider()
+
+        # ── 2. Parent Updates Sent on Time ───────────────────────────────────
+        st.markdown("#### 2. Parent Updates Sent on Time")
+        ar_metric_row("% Sent on Time",
+            t12r.get("parent_update_pct"), t3r.get("parent_update_pct") if t3r is not None else None,
+            target=0.90, higher_is_better=True)
+        st.caption("Target: 90%+. Not compared to peers.")
+        st.divider()
+
+        # ── 3. Prep Time Percentage ──────────────────────────────────────────
+        st.markdown("#### 3. Prep Time Percentage")
+        ar_metric_row("Prep Time Ratio (prep hrs / attended hrs)",
+            t12r.get("prep_time_ratio"), t3r.get("prep_time_ratio") if t3r is not None else None,
+            peer_12m_val=peer_avg(peers_12m, "prep_time_ratio"),
+            peer_3m_val=peer_avg(peers_3m, "prep_time_ratio"),
+            fmt=fmt_num, higher_is_better=True)
+        st.caption(f"Compared to {len(peers_12m)} peers with same tier ({tier_val}) and delivery target ({del_target}h/wk).")
+        st.divider()
+
+        # ── 4. Cancellations by Tutor ────────────────────────────────────────
+        st.markdown("#### 4. Cancellations by Tutor")
+        st.info("🚧 Coming soon — cancellation data will be added in a future update.")
+        st.divider()
+
+        # ── 5. Exams Data ────────────────────────────────────────────────────
+        st.markdown("#### 5. Exams Data")
+        st.info("🚧 Coming soon — exam tracking data will be added in a future update.")
+        st.divider()
+
+        # ── 6. Grades Data ───────────────────────────────────────────────────
+        st.markdown("#### 6. Grades Data")
+        st.info("🚧 Coming soon — grades tracking data will be added in a future update.")
+        st.divider()
+
+        # ── 7. Rematches ─────────────────────────────────────────────────────
+        st.markdown("#### 7. Rematches")
+        st.info("🚧 Coming soon — rematch data will be added in a future update.")
+        st.divider()
+
+        # ── 8. Weighted Repurchase ───────────────────────────────────────────
+        st.markdown("#### 8. Weighted Repurchase")
+        st.info("🚧 Coming soon — weighted repurchase data will be added in a future update.")
+        st.divider()
+
+        # ── 9. Archivable Students ───────────────────────────────────────────
+        st.markdown("#### 9. Archivable Students")
+        st.info("🚧 Coming soon — archivable student data will be added in a future update.")
+        st.divider()
+
+        # ── 10. Unscheduled Hours ────────────────────────────────────────────
+        st.markdown("#### 10. Unscheduled Hours")
+        st.info("🚧 Coming soon — unscheduled hours data will be added in a future update.")
+        st.divider()
+
+        # ── 11. Auto-Attendance ──────────────────────────────────────────────
+        st.markdown("#### 11. Auto-Attendance")
+        aa_12 = t12r.get("autoattendance_sessions")
+        aa_3  = t3r.get("autoattendance_sessions") if t3r is not None else None
+        aa_peer_12 = peer_avg(all_12m, "autoattendance_sessions")
+        ac = st.columns([2,1,1,1,1])
+        ac[0].markdown("**Auto-attendance Sessions**")
+        ac[1].markdown(fmt_num(aa_12, 0))
+        ac[2].markdown(fmt_num(aa_3, 0))
+        ac[3].markdown(f"{fmt_num(aa_peer_12, 1)} *(all tutors avg)*")
+        ac[4].markdown("—")
+        st.caption("Compared to all tutors. Lower is better.")
+        st.divider()
+
+        # ── 12. NPS ──────────────────────────────────────────────────────────
+        st.markdown("#### 12. NPS")
+        nc = st.columns([2,1,1,1,1])
+        nc[0].markdown("**Avg NPS Score**")
+        nc[1].markdown(fmt_num(t12r.get("avg_nps"), 2))
+        nc[2].markdown(fmt_num(t3r.get("avg_nps") if t3r is not None else None, 2))
+        nc[3].markdown("—")
+        nc[4].markdown("—")
+        nc2 = st.columns([2,1,1,1,1])
+        nc2[0].markdown("**# NPS Responses**")
+        nc2[1].markdown(fmt_num(t12r.get("number_of_nps"), 0))
+        nc2[2].markdown(fmt_num(t3r.get("number_of_nps") if t3r is not None else None, 0))
+        nc2[3].markdown("—")
+        nc2[4].markdown("—")
+        st.caption("NPS scores and individual survey details not compared to peers.")
+        st.info("🚧 Individual NPS survey scores and comments coming soon.")
+        st.divider()
+
+        # ── 13. Parent Update Video ──────────────────────────────────────────
+        st.markdown("#### 13. Parent Update Video")
+        st.info("🚧 Coming soon — parent update video data will be added in a future update.")
+        st.divider()
+
+        # ── 14. Parent Update Mentioning Homework ────────────────────────────
+        st.markdown("#### 14. Parent Update Mentioning Homework")
+        st.info("🚧 Coming soon — homework mention data will be added in a future update.")
+        st.divider()
+
+        # ── 15. Progress Updates ─────────────────────────────────────────────
+        st.markdown("#### 15. Progress Updates")
+        st.info("🚧 Coming soon — progress update data will be added in a future update.")
+        st.divider()
+
+        # ── 16. Current SCI ──────────────────────────────────────────────────
+        st.markdown("#### 16. Current SCI")
+        sci_peers = peer_avg(peers_12m, "current_sci")
+        sc = st.columns([2,1,1,1,1])
+        sc[0].markdown("**Current SCI Score**")
+        sc[1].markdown(fmt_num(t12r.get("current_sci"), 1))
+        sc[2].markdown("—")
+        sc[3].markdown(f"{fmt_num(sci_peers, 1)} *(same tier)*")
+        sc[4].markdown("—")
+        st.caption(f"Compared to {len(peers_12m)} peers in same tier ({tier_val}).")
+        st.divider()
+
+        # ── 17. SCI Growth ───────────────────────────────────────────────────
+        st.markdown("#### 17. SCI Growth")
+        st.info("🚧 Coming soon — SCI growth over time will be added in a future update.")
+        st.divider()
+
+        # ── 18. Availability Percentage ──────────────────────────────────────
+        st.markdown("#### 18. Availability Percentage")
+        ar_metric_row("% Availability",
+            t12r.get("availability_pct"), t3r.get("availability_pct") if t3r is not None else None,
+            target=None, higher_is_better=True)
+        st.caption("Target varies based on whether delivery target is met. Not compared to peers.")
+        st.divider()
+
+        # ── 19. Delivery Percentage ───────────────────────────────────────────
+        st.markdown("#### 19. Delivery Percentage")
+        ar_metric_row("% of Delivery Target Met",
+            t12r.get("delivery_pct"), t3r.get("delivery_pct") if t3r is not None else None,
+            peer_12m_val=peer_avg(peers_12m, "delivery_pct"),
+            peer_3m_val=peer_avg(peers_3m, "delivery_pct"),
+            higher_is_better=True)
+        st.caption(f"Compared to {len(peers_12m)} peers with same tier ({tier_val}) and delivery target ({del_target}h/wk).")
+        st.divider()
+
+        # ── 20. Delivery Times Meeting Target ────────────────────────────────
+        st.markdown("#### 20. Weeks Meeting Delivery Target")
+        wc = st.columns([2,1,1,1,1])
+        wc[0].markdown("**Weeks at Target**")
+        wc[1].markdown(fmt_num(t12r.get("weeks_at_target"), 0))
+        wc[2].markdown(fmt_num(t3r.get("weeks_at_target") if t3r is not None else None, 0))
+        wc[3].markdown(f"{fmt_num(peer_avg(peers_12m, 'weeks_at_target'), 1)} *(peer avg)*")
+        wc[4].markdown(f"{fmt_num(peer_avg(peers_3m, 'weeks_at_target'), 1)} *(peer avg)*")
+        st.caption(f"Compared to {len(peers_12m)} peers with same tier ({tier_val}) and delivery target ({del_target}h/wk).")
