@@ -6185,6 +6185,18 @@ def render_app(config):
 
         # ── Load KPI data from Redshift ──────────────────────────────────────
         @st.cache_data(ttl=3600)
+        def load_ar_from_github(filename):
+            """Load AR data from GitHub CSV (synced nightly)."""
+            token = st.secrets["github"]["token"]
+            repo  = st.secrets["github"]["repo"]
+            url   = f"https://raw.githubusercontent.com/{repo}/main/data/{filename}"
+            import requests, io
+            resp = requests.get(url, headers={"Authorization": f"token {token}"})
+            if resp.status_code == 200:
+                return pd.read_csv(io.StringIO(resp.text))
+            return pd.DataFrame()
+
+        @st.cache_data(ttl=3600)
         def load_ar_kpi(start, end):
             conn = get_redshift_connection()
             query = f"""
@@ -6377,13 +6389,42 @@ def render_app(config):
                 conn.close()
             return df
 
-        with st.spinner("Loading annual review data..."):
-            try:
-                ar_12m = load_ar_kpi(AR_12M_START, AR_12M_END)
-                ar_3m  = load_ar_kpi(AR_3M_START,  AR_3M_END)
-            except Exception as e:
-                st.error(f"Could not load annual review data: {e}")
+        if "ar_data_loaded" not in st.session_state:
+            st.session_state["ar_data_loaded"] = False
+
+        # Try loading from GitHub CSV first (fast), fall back to live Redshift
+        if not st.session_state["ar_data_loaded"]:
+            _gh_12m = load_ar_from_github("ar_data_12m.csv")
+            _gh_3m  = load_ar_from_github("ar_data_3m.csv")
+            if not _gh_12m.empty and not _gh_3m.empty:
+                st.session_state["ar_12m"] = _gh_12m
+                st.session_state["ar_3m"]  = _gh_3m
+                st.session_state["ar_data_loaded"] = True
+                st.session_state["ar_source"] = "github"
+
+        if not st.session_state["ar_data_loaded"]:
+            st.info("📊 Pre-cached data not available yet. Click below to load live from Redshift (may take 30-60s).")
+            if st.button("📥 Load Annual Review Data", key="ar_load_btn"):
+                with st.spinner("Loading annual review data..."):
+                    try:
+                        st.session_state["ar_12m"] = load_ar_kpi(AR_12M_START, AR_12M_END)
+                        st.session_state["ar_3m"]  = load_ar_kpi(AR_3M_START,  AR_3M_END)
+                        st.session_state["ar_data_loaded"] = True
+                        st.session_state["ar_source"] = "live"
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Could not load annual review data: {e}")
+                        st.stop()
+            else:
                 st.stop()
+
+        ar_12m = st.session_state["ar_12m"]
+        ar_3m  = st.session_state["ar_3m"]
+        ar_source = st.session_state.get("ar_source","unknown")
+        if ar_source == "github":
+            st.caption("📦 Data loaded from nightly cache.")
+        else:
+            st.caption("🔴 Data loaded live from Redshift.")
 
         # Get tutor rows
         t12 = ar_12m[ar_12m["tutor_name"] == ar_tutor]
