@@ -547,28 +547,34 @@ def save_exams_weekly_snapshot(df):
     return updated
 
 
-def save_video_weekly_snapshot(video_summary_df):
+def save_video_weekly_snapshot(video_summary_df, raw_video_df=None):
     """Save per-tutor weekly video metrics snapshot."""
-    today    = pd.Timestamp.now()
-    # Use week_date from the video data itself so it matches the sync script's week_start
-    if "week of" in video_summary_df.columns and not video_summary_df["week of"].dropna().empty:
-        week_date = pd.to_datetime(video_summary_df["week of"].dropna().iloc[0]).strftime("%Y-%m-%d")
-    else:
-        # fallback: previous Sunday
+    # Get week_date from raw video data (most reliable source)
+    week_date = None
+    if raw_video_df is not None and "week of" in raw_video_df.columns:
+        vals = raw_video_df["week of"].dropna()
+        if not vals.empty:
+            week_date = pd.to_datetime(vals.iloc[0]).strftime("%Y-%m-%d")
+    if week_date is None and "week of" in video_summary_df.columns:
+        vals = video_summary_df["week of"].dropna()
+        if not vals.empty:
+            week_date = pd.to_datetime(vals.iloc[0]).strftime("%Y-%m-%d")
+    if week_date is None:
+        # Should never happen, but fallback to previous Sunday
+        today = pd.Timestamp.now()
         days_back = (today.dayofweek + 1) % 7 or 7
         week_date = (today - pd.to_timedelta(days_back, unit="d")).strftime("%Y-%m-%d")
-    week_key  = pd.Timestamp(week_date).strftime("%Y-W%V")
+    week_key = pd.Timestamp(week_date).strftime("%Y-W%V")
     existing = gh_read(VIDEO_SNAPSHOT_FILE)
     summary = video_summary_df.copy()
     summary["week_key"]  = week_key
     summary["week_date"] = week_date
     if not existing.empty and week_key in existing["week_key"].values:
-        # Only overwrite if new data has more total videos (i.e. sync has run)
+        # Only overwrite if new data has more total videos
         new_total = summary["videos_found"].sum() if "videos_found" in summary.columns else 0
         old_total = existing[existing["week_key"] == week_key]["videos_found"].sum()                     if "videos_found" in existing.columns else 0
         if new_total <= old_total:
             return existing
-        # Remove old week and replace with fresh data
         existing = existing[existing["week_key"] != week_key]
     updated = pd.concat([existing, summary], ignore_index=True) if not existing.empty else summary
     gh_write(VIDEO_SNAPSHOT_FILE, updated)
@@ -1628,7 +1634,7 @@ def render_app(config):
 
         # Save weekly video snapshot
         if not home_video_summary_df.empty:
-            save_video_weekly_snapshot(home_video_summary_df)
+            save_video_weekly_snapshot(home_video_summary_df, raw_video_df=home_video_df)
 
         # Login snapshot
         if "login_snapshot_saved" not in st.session_state:
