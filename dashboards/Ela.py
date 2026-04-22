@@ -6657,31 +6657,24 @@ def render_app(config):
             if tutor_es.empty:
                 st.info(f"No exam data found for {ar_tutor}.")
                 return
-            all_latest   = ar_exam_snap.sort_values("week_date").groupby("tutor_name").last().reset_index()
-            all_avg_pct  = all_latest["pct_eligible_with_exam"].mean() if "pct_eligible_with_exam" in all_latest.columns else None
-            all_avg_none = all_latest["students_no_exam"].mean() if "students_no_exam" in all_latest.columns else None
+            all_latest  = ar_exam_snap.sort_values("week_date").groupby("tutor_name").last().reset_index()
+            all_avg_pct = all_latest["pct_eligible_with_exam"].mean() if "pct_eligible_with_exam" in all_latest.columns else None
 
-            latest     = tutor_es.iloc[-1]
-            tutor_avg  = tutor_es["pct_eligible_with_exam"].mean()
-            d, dc      = ar_delta_num(tutor_avg, all_avg_pct, higher_is_better=True, label="vs all-tutor avg")
+            latest   = tutor_es.iloc[-1]
+            prev     = tutor_es.iloc[-2] if len(tutor_es) >= 2 else None
+            lat_pct  = latest["pct_eligible_with_exam"]
+            prev_pct = prev["pct_eligible_with_exam"] if prev is not None else None
+            d_peer, dc_peer = ar_delta_num(lat_pct, all_avg_pct, higher_is_better=True, label="vs all-tutor avg")
+            d_prev, dc_prev = ar_delta_num(lat_pct, prev_pct, higher_is_better=True, label="vs prev week")                               if prev_pct is not None else (None, "off")
 
             c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Most Recent % With Exam",  f"{latest['pct_eligible_with_exam']:.1f}%")
-            c2.metric("Avg % (all weeks)",         f"{tutor_avg:.1f}%", delta=d, delta_color=dc)
-            c3.metric("All-Tutor Avg %",           f"{all_avg_pct:.1f}%" if all_avg_pct else "—")
-            c4.metric("# No Exam (now)",           fmt_num(latest["students_no_exam"], 0))
-
-            if len(tutor_es) >= 2:
-                fig_e = px.line(tutor_es, x="week_date", y="pct_eligible_with_exam",
-                                markers=True, title="% Eligible Students With Exam — Week over Week",
-                                color_discrete_sequence=["#1565c0"])
-                fig_e.update_layout(height=250, margin=dict(l=20,r=20,t=40,b=20),
-                                    xaxis_title="", yaxis_title="%",
-                                    title=dict(x=0.5, xanchor="center"))
-                st.plotly_chart(fig_e, use_container_width=True)
-            else:
-                st.caption("Not enough weeks of data for a trend chart yet.")
-            st.caption("% of eligible test-prep students with at least one recorded exam. Compared to all tutors.")
+            c1.metric("% With Exam (now)",    f"{lat_pct:.1f}%", delta=d_prev, delta_color=dc_prev)
+            c2.metric("# No Exam (now)",       fmt_num(latest["students_no_exam"], 0))
+            c3.metric("All-Tutor Avg %",       f"{all_avg_pct:.1f}%" if all_avg_pct else "—")
+            c4.metric("# Stale Exam (now)",    fmt_num(latest.get("students_stale_exam"), 0))
+            if prev is not None:
+                st.caption(f"Previous week: {prev_pct:.1f}% — week of {prev['week_date'].strftime('%b %d') if hasattr(prev['week_date'], 'strftime') else prev['week_date']}")
+            st.caption("% of eligible test-prep students with at least one recorded exam. Compared to all tutors. *(Full trend history accumulating weekly.)*")
         ar_card(5, "Exams Data", _s5)
 
         # ── 6. Grades Data ───────────────────────────────────────────────────
@@ -6693,31 +6686,24 @@ def render_app(config):
             if tutor_gs.empty:
                 st.info(f"No grades data found for {ar_tutor}.")
                 return
-            all_latest      = ar_grades_snap.sort_values("week_date").groupby("tutor_name").last().reset_index()
-            all_avg_graded  = all_latest["pct_subjects_graded"].mean() if "pct_subjects_graded" in all_latest.columns else None
-            all_avg_stale   = all_latest["stale_grade_students"].mean() if "stale_grade_students" in all_latest.columns else None
+            all_latest     = ar_grades_snap.sort_values("week_date").groupby("tutor_name").last().reset_index()
+            all_avg_graded = all_latest["pct_subjects_graded"].mean() if "pct_subjects_graded" in all_latest.columns else None
 
-            latest        = tutor_gs.iloc[-1]
-            tutor_avg_pct = tutor_gs["pct_subjects_graded"].mean()
-            d, dc         = ar_delta_num(tutor_avg_pct, all_avg_graded, higher_is_better=True, label="vs all-tutor avg")
+            latest   = tutor_gs.iloc[-1]
+            prev     = tutor_gs.iloc[-2] if len(tutor_gs) >= 2 else None
+            lat_pct  = latest["pct_subjects_graded"]
+            prev_pct = prev["pct_subjects_graded"] if prev is not None else None
+            d_peer, dc_peer = ar_delta_num(lat_pct, all_avg_graded, higher_is_better=True, label="vs all-tutor avg")
+            d_prev, dc_prev = ar_delta_num(lat_pct, prev_pct, higher_is_better=True, label="vs prev week")                               if prev_pct is not None else (None, "off")
 
             c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Most Recent % Graded",  f"{latest['pct_subjects_graded']:.1f}%")
-            c2.metric("Avg % (all weeks)",      f"{tutor_avg_pct:.1f}%", delta=d, delta_color=dc)
-            c3.metric("All-Tutor Avg %",        f"{all_avg_graded:.1f}%" if all_avg_graded else "—")
-            c4.metric("Stale Grades (now)",     fmt_num(latest["stale_grade_students"], 0))
-
-            if len(tutor_gs) >= 2:
-                fig_g = px.line(tutor_gs, x="week_date", y="pct_subjects_graded",
-                                markers=True, title="% Subjects Graded — Week over Week",
-                                color_discrete_sequence=["#2e7d32"])
-                fig_g.update_layout(height=250, margin=dict(l=20,r=20,t=40,b=20),
-                                    xaxis_title="", yaxis_title="%",
-                                    title=dict(x=0.5, xanchor="center"))
-                st.plotly_chart(fig_g, use_container_width=True)
-            else:
-                st.caption("Not enough weeks of data for a trend chart yet.")
-            st.caption("% of subject rows with a grade entered. Compared to all tutors.")
+            c1.metric("% Graded (now)",       f"{lat_pct:.1f}%", delta=d_prev, delta_color=dc_prev)
+            c2.metric("# No Grades (now)",     fmt_num(latest["students_no_grades"], 0))
+            c3.metric("All-Tutor Avg %",       f"{all_avg_graded:.1f}%" if all_avg_graded else "—")
+            c4.metric("Stale Grades (now)",    fmt_num(latest["stale_grade_students"], 0))
+            if prev is not None:
+                st.caption(f"Previous week: {prev_pct:.1f}% — week of {prev['week_date'].strftime('%b %d') if hasattr(prev['week_date'], 'strftime') else prev['week_date']}")
+            st.caption("% of subject rows with a grade entered. Compared to all tutors. *(Full trend history accumulating weekly.)*")
         ar_card(6, "Grades Data", _s6)
 
         # ── 7. Rematches ─────────────────────────────────────────────────────
