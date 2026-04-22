@@ -6475,181 +6475,153 @@ def render_app(config):
             if col not in df.columns or df[col].dropna().empty: return None
             return df[col].dropna().mean()
 
-        def ar_metric_row(label, tutor_12m, tutor_3m, peer_12m_val=None, peer_3m_val=None,
-                          target=None, fmt=fmt_pct, higher_is_better=True):
-            """Render a metric row with 12m, 3m, peer comparisons."""
-            cols = st.columns([2,1,1,1,1])
-            cols[0].markdown(f"**{label}**")
-            cols[1].markdown(fmt(tutor_12m))
-            cols[2].markdown(fmt(tutor_3m))
-            if peer_12m_val is not None:
-                delta_12 = (float(tutor_12m) - float(peer_12m_val)) if tutor_12m and not pd.isna(tutor_12m) else None
-                arrow = ("🟢" if (delta_12 > 0) == higher_is_better else "🔴") if delta_12 is not None else ""
-                cols[3].markdown(f"{fmt(peer_12m_val)} {arrow}")
-            else:
-                cols[3].markdown(f"{fmt(target) if target else '—'} *(target)*" if target else "—")
-            cols[4].markdown(fmt(peer_3m_val) if peer_3m_val is not None else "—")
+        def ar_card(number, title, content_fn, coming_soon=False):
+            """Render a metric card with consistent styling."""
+            with st.container(border=True):
+                st.markdown(f"**{number}. {title}**")
+                if coming_soon:
+                    st.caption("🚧 Coming soon")
+                else:
+                    content_fn()
 
-        # ── Header row ──────────────────────────────────────────────────────
+        def val_color(val, target=None, peer=None, higher_is_better=True, fmt=fmt_pct):
+            """Return colored value string."""
+            if val is None or pd.isna(val): return "—"
+            fval = float(val)
+            if target is not None:
+                color = "#2e7d32" if (fval >= target) == higher_is_better else "#c62828"
+            elif peer is not None:
+                color = "#2e7d32" if (fval >= float(peer)) == higher_is_better else "#c62828"
+            else:
+                color = "#1a1a1a"
+            return f'<span style="color:{color}; font-weight:bold; font-size:1.1em">{fmt(val)}</span>'
+
+        # ── Header ──────────────────────────────────────────────────────────
         st.markdown(f"### {ar_tutor} — Annual Review")
-        st.caption(f"Tier: **{tier_val}** | Delivery Target: **{del_target}h/wk** | Peer group size: **{len(peers_12m)}** tutors")
-        hc = st.columns([2,1,1,1,1])
-        hc[0].markdown("**Metric**")
-        hc[1].markdown("**12-Month**")
-        hc[2].markdown("**3-Month**")
-        hc[3].markdown("**Peer Avg (12M)**")
-        hc[4].markdown("**Peer Avg (3M)**")
+        st.caption(f"Tier: **{tier_val}** | Delivery Target: **{del_target}h/wk** | Peer group size (same tier+target): **{len(peers_12m)}** tutors")
         st.divider()
 
         # ── 1. Sessions Launched on Time ─────────────────────────────────────
-        st.markdown("#### 1. Sessions Launched on Time")
-        ar_metric_row("% On Time",
-            t12r.get("sessions_on_time_pct"), t3r.get("sessions_on_time_pct") if t3r is not None else None,
-            target=0.90, higher_is_better=True)
-        st.caption("Target: 90%+. Not compared to peers.")
-        st.divider()
+        def _s1():
+            c1, c2, c3 = st.columns(3)
+            c1.metric("12-Month", fmt_pct(t12r.get("sessions_on_time_pct")))
+            c2.metric("3-Month",  fmt_pct(t3r.get("sessions_on_time_pct") if t3r is not None else None))
+            c3.metric("Target",   "90%")
+            st.caption("Not compared to peers — target is 90%+.")
+        ar_card(1, "Sessions Launched on Time", _s1)
 
         # ── 2. Parent Updates Sent on Time ───────────────────────────────────
-        st.markdown("#### 2. Parent Updates Sent on Time")
-        ar_metric_row("% Sent on Time",
-            t12r.get("parent_update_pct"), t3r.get("parent_update_pct") if t3r is not None else None,
-            target=0.90, higher_is_better=True)
-        st.caption("Target: 90%+. Not compared to peers.")
-        st.divider()
+        def _s2():
+            c1, c2, c3 = st.columns(3)
+            c1.metric("12-Month", fmt_pct(t12r.get("parent_update_pct")))
+            c2.metric("3-Month",  fmt_pct(t3r.get("parent_update_pct") if t3r is not None else None))
+            c3.metric("Target",   "90%")
+            st.caption("Not compared to peers — target is 90%+.")
+        ar_card(2, "Parent Updates Sent on Time", _s2)
 
         # ── 3. Prep Time Percentage ──────────────────────────────────────────
-        st.markdown("#### 3. Prep Time Percentage")
-        ar_metric_row("Prep Time Ratio (prep hrs / attended hrs)",
-            t12r.get("prep_time_ratio"), t3r.get("prep_time_ratio") if t3r is not None else None,
-            peer_12m_val=peer_avg(peers_12m, "prep_time_ratio"),
-            peer_3m_val=peer_avg(peers_3m, "prep_time_ratio"),
-            fmt=fmt_num, higher_is_better=True)
-        st.caption(f"Compared to {len(peers_12m)} peers with same tier ({tier_val}) and delivery target ({del_target}h/wk).")
-        st.divider()
+        def _s3():
+            p12 = peer_avg(peers_12m, "prep_time_ratio")
+            p3  = peer_avg(peers_3m,  "prep_time_ratio")
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("12-Month",      fmt_num(t12r.get("prep_time_ratio")))
+            c2.metric("3-Month",       fmt_num(t3r.get("prep_time_ratio") if t3r is not None else None))
+            c3.metric("Peer Avg (12M)", fmt_num(p12))
+            c4.metric("Peer Avg (3M)",  fmt_num(p3))
+            st.caption(f"Prep hrs ÷ attended hrs. Compared to {len(peers_12m)} peers — same tier ({tier_val}) & delivery target ({del_target}h/wk).")
+        ar_card(3, "Prep Time Percentage", _s3)
 
         # ── 4. Cancellations by Tutor ────────────────────────────────────────
-        st.markdown("#### 4. Cancellations by Tutor")
-        st.info("🚧 Coming soon — cancellation data will be added in a future update.")
-        st.divider()
+        ar_card(4, "Cancellations by Tutor", None, coming_soon=True)
 
         # ── 5. Exams Data ────────────────────────────────────────────────────
-        st.markdown("#### 5. Exams Data")
-        st.info("🚧 Coming soon — exam tracking data will be added in a future update.")
-        st.divider()
+        ar_card(5, "Exams Data", None, coming_soon=True)
 
         # ── 6. Grades Data ───────────────────────────────────────────────────
-        st.markdown("#### 6. Grades Data")
-        st.info("🚧 Coming soon — grades tracking data will be added in a future update.")
-        st.divider()
+        ar_card(6, "Grades Data", None, coming_soon=True)
 
         # ── 7. Rematches ─────────────────────────────────────────────────────
-        st.markdown("#### 7. Rematches")
-        st.info("🚧 Coming soon — rematch data will be added in a future update.")
-        st.divider()
+        ar_card(7, "Rematches", None, coming_soon=True)
 
         # ── 8. Weighted Repurchase ───────────────────────────────────────────
-        st.markdown("#### 8. Weighted Repurchase")
-        st.info("🚧 Coming soon — weighted repurchase data will be added in a future update.")
-        st.divider()
+        ar_card(8, "Weighted Repurchase", None, coming_soon=True)
 
         # ── 9. Archivable Students ───────────────────────────────────────────
-        st.markdown("#### 9. Archivable Students")
-        st.info("🚧 Coming soon — archivable student data will be added in a future update.")
-        st.divider()
+        ar_card(9, "Archivable Students", None, coming_soon=True)
 
         # ── 10. Unscheduled Hours ────────────────────────────────────────────
-        st.markdown("#### 10. Unscheduled Hours")
-        st.info("🚧 Coming soon — unscheduled hours data will be added in a future update.")
-        st.divider()
+        ar_card(10, "Unscheduled Hours", None, coming_soon=True)
 
         # ── 11. Auto-Attendance ──────────────────────────────────────────────
-        st.markdown("#### 11. Auto-Attendance")
-        aa_12 = t12r.get("autoattendance_sessions")
-        aa_3  = t3r.get("autoattendance_sessions") if t3r is not None else None
-        aa_peer_12 = peer_avg(all_12m, "autoattendance_sessions")
-        ac = st.columns([2,1,1,1,1])
-        ac[0].markdown("**Auto-attendance Sessions**")
-        ac[1].markdown(fmt_num(aa_12, 0))
-        ac[2].markdown(fmt_num(aa_3, 0))
-        ac[3].markdown(f"{fmt_num(aa_peer_12, 1)} *(all tutors avg)*")
-        ac[4].markdown("—")
-        st.caption("Compared to all tutors. Lower is better.")
-        st.divider()
+        def _s11():
+            aa_12      = t12r.get("autoattendance_sessions")
+            aa_3       = t3r.get("autoattendance_sessions") if t3r is not None else None
+            aa_peer_12 = peer_avg(all_12m, "autoattendance_sessions")
+            c1, c2, c3 = st.columns(3)
+            c1.metric("12-Month (sessions)",  fmt_num(aa_12, 0))
+            c2.metric("3-Month (sessions)",   fmt_num(aa_3, 0))
+            c3.metric("All-Tutor Avg (12M)",  fmt_num(aa_peer_12, 1))
+            st.caption("Compared to all tutors. Lower is better.")
+        ar_card(11, "Auto-Attendance", _s11)
 
         # ── 12. NPS ──────────────────────────────────────────────────────────
-        st.markdown("#### 12. NPS")
-        nc = st.columns([2,1,1,1,1])
-        nc[0].markdown("**Avg NPS Score**")
-        nc[1].markdown(fmt_num(t12r.get("avg_nps"), 2))
-        nc[2].markdown(fmt_num(t3r.get("avg_nps") if t3r is not None else None, 2))
-        nc[3].markdown("—")
-        nc[4].markdown("—")
-        nc2 = st.columns([2,1,1,1,1])
-        nc2[0].markdown("**# NPS Responses**")
-        nc2[1].markdown(fmt_num(t12r.get("number_of_nps"), 0))
-        nc2[2].markdown(fmt_num(t3r.get("number_of_nps") if t3r is not None else None, 0))
-        nc2[3].markdown("—")
-        nc2[4].markdown("—")
-        st.caption("NPS scores and individual survey details not compared to peers.")
-        st.info("🚧 Individual NPS survey scores and comments coming soon.")
-        st.divider()
+        def _s12():
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Avg Score (12M)",    fmt_num(t12r.get("avg_nps"), 2))
+            c2.metric("Avg Score (3M)",     fmt_num(t3r.get("avg_nps") if t3r is not None else None, 2))
+            c3.metric("# Responses (12M)",  fmt_num(t12r.get("number_of_nps"), 0))
+            st.caption("Not compared to peers. Individual survey scores and comments coming soon.")
+        ar_card(12, "NPS", _s12)
 
         # ── 13. Parent Update Video ──────────────────────────────────────────
-        st.markdown("#### 13. Parent Update Video")
-        st.info("🚧 Coming soon — parent update video data will be added in a future update.")
-        st.divider()
+        ar_card(13, "Parent Update Video", None, coming_soon=True)
 
         # ── 14. Parent Update Mentioning Homework ────────────────────────────
-        st.markdown("#### 14. Parent Update Mentioning Homework")
-        st.info("🚧 Coming soon — homework mention data will be added in a future update.")
-        st.divider()
+        ar_card(14, "Parent Update Mentioning Homework", None, coming_soon=True)
 
         # ── 15. Progress Updates ─────────────────────────────────────────────
-        st.markdown("#### 15. Progress Updates")
-        st.info("🚧 Coming soon — progress update data will be added in a future update.")
-        st.divider()
+        ar_card(15, "Progress Updates", None, coming_soon=True)
 
         # ── 16. Current SCI ──────────────────────────────────────────────────
-        st.markdown("#### 16. Current SCI")
-        sci_peers = peer_avg(peers_12m, "current_sci")
-        sc = st.columns([2,1,1,1,1])
-        sc[0].markdown("**Current SCI Score**")
-        sc[1].markdown(fmt_num(t12r.get("current_sci"), 1))
-        sc[2].markdown("—")
-        sc[3].markdown(f"{fmt_num(sci_peers, 1)} *(same tier)*")
-        sc[4].markdown("—")
-        st.caption(f"Compared to {len(peers_12m)} peers in same tier ({tier_val}).")
-        st.divider()
+        def _s16():
+            sci_peers = peer_avg(peers_12m, "current_sci")
+            c1, c2 = st.columns(2)
+            c1.metric("Current Score",      fmt_num(t12r.get("current_sci"), 1))
+            c2.metric("Peer Avg (same tier)", fmt_num(sci_peers, 1))
+            st.caption(f"Compared to {len(peers_12m)} peers in same tier ({tier_val}). SCI is a point-in-time value.")
+        ar_card(16, "Current SCI", _s16)
 
         # ── 17. SCI Growth ───────────────────────────────────────────────────
-        st.markdown("#### 17. SCI Growth")
-        st.info("🚧 Coming soon — SCI growth over time will be added in a future update.")
-        st.divider()
+        ar_card(17, "SCI Growth", None, coming_soon=True)
 
         # ── 18. Availability Percentage ──────────────────────────────────────
-        st.markdown("#### 18. Availability Percentage")
-        ar_metric_row("% Availability",
-            t12r.get("availability_pct"), t3r.get("availability_pct") if t3r is not None else None,
-            target=None, higher_is_better=True)
-        st.caption("Target varies based on whether delivery target is met. Not compared to peers.")
-        st.divider()
+        def _s18():
+            c1, c2 = st.columns(2)
+            c1.metric("12-Month", fmt_pct(t12r.get("availability_pct")))
+            c2.metric("3-Month",  fmt_pct(t3r.get("availability_pct") if t3r is not None else None))
+            st.caption("Not compared to peers — target varies based on whether delivery target is met.")
+        ar_card(18, "Availability Percentage", _s18)
 
         # ── 19. Delivery Percentage ───────────────────────────────────────────
-        st.markdown("#### 19. Delivery Percentage")
-        ar_metric_row("% of Delivery Target Met",
-            t12r.get("delivery_pct"), t3r.get("delivery_pct") if t3r is not None else None,
-            peer_12m_val=peer_avg(peers_12m, "delivery_pct"),
-            peer_3m_val=peer_avg(peers_3m, "delivery_pct"),
-            higher_is_better=True)
-        st.caption(f"Compared to {len(peers_12m)} peers with same tier ({tier_val}) and delivery target ({del_target}h/wk).")
-        st.divider()
+        def _s19():
+            p12 = peer_avg(peers_12m, "delivery_pct")
+            p3  = peer_avg(peers_3m,  "delivery_pct")
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("12-Month",       fmt_pct(t12r.get("delivery_pct")))
+            c2.metric("3-Month",        fmt_pct(t3r.get("delivery_pct") if t3r is not None else None))
+            c3.metric("Peer Avg (12M)", fmt_pct(p12))
+            c4.metric("Peer Avg (3M)",  fmt_pct(p3))
+            st.caption(f"Compared to {len(peers_12m)} peers — same tier ({tier_val}) & delivery target ({del_target}h/wk).")
+        ar_card(19, "Delivery Percentage", _s19)
 
-        # ── 20. Delivery Times Meeting Target ────────────────────────────────
-        st.markdown("#### 20. Weeks Meeting Delivery Target")
-        wc = st.columns([2,1,1,1,1])
-        wc[0].markdown("**Weeks at Target**")
-        wc[1].markdown(fmt_num(t12r.get("weeks_at_target"), 0))
-        wc[2].markdown(fmt_num(t3r.get("weeks_at_target") if t3r is not None else None, 0))
-        wc[3].markdown(f"{fmt_num(peer_avg(peers_12m, 'weeks_at_target'), 1)} *(peer avg)*")
-        wc[4].markdown(f"{fmt_num(peer_avg(peers_3m, 'weeks_at_target'), 1)} *(peer avg)*")
-        st.caption(f"Compared to {len(peers_12m)} peers with same tier ({tier_val}) and delivery target ({del_target}h/wk).")
+        # ── 20. Weeks Meeting Delivery Target ────────────────────────────────
+        def _s20():
+            p12 = peer_avg(peers_12m, "weeks_at_target")
+            p3  = peer_avg(peers_3m,  "weeks_at_target")
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("12-Month (weeks)",   fmt_num(t12r.get("weeks_at_target"), 0))
+            c2.metric("3-Month (weeks)",    fmt_num(t3r.get("weeks_at_target") if t3r is not None else None, 0))
+            c3.metric("Peer Avg (12M)",     fmt_num(p12, 1))
+            c4.metric("Peer Avg (3M)",      fmt_num(p3, 1))
+            st.caption(f"Compared to {len(peers_12m)} peers — same tier ({tier_val}) & delivery target ({del_target}h/wk).")
+        ar_card(20, "Weeks Meeting Delivery Target", _s20)
