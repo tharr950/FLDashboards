@@ -6481,6 +6481,19 @@ def render_app(config):
                 ar_video_snap["week_date"] = pd.to_datetime(ar_video_snap["week_date"])
         except Exception as e:
             ar_video_snap = pd.DataFrame()
+
+        # Load archive snapshots for AR cards 9 & 10
+        try:
+            ar_arch_snap = load_snapshots()
+            if not ar_arch_snap.empty and "week_date" in ar_arch_snap.columns:
+                ar_arch_snap["week_date"] = pd.to_datetime(ar_arch_snap["week_date"])
+                # Compute pct_archivable
+                if "archivable_students" in ar_arch_snap.columns and "total_students" in ar_arch_snap.columns:
+                    ar_arch_snap["pct_archivable"] = ar_arch_snap.apply(
+                        lambda r: round(r["archivable_students"] / r["total_students"] * 100, 1)
+                        if r["total_students"] > 0 else 0, axis=1)
+        except Exception as e:
+            ar_arch_snap = pd.DataFrame()
         if ar_source == "github":
             st.caption("📦 Data loaded from nightly cache.")
         else:
@@ -6618,10 +6631,72 @@ def render_app(config):
         ar_card(8, "Weighted Repurchase", None, coming_soon=True)
 
         # ── 9. Archivable Students ───────────────────────────────────────────
-        ar_card(9, "Archivable Students", None, coming_soon=True)
+        def _s9():
+            if ar_arch_snap.empty:
+                st.info("No archivable student snapshot data available yet.")
+                return
+            tutor_as = ar_arch_snap[ar_arch_snap["tutor_name"] == ar_tutor].sort_values("week_date")
+            if tutor_as.empty:
+                st.info(f"No archivable data found for {ar_tutor}.")
+                return
+            # All-tutor avg using most recent week per tutor
+            all_latest  = ar_arch_snap.sort_values("week_date").groupby("tutor_name").last().reset_index()
+            all_avg_pct = all_latest["pct_archivable"].mean() if "pct_archivable" in all_latest.columns else None
+            all_avg_abs = all_latest["archivable_students"].mean()
+
+            latest      = tutor_as.iloc[-1]
+            tutor_avg_pct = tutor_as["pct_archivable"].mean() if "pct_archivable" in tutor_as.columns else None
+            d, dc = ar_delta_num(tutor_avg_pct, all_avg_pct, higher_is_better=False, label="vs all-tutor avg")
+
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Most Recent (# students)", fmt_num(latest["archivable_students"], 0))
+            c2.metric("Most Recent (%)",           f"{latest['pct_archivable']:.1f}%" if "pct_archivable" in latest else "—")
+            c3.metric("Avg % (all weeks)",         f"{tutor_avg_pct:.1f}%" if tutor_avg_pct else "—",
+                      delta=d, delta_color=dc)
+            c4.metric("All-Tutor Avg %",           f"{all_avg_pct:.1f}%" if all_avg_pct else "—")
+
+            if len(tutor_as) >= 2:
+                fig_a = px.line(tutor_as, x="week_date", y="pct_archivable",
+                                markers=True, title="% Archivable Students — Week over Week",
+                                color_discrete_sequence=["#c62828"])
+                fig_a.update_layout(height=250, margin=dict(l=20,r=20,t=40,b=20),
+                                    xaxis_title="", yaxis_title="%",
+                                    title=dict(x=0.5, xanchor="center"))
+                st.plotly_chart(fig_a, use_container_width=True)
+            st.caption("% of active students who are archivable. Lower is better. Compared to all tutors.")
+        ar_card(9, "Archivable Students", _s9)
 
         # ── 10. Unscheduled Hours ────────────────────────────────────────────
-        ar_card(10, "Unscheduled Hours", None, coming_soon=True)
+        def _s10():
+            if ar_arch_snap.empty:
+                st.info("No unscheduled hours snapshot data available yet.")
+                return
+            tutor_as = ar_arch_snap[ar_arch_snap["tutor_name"] == ar_tutor].sort_values("week_date")
+            if tutor_as.empty:
+                st.info(f"No unscheduled hours data found for {ar_tutor}.")
+                return
+            all_latest  = ar_arch_snap.sort_values("week_date").groupby("tutor_name").last().reset_index()
+            all_avg_hrs = all_latest["unscheduled_hours"].mean()
+
+            latest        = tutor_as.iloc[-1]
+            tutor_avg_hrs = tutor_as["unscheduled_hours"].mean()
+            d, dc = ar_delta_num(tutor_avg_hrs, all_avg_hrs, higher_is_better=False, label="vs all-tutor avg")
+
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Most Recent (hrs)",    fmt_num(latest["unscheduled_hours"], 1))
+            c2.metric("Avg (all weeks)",      fmt_num(tutor_avg_hrs, 1), delta=d, delta_color=dc)
+            c3.metric("All-Tutor Avg (hrs)",  fmt_num(all_avg_hrs, 1))
+
+            if len(tutor_as) >= 2:
+                fig_u = px.line(tutor_as, x="week_date", y="unscheduled_hours",
+                                markers=True, title="Unscheduled Hours — Week over Week",
+                                color_discrete_sequence=["#e65100"])
+                fig_u.update_layout(height=250, margin=dict(l=20,r=20,t=40,b=20),
+                                    xaxis_title="", yaxis_title="Hours",
+                                    title=dict(x=0.5, xanchor="center"))
+                st.plotly_chart(fig_u, use_container_width=True)
+            st.caption("Unscheduled hours for active students only. Lower is better. Compared to all tutors.")
+        ar_card(10, "Unscheduled Hours", _s10)
 
         # ── 11. Auto-Attendance ──────────────────────────────────────────────
         def _s11():
