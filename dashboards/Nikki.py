@@ -6441,6 +6441,38 @@ def render_app(config):
         ar_12m = st.session_state["ar_12m"]
         ar_3m  = st.session_state["ar_3m"]
         ar_source = st.session_state.get("ar_source","unknown")
+
+        @st.cache_data(ttl=3600)
+        def load_ar_skills():
+            conn = get_redshift_connection()
+            query = """
+                SELECT
+                    dw.employees.id AS emp_id,
+                    dw.users.first_name||' '||dw.users.last_name AS tutor_name,
+                    dw.categories.name AS category,
+                    dw.subjects.name AS subject,
+                    dw.skills.created_at AS created,
+                    dw.subjects.difficulty AS subject_sci
+                FROM dw.skills
+                JOIN dw.employees ON employees.id = skills.tutor_id
+                JOIN dw.users ON dw.employees.user_id = dw.users.id
+                JOIN dw.subjects ON skills.subject_id = subjects.id
+                JOIN dw.categories ON subjects.category_id = categories.id
+                WHERE dw.employees.end_date IS NULL
+                  AND dw.employees.delivery_target > 0
+                  AND dw.skills.created_at >= '2025-05-01'
+                ORDER BY tutor_name, created
+            """
+            try:
+                df = pd.read_sql(query, conn)
+            finally:
+                conn.close()
+            return df
+
+        try:
+            ar_skills_df = load_ar_skills()
+        except Exception as e:
+            ar_skills_df = pd.DataFrame()
         if ar_source == "github":
             st.caption("📦 Data loaded from nightly cache.")
         else:
@@ -6626,7 +6658,36 @@ def render_app(config):
         ar_card(16, "Current SCI", _s16)
 
         # ── 17. SCI Growth ───────────────────────────────────────────────────
-        ar_card(17, "SCI Growth", None, coming_soon=True)
+        def _s17():
+            tutor_skills = ar_skills_df[ar_skills_df["tutor_name"] == ar_tutor].copy()                            if not ar_skills_df.empty else pd.DataFrame()
+            sci_start = None
+            sci_end   = t12r.get("current_sci")
+
+            if tutor_skills.empty:
+                st.info("No new subjects added during the review period.")
+            else:
+                tutor_skills["created"] = pd.to_datetime(tutor_skills["created"], errors="coerce")
+                tutor_skills = tutor_skills.sort_values("created")
+
+                # SCI change: sum of difficulty of added subjects
+                sci_gained = tutor_skills["subject_sci"].sum() if "subject_sci" in tutor_skills.columns else None
+
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Subjects Added", len(tutor_skills))
+                c2.metric("SCI Points Gained", fmt_num(sci_gained, 1) if sci_gained else "—")
+                c3.metric("Current SCI", fmt_num(sci_end, 1))
+
+                st.markdown("**Subjects Added During Review Period:**")
+                display_skills = tutor_skills[["created","category","subject","subject_sci"]].copy()
+                display_skills["created"] = display_skills["created"].dt.strftime("%Y-%m-%d")
+                display_skills = display_skills.rename(columns={
+                    "created":     "Date Added",
+                    "category":    "Category",
+                    "subject":     "Subject",
+                    "subject_sci": "SCI Value",
+                })
+                st.dataframe(display_skills, use_container_width=True, hide_index=True)
+        ar_card(17, "SCI Growth", _s17)
 
         # ── 18. Availability Percentage ──────────────────────────────────────
         def _s18():
