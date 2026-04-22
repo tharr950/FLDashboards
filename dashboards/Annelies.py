@@ -551,13 +551,20 @@ def save_video_weekly_snapshot(video_summary_df):
     """Save per-tutor weekly video metrics snapshot."""
     today     = pd.Timestamp.now()
     week_key  = today.strftime("%Y-W%V")
-    week_date = (today - pd.to_timedelta(today.dayofweek, unit="d")).strftime("%Y-%m-%d")
+    # Use Sunday as week_date (dayofweek: Mon=0, so subtract (dayofweek+1)%7 to get Sunday)
+    week_date = (today - pd.to_timedelta((today.dayofweek + 1) % 7, unit="d")).strftime("%Y-%m-%d")
     existing = gh_read(VIDEO_SNAPSHOT_FILE)
-    if not existing.empty and week_key in existing["week_key"].values:
-        return existing
     summary = video_summary_df.copy()
     summary["week_key"]  = week_key
     summary["week_date"] = week_date
+    if not existing.empty and week_key in existing["week_key"].values:
+        # Only overwrite if new data has more total videos (i.e. sync has run)
+        new_total = summary["videos_found"].sum() if "videos_found" in summary.columns else 0
+        old_total = existing[existing["week_key"] == week_key]["videos_found"].sum()                     if "videos_found" in existing.columns else 0
+        if new_total <= old_total:
+            return existing
+        # Remove old week and replace with fresh data
+        existing = existing[existing["week_key"] != week_key]
     updated = pd.concat([existing, summary], ignore_index=True) if not existing.empty else summary
     gh_write(VIDEO_SNAPSHOT_FILE, updated)
     return updated
