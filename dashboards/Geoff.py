@@ -564,7 +564,9 @@ def save_video_weekly_snapshot(video_summary_df, raw_video_df=None):
         today = pd.Timestamp.now()
         days_back = (today.dayofweek + 1) % 7 or 7
         week_date = (today - pd.to_timedelta(days_back, unit="d")).strftime("%Y-%m-%d")
-    week_key = pd.Timestamp(week_date).strftime("%Y-W%V")
+    # Use Monday of the week for ISO week_key (ISO weeks start Monday)
+    # week_date is Sunday, so Monday = Sunday + 1 day
+    week_key = (pd.Timestamp(week_date) + pd.Timedelta(days=1)).strftime("%Y-W%V")
     existing = gh_read(VIDEO_SNAPSHOT_FILE)
     summary = video_summary_df.copy()
     summary["week_key"]  = week_key
