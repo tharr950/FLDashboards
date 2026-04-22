@@ -6484,17 +6484,34 @@ def render_app(config):
                 else:
                     content_fn()
 
-        def val_color(val, target=None, peer=None, higher_is_better=True, fmt=fmt_pct):
-            """Return colored value string."""
-            if val is None or pd.isna(val): return "—"
-            fval = float(val)
-            if target is not None:
-                color = "#2e7d32" if (fval >= target) == higher_is_better else "#c62828"
-            elif peer is not None:
-                color = "#2e7d32" if (fval >= float(peer)) == higher_is_better else "#c62828"
-            else:
-                color = "#1a1a1a"
-            return f'<span style="color:{color}; font-weight:bold; font-size:1.1em">{fmt(val)}</span>'
+        def ar_delta(tutor_val, compare_val, higher_is_better=True):
+            """Return streamlit delta string and color for metric."""
+            if tutor_val is None or pd.isna(tutor_val): return None, "off"
+            if compare_val is None or pd.isna(compare_val): return None, "off"
+            diff = float(tutor_val) - float(compare_val)
+            if diff == 0: return "= peer avg", "off"
+            label = f"{'▲' if diff > 0 else '▼'} {abs(diff)*100:.1f}pp vs peer"
+            color = "normal" if (diff > 0) == higher_is_better else "inverse"
+            return label, color
+
+        def ar_delta_target(tutor_val, target, higher_is_better=True, label="vs target"):
+            """Return delta vs a fixed target."""
+            if tutor_val is None or pd.isna(tutor_val): return None, "off"
+            diff = float(tutor_val) - float(target)
+            if diff == 0: return f"= {label}", "off"
+            arrow = "▲" if diff > 0 else "▼"
+            color = "normal" if (diff > 0) == higher_is_better else "inverse"
+            return f"{arrow} {abs(diff)*100:.1f}pp {label}", color
+
+        def ar_delta_num(tutor_val, compare_val, higher_is_better=True, label="vs peer"):
+            """Return delta for non-percentage numeric values."""
+            if tutor_val is None or pd.isna(tutor_val): return None, "off"
+            if compare_val is None or pd.isna(compare_val): return None, "off"
+            diff = float(tutor_val) - float(compare_val)
+            if diff == 0: return f"= {label}", "off"
+            arrow = "▲" if diff > 0 else "▼"
+            color = "normal" if (diff > 0) == higher_is_better else "inverse"
+            return f"{arrow} {abs(diff):.1f} {label}", color
 
         # ── Header ──────────────────────────────────────────────────────────
         st.markdown(f"### {ar_tutor} — Annual Review")
@@ -6503,32 +6520,46 @@ def render_app(config):
 
         # ── 1. Sessions Launched on Time ─────────────────────────────────────
         def _s1():
-            c1, c2, c3 = st.columns(3)
-            c1.metric("12-Month", fmt_pct(t12r.get("sessions_on_time_pct")))
-            c2.metric("3-Month",  fmt_pct(t3r.get("sessions_on_time_pct") if t3r is not None else None))
-            c3.metric("Target",   "90%")
-            st.caption("Not compared to peers — target is 90%+.")
+            v12 = t12r.get("sessions_on_time_pct")
+            v3  = t3r.get("sessions_on_time_pct") if t3r is not None else None
+            d12, dc12 = ar_delta_target(v12, 0.90, higher_is_better=True, label="vs 90% target")
+            d3,  dc3  = ar_delta_target(v3,  0.90, higher_is_better=True, label="vs 90% target")
+            c1, c2 = st.columns(2)
+            c1.metric("12-Month", fmt_pct(v12), delta=d12, delta_color=dc12)
+            c2.metric("3-Month",  fmt_pct(v3),  delta=d3,  delta_color=dc3)
+            st.caption("Target: 90%+. Not compared to peers.")
         ar_card(1, "Sessions Launched on Time", _s1)
 
         # ── 2. Parent Updates Sent on Time ───────────────────────────────────
         def _s2():
-            c1, c2, c3 = st.columns(3)
-            c1.metric("12-Month", fmt_pct(t12r.get("parent_update_pct")))
-            c2.metric("3-Month",  fmt_pct(t3r.get("parent_update_pct") if t3r is not None else None))
-            c3.metric("Target",   "90%")
-            st.caption("Not compared to peers — target is 90%+.")
+            v12 = t12r.get("parent_update_pct")
+            v3  = t3r.get("parent_update_pct") if t3r is not None else None
+            d12, dc12 = ar_delta_target(v12, 0.90, higher_is_better=True, label="vs 90% target")
+            d3,  dc3  = ar_delta_target(v3,  0.90, higher_is_better=True, label="vs 90% target")
+            c1, c2 = st.columns(2)
+            c1.metric("12-Month", fmt_pct(v12), delta=d12, delta_color=dc12)
+            c2.metric("3-Month",  fmt_pct(v3),  delta=d3,  delta_color=dc3)
+            st.caption("Target: 90%+. Not compared to peers.")
         ar_card(2, "Parent Updates Sent on Time", _s2)
 
         # ── 3. Prep Time Percentage ──────────────────────────────────────────
         def _s3():
+            v12 = t12r.get("prep_time_ratio")
+            v3  = t3r.get("prep_time_ratio") if t3r is not None else None
             p12 = peer_avg(peers_12m, "prep_time_ratio")
             p3  = peer_avg(peers_3m,  "prep_time_ratio")
+            # Format as percentage
+            def fmt_prep(v):
+                if v is None or pd.isna(v): return "—"
+                return f"{float(v)*100:.1f}%"
+            d12, dc12 = ar_delta(v12, p12, higher_is_better=True)
+            d3,  dc3  = ar_delta(v3,  p3,  higher_is_better=True)
             c1, c2, c3, c4 = st.columns(4)
-            c1.metric("12-Month",      fmt_num(t12r.get("prep_time_ratio")))
-            c2.metric("3-Month",       fmt_num(t3r.get("prep_time_ratio") if t3r is not None else None))
-            c3.metric("Peer Avg (12M)", fmt_num(p12))
-            c4.metric("Peer Avg (3M)",  fmt_num(p3))
-            st.caption(f"Prep hrs ÷ attended hrs. Compared to {len(peers_12m)} peers — same tier ({tier_val}) & delivery target ({del_target}h/wk).")
+            c1.metric("12-Month",       fmt_prep(v12), delta=d12, delta_color=dc12)
+            c2.metric("3-Month",        fmt_prep(v3),  delta=d3,  delta_color=dc3)
+            c3.metric("Peer Avg (12M)", fmt_prep(p12))
+            c4.metric("Peer Avg (3M)",  fmt_prep(p3))
+            st.caption(f"Prep hrs as % of attended hrs. Compared to {len(peers_12m)} peers — same tier ({tier_val}) & delivery target ({del_target}h/wk).")
         ar_card(3, "Prep Time Percentage", _s3)
 
         # ── 4. Cancellations by Tutor ────────────────────────────────────────
@@ -6557,19 +6588,20 @@ def render_app(config):
             aa_12      = t12r.get("autoattendance_sessions")
             aa_3       = t3r.get("autoattendance_sessions") if t3r is not None else None
             aa_peer_12 = peer_avg(all_12m, "autoattendance_sessions")
+            d12, dc12  = ar_delta_num(aa_12, aa_peer_12, higher_is_better=False, label="vs all-tutor avg")
             c1, c2, c3 = st.columns(3)
-            c1.metric("12-Month (sessions)",  fmt_num(aa_12, 0))
-            c2.metric("3-Month (sessions)",   fmt_num(aa_3, 0))
-            c3.metric("All-Tutor Avg (12M)",  fmt_num(aa_peer_12, 1))
+            c1.metric("12-Month (sessions)", fmt_num(aa_12, 0), delta=d12, delta_color=dc12)
+            c2.metric("3-Month (sessions)",  fmt_num(aa_3, 0))
+            c3.metric("All-Tutor Avg (12M)", fmt_num(aa_peer_12, 1))
             st.caption("Compared to all tutors. Lower is better.")
         ar_card(11, "Auto-Attendance", _s11)
 
         # ── 12. NPS ──────────────────────────────────────────────────────────
         def _s12():
             c1, c2, c3 = st.columns(3)
-            c1.metric("Avg Score (12M)",    fmt_num(t12r.get("avg_nps"), 2))
-            c2.metric("Avg Score (3M)",     fmt_num(t3r.get("avg_nps") if t3r is not None else None, 2))
-            c3.metric("# Responses (12M)",  fmt_num(t12r.get("number_of_nps"), 0))
+            c1.metric("Avg Score (12M)",   fmt_num(t12r.get("avg_nps"), 2))
+            c2.metric("Avg Score (3M)",    fmt_num(t3r.get("avg_nps") if t3r is not None else None, 2))
+            c3.metric("# Responses (12M)", fmt_num(t12r.get("number_of_nps"), 0))
             st.caption("Not compared to peers. Individual survey scores and comments coming soon.")
         ar_card(12, "NPS", _s12)
 
@@ -6584,10 +6616,12 @@ def render_app(config):
 
         # ── 16. Current SCI ──────────────────────────────────────────────────
         def _s16():
+            sci_val   = t12r.get("current_sci")
             sci_peers = peer_avg(peers_12m, "current_sci")
+            d, dc     = ar_delta_num(sci_val, sci_peers, higher_is_better=True, label="vs peer avg")
             c1, c2 = st.columns(2)
-            c1.metric("Current Score",      fmt_num(t12r.get("current_sci"), 1))
-            c2.metric("Peer Avg (same tier)", fmt_num(sci_peers, 1))
+            c1.metric("Current Score",        fmt_num(sci_val, 1), delta=d, delta_color=dc)
+            c2.metric("Peer Avg (same tier)",  fmt_num(sci_peers, 1))
             st.caption(f"Compared to {len(peers_12m)} peers in same tier ({tier_val}). SCI is a point-in-time value.")
         ar_card(16, "Current SCI", _s16)
 
@@ -6596,19 +6630,25 @@ def render_app(config):
 
         # ── 18. Availability Percentage ──────────────────────────────────────
         def _s18():
+            v12 = t12r.get("availability_pct")
+            v3  = t3r.get("availability_pct") if t3r is not None else None
             c1, c2 = st.columns(2)
-            c1.metric("12-Month", fmt_pct(t12r.get("availability_pct")))
-            c2.metric("3-Month",  fmt_pct(t3r.get("availability_pct") if t3r is not None else None))
+            c1.metric("12-Month", fmt_pct(v12))
+            c2.metric("3-Month",  fmt_pct(v3))
             st.caption("Not compared to peers — target varies based on whether delivery target is met.")
         ar_card(18, "Availability Percentage", _s18)
 
         # ── 19. Delivery Percentage ───────────────────────────────────────────
         def _s19():
+            v12 = t12r.get("delivery_pct")
+            v3  = t3r.get("delivery_pct") if t3r is not None else None
             p12 = peer_avg(peers_12m, "delivery_pct")
             p3  = peer_avg(peers_3m,  "delivery_pct")
+            d12, dc12 = ar_delta(v12, p12, higher_is_better=True)
+            d3,  dc3  = ar_delta(v3,  p3,  higher_is_better=True)
             c1, c2, c3, c4 = st.columns(4)
-            c1.metric("12-Month",       fmt_pct(t12r.get("delivery_pct")))
-            c2.metric("3-Month",        fmt_pct(t3r.get("delivery_pct") if t3r is not None else None))
+            c1.metric("12-Month",       fmt_pct(v12), delta=d12, delta_color=dc12)
+            c2.metric("3-Month",        fmt_pct(v3),  delta=d3,  delta_color=dc3)
             c3.metric("Peer Avg (12M)", fmt_pct(p12))
             c4.metric("Peer Avg (3M)",  fmt_pct(p3))
             st.caption(f"Compared to {len(peers_12m)} peers — same tier ({tier_val}) & delivery target ({del_target}h/wk).")
@@ -6616,12 +6656,16 @@ def render_app(config):
 
         # ── 20. Weeks Meeting Delivery Target ────────────────────────────────
         def _s20():
+            v12 = t12r.get("weeks_at_target")
+            v3  = t3r.get("weeks_at_target") if t3r is not None else None
             p12 = peer_avg(peers_12m, "weeks_at_target")
             p3  = peer_avg(peers_3m,  "weeks_at_target")
+            d12, dc12 = ar_delta_num(v12, p12, higher_is_better=True, label="vs peer avg")
+            d3,  dc3  = ar_delta_num(v3,  p3,  higher_is_better=True, label="vs peer avg")
             c1, c2, c3, c4 = st.columns(4)
-            c1.metric("12-Month (weeks)",   fmt_num(t12r.get("weeks_at_target"), 0))
-            c2.metric("3-Month (weeks)",    fmt_num(t3r.get("weeks_at_target") if t3r is not None else None, 0))
-            c3.metric("Peer Avg (12M)",     fmt_num(p12, 1))
-            c4.metric("Peer Avg (3M)",      fmt_num(p3, 1))
+            c1.metric("12-Month (weeks)",  fmt_num(v12, 0), delta=d12, delta_color=dc12)
+            c2.metric("3-Month (weeks)",   fmt_num(v3,  0), delta=d3,  delta_color=dc3)
+            c3.metric("Peer Avg (12M)",    fmt_num(p12, 1))
+            c4.metric("Peer Avg (3M)",     fmt_num(p3,  1))
             st.caption(f"Compared to {len(peers_12m)} peers — same tier ({tier_val}) & delivery target ({del_target}h/wk).")
         ar_card(20, "Weeks Meeting Delivery Target", _s20)
