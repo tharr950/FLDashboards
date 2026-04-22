@@ -445,7 +445,8 @@ def build_video_tutor_summary(df):
 # SNAPSHOT FILES
 # ─────────────────────────────────────────────
 
-SNAPSHOT_FILE        = "archive_snapshots.csv"
+SNAPSHOT_FILE         = "archive_snapshots.csv"
+SNAPSHOT_HISTORY_FILE = "archive_snapshots_history.csv"
 GRADES_SNAPSHOT_FILE = "grades_snapshots.csv"
 EXAMS_SNAPSHOT_FILE  = "exams_snapshots.csv"
 VIDEO_SNAPSHOT_FILE  = "video_snapshots.csv"
@@ -464,12 +465,25 @@ def save_weekly_snapshot(df):
     )
     summary["week_key"]  = week_key
     summary["week_date"] = week_date
+    # Save 2-week rolling snapshot (used by home page change indicators)
     existing = gh_read(SNAPSHOT_FILE)
     if not existing.empty and week_key in existing["week_key"].values:
-        return existing
-    updated = pd.concat([existing, summary], ignore_index=True) if not existing.empty else summary
-    gh_write(SNAPSHOT_FILE, updated)
-    return updated
+        pass  # already saved this week
+    else:
+        updated = pd.concat([existing, summary], ignore_index=True) if not existing.empty else summary
+        # Keep only 2 most recent weeks
+        if "week_key" in updated.columns:
+            recent_keys = sorted(updated["week_key"].unique())[-2:]
+            updated = updated[updated["week_key"].isin(recent_keys)]
+        gh_write(SNAPSHOT_FILE, updated)
+
+    # Also save to full history file (used by annual reviews)
+    history = gh_read(SNAPSHOT_HISTORY_FILE)
+    if history.empty or week_key not in history.get("week_key", pd.Series()).values:
+        history_updated = pd.concat([history, summary], ignore_index=True) if not history.empty else summary
+        gh_write(SNAPSHOT_HISTORY_FILE, history_updated)
+
+    return gh_read(SNAPSHOT_FILE)
 
 
 def save_grades_weekly_snapshot(df):
@@ -6482,12 +6496,13 @@ def render_app(config):
         except Exception as e:
             ar_video_snap = pd.DataFrame()
 
-        # Load archive snapshots for AR cards 9 & 10
+        # Load archive snapshots for AR cards 9 & 10 (use full history if available)
         try:
-            ar_arch_snap = load_snapshots()
+            ar_arch_snap = gh_read(SNAPSHOT_HISTORY_FILE)
+            if ar_arch_snap.empty:
+                ar_arch_snap = load_snapshots()  # fallback to 2-week rolling
             if not ar_arch_snap.empty and "week_date" in ar_arch_snap.columns:
                 ar_arch_snap["week_date"] = pd.to_datetime(ar_arch_snap["week_date"])
-                # Compute pct_archivable
                 if "archivable_students" in ar_arch_snap.columns and "total_students" in ar_arch_snap.columns:
                     ar_arch_snap["pct_archivable"] = ar_arch_snap.apply(
                         lambda r: round(r["archivable_students"] / r["total_students"] * 100, 1)
@@ -6639,31 +6654,25 @@ def render_app(config):
             if tutor_as.empty:
                 st.info(f"No archivable data found for {ar_tutor}.")
                 return
-            # All-tutor avg using most recent week per tutor
             all_latest  = ar_arch_snap.sort_values("week_date").groupby("tutor_name").last().reset_index()
             all_avg_pct = all_latest["pct_archivable"].mean() if "pct_archivable" in all_latest.columns else None
-            all_avg_abs = all_latest["archivable_students"].mean()
 
-            latest      = tutor_as.iloc[-1]
-            tutor_avg_pct = tutor_as["pct_archivable"].mean() if "pct_archivable" in tutor_as.columns else None
-            d, dc = ar_delta_num(tutor_avg_pct, all_avg_pct, higher_is_better=False, label="vs all-tutor avg")
+            latest   = tutor_as.iloc[-1]
+            prev     = tutor_as.iloc[-2] if len(tutor_as) >= 2 else None
+            lat_pct  = latest["pct_archivable"] if "pct_archivable" in latest else None
+            prev_pct = prev["pct_archivable"]   if prev is not None and "pct_archivable" in prev else None
+            d_peer, dc_peer = ar_delta_num(lat_pct, all_avg_pct, higher_is_better=False, label="vs all-tutor avg")
+            d_prev, dc_prev = ar_delta_num(lat_pct, prev_pct,    higher_is_better=False, label="vs prev week")                               if prev_pct is not None else (None, "off")
 
             c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Most Recent (# students)", fmt_num(latest["archivable_students"], 0))
-            c2.metric("Most Recent (%)",           f"{latest['pct_archivable']:.1f}%" if "pct_archivable" in latest else "—")
-            c3.metric("Avg % (all weeks)",         f"{tutor_avg_pct:.1f}%" if tutor_avg_pct else "—",
-                      delta=d, delta_color=dc)
-            c4.metric("All-Tutor Avg %",           f"{all_avg_pct:.1f}%" if all_avg_pct else "—")
-
-            if len(tutor_as) >= 2:
-                fig_a = px.line(tutor_as, x="week_date", y="pct_archivable",
-                                markers=True, title="% Archivable Students — Week over Week",
-                                color_discrete_sequence=["#c62828"])
-                fig_a.update_layout(height=250, margin=dict(l=20,r=20,t=40,b=20),
-                                    xaxis_title="", yaxis_title="%",
-                                    title=dict(x=0.5, xanchor="center"))
-                st.plotly_chart(fig_a, use_container_width=True)
-            st.caption("% of active students who are archivable. Lower is better. Compared to all tutors.")
+            c1.metric("# Archivable (now)",    fmt_num(latest["archivable_students"], 0))
+            c2.metric("% Archivable (now)",    f"{lat_pct:.1f}%" if lat_pct else "—",
+                      delta=d_prev, delta_color=dc_prev)
+            c3.metric("All-Tutor Avg %",       f"{all_avg_pct:.1f}%" if all_avg_pct else "—")
+            c4.metric("vs All-Tutor Avg",      f"{lat_pct - all_avg_pct:+.1f}pp" if lat_pct and all_avg_pct else "—")
+            if prev is not None:
+                st.caption(f"Previous week: {int(prev['archivable_students'])} archivable ({prev_pct:.1f}%) — week of {prev['week_date'].strftime('%b %d') if hasattr(prev['week_date'], 'strftime') else prev['week_date']}")
+            st.caption("% of active students who are archivable. Lower is better. Compared to all tutors. *(Full trend history coming next review cycle.)*")
         ar_card(9, "Archivable Students", _s9)
 
         # ── 10. Unscheduled Hours ────────────────────────────────────────────
@@ -6678,24 +6687,22 @@ def render_app(config):
             all_latest  = ar_arch_snap.sort_values("week_date").groupby("tutor_name").last().reset_index()
             all_avg_hrs = all_latest["unscheduled_hours"].mean()
 
-            latest        = tutor_as.iloc[-1]
-            tutor_avg_hrs = tutor_as["unscheduled_hours"].mean()
-            d, dc = ar_delta_num(tutor_avg_hrs, all_avg_hrs, higher_is_better=False, label="vs all-tutor avg")
+            latest   = tutor_as.iloc[-1]
+            prev     = tutor_as.iloc[-2] if len(tutor_as) >= 2 else None
+            lat_hrs  = latest["unscheduled_hours"]
+            prev_hrs = prev["unscheduled_hours"] if prev is not None else None
+            d_peer, dc_peer = ar_delta_num(lat_hrs, all_avg_hrs, higher_is_better=False, label="vs all-tutor avg")
+            d_prev, dc_prev = ar_delta_num(lat_hrs, prev_hrs, higher_is_better=False, label="vs prev week")                               if prev_hrs is not None else (None, "off")
 
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Most Recent (hrs)",    fmt_num(latest["unscheduled_hours"], 1))
-            c2.metric("Avg (all weeks)",      fmt_num(tutor_avg_hrs, 1), delta=d, delta_color=dc)
-            c3.metric("All-Tutor Avg (hrs)",  fmt_num(all_avg_hrs, 1))
-
-            if len(tutor_as) >= 2:
-                fig_u = px.line(tutor_as, x="week_date", y="unscheduled_hours",
-                                markers=True, title="Unscheduled Hours — Week over Week",
-                                color_discrete_sequence=["#e65100"])
-                fig_u.update_layout(height=250, margin=dict(l=20,r=20,t=40,b=20),
-                                    xaxis_title="", yaxis_title="Hours",
-                                    title=dict(x=0.5, xanchor="center"))
-                st.plotly_chart(fig_u, use_container_width=True)
-            st.caption("Unscheduled hours for active students only. Lower is better. Compared to all tutors.")
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Unscheduled Hrs (now)", fmt_num(lat_hrs, 1),
+                      delta=d_prev, delta_color=dc_prev)
+            c2.metric("All-Tutor Avg (hrs)",   fmt_num(all_avg_hrs, 1))
+            c3.metric("vs All-Tutor Avg",      f"{lat_hrs - all_avg_hrs:+.1f} hrs" if all_avg_hrs else "—")
+            c4.metric("Total Students",         fmt_num(latest["total_students"], 0))
+            if prev is not None:
+                st.caption(f"Previous week: {prev_hrs:.1f} hrs — week of {prev['week_date'].strftime('%b %d') if hasattr(prev['week_date'], 'strftime') else prev['week_date']}")
+            st.caption("Unscheduled hours for active students only. Lower is better. Compared to all tutors. *(Full trend history coming next review cycle.)*")
         ar_card(10, "Unscheduled Hours", _s10)
 
         # ── 11. Auto-Attendance ──────────────────────────────────────────────
