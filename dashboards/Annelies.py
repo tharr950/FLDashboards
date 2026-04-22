@@ -549,10 +549,15 @@ def save_exams_weekly_snapshot(df):
 
 def save_video_weekly_snapshot(video_summary_df):
     """Save per-tutor weekly video metrics snapshot."""
-    today     = pd.Timestamp.now()
-    week_key  = today.strftime("%Y-W%V")
-    # Use Sunday as week_date (dayofweek: Mon=0, so subtract (dayofweek+1)%7 to get Sunday)
-    week_date = (today - pd.to_timedelta((today.dayofweek + 1) % 7, unit="d")).strftime("%Y-%m-%d")
+    today    = pd.Timestamp.now()
+    # Use week_date from the video data itself so it matches the sync script's week_start
+    if "week of" in video_summary_df.columns and not video_summary_df["week of"].dropna().empty:
+        week_date = pd.to_datetime(video_summary_df["week of"].dropna().iloc[0]).strftime("%Y-%m-%d")
+    else:
+        # fallback: previous Sunday
+        days_back = (today.dayofweek + 1) % 7 or 7
+        week_date = (today - pd.to_timedelta(days_back, unit="d")).strftime("%Y-%m-%d")
+    week_key  = pd.Timestamp(week_date).strftime("%Y-W%V")
     existing = gh_read(VIDEO_SNAPSHOT_FILE)
     summary = video_summary_df.copy()
     summary["week_key"]  = week_key
