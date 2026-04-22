@@ -6473,6 +6473,14 @@ def render_app(config):
             ar_skills_df = load_ar_skills()
         except Exception as e:
             ar_skills_df = pd.DataFrame()
+
+        # Load video snapshots for AR cards 13 & 14
+        try:
+            ar_video_snap = load_video_snapshots()
+            if not ar_video_snap.empty and "week_date" in ar_video_snap.columns:
+                ar_video_snap["week_date"] = pd.to_datetime(ar_video_snap["week_date"])
+        except Exception as e:
+            ar_video_snap = pd.DataFrame()
         if ar_source == "github":
             st.caption("📦 Data loaded from nightly cache.")
         else:
@@ -6638,10 +6646,84 @@ def render_app(config):
         ar_card(12, "NPS", _s12)
 
         # ── 13. Parent Update Video ──────────────────────────────────────────
-        ar_card(13, "Parent Update Video", None, coming_soon=True)
+        def _s13():
+            if ar_video_snap.empty:
+                st.info("No video snapshot data available yet.")
+                return
+            tutor_vs  = ar_video_snap[ar_video_snap["tutor_name"] == ar_tutor].sort_values("week_date")
+            all_vs    = ar_video_snap.copy()
+
+            # Most recent week metrics
+            if tutor_vs.empty:
+                st.info(f"No video data found for {ar_tutor}.")
+                return
+
+            latest    = tutor_vs.iloc[-1]
+            all_latest = all_vs.groupby("tutor_name")["pct_with_video"].last()
+            all_avg   = all_latest.mean()
+
+            # Averages across all weeks
+            tutor_avg = tutor_vs["pct_with_video"].mean()
+            d, dc     = ar_delta_num(tutor_avg, all_avg, higher_is_better=True, label="vs all-tutor avg")
+
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Most Recent Week %",   f"{latest['pct_with_video']:.1f}%")
+            c2.metric("Avg Across All Weeks", f"{tutor_avg:.1f}%", delta=d, delta_color=dc)
+            c3.metric("All-Tutor Avg",        f"{all_avg:.1f}%")
+
+            # Trend chart
+            if len(tutor_vs) >= 2:
+                fig_v = px.line(tutor_vs, x="week_date", y="pct_with_video",
+                                markers=True, title="% With Video — Week over Week",
+                                color_discrete_sequence=["#7b2d8b"])
+                fig_v.add_hline(y=80, line_dash="dash", line_color="#cc0000",
+                                annotation_text="80% threshold")
+                fig_v.update_layout(height=250, margin=dict(l=20,r=20,t=40,b=20),
+                                    xaxis_title="", yaxis_title="%",
+                                    title=dict(x=0.5, xanchor="center"))
+                st.plotly_chart(fig_v, use_container_width=True)
+            else:
+                st.caption("Not enough weeks of data for a trend chart yet.")
+
+            st.caption("Based on weekly video snapshots. Compared to all tutors on team.")
+        ar_card(13, "Parent Update Video", _s13)
 
         # ── 14. Parent Update Mentioning Homework ────────────────────────────
-        ar_card(14, "Parent Update Mentioning Homework", None, coming_soon=True)
+        def _s14():
+            if ar_video_snap.empty or "pct_with_homework" not in ar_video_snap.columns:
+                st.info("No homework mention data available yet.")
+                return
+            tutor_vs  = ar_video_snap[ar_video_snap["tutor_name"] == ar_tutor].sort_values("week_date")
+            all_vs    = ar_video_snap.copy()
+
+            if tutor_vs.empty:
+                st.info(f"No homework mention data found for {ar_tutor}.")
+                return
+
+            latest    = tutor_vs.iloc[-1]
+            all_latest = all_vs.groupby("tutor_name")["pct_with_homework"].last()
+            all_avg   = all_latest.mean()
+            tutor_avg = tutor_vs["pct_with_homework"].mean()
+            d, dc     = ar_delta_num(tutor_avg, all_avg, higher_is_better=True, label="vs all-tutor avg")
+
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Most Recent Week %",   f"{latest['pct_with_homework']:.1f}%")
+            c2.metric("Avg Across All Weeks", f"{tutor_avg:.1f}%", delta=d, delta_color=dc)
+            c3.metric("All-Tutor Avg",        f"{all_avg:.1f}%")
+
+            if len(tutor_vs) >= 2:
+                fig_h = px.line(tutor_vs, x="week_date", y="pct_with_homework",
+                                markers=True, title="% Updates Mentioning Homework — Week over Week",
+                                color_discrete_sequence=["#1565c0"])
+                fig_h.update_layout(height=250, margin=dict(l=20,r=20,t=40,b=20),
+                                    xaxis_title="", yaxis_title="%",
+                                    title=dict(x=0.5, xanchor="center"))
+                st.plotly_chart(fig_h, use_container_width=True)
+            else:
+                st.caption("Not enough weeks of data for a trend chart yet.")
+
+            st.caption("Based on weekly video snapshots. Compared to all tutors on team.")
+        ar_card(14, "Parent Update Mentioning Homework", _s14)
 
         # ── 15. Progress Updates ─────────────────────────────────────────────
         ar_card(15, "Progress Updates", None, coming_soon=True)
