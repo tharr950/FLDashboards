@@ -353,6 +353,49 @@ def load_availability_compliance():
     return df
 
 
+def load_progress_updates(as_of_date: str, last_session_from: str, team_name: str):
+    """Load progress update compliance data for active students."""
+    conn = get_redshift_connection()
+    query = f"""
+        SELECT DISTINCT
+            employees.id AS tutor_id,
+            tutor_users.first_name||' '||tutor_users.last_name AS tutor_name,
+            tiers.name AS tier,
+            student_users.first_name||' '||student_users.last_name AS student_name,
+            enrollments.course_id,
+            MAX(sessions.starts_at) AS last_session,
+            MAX(tutoring_histories.progress_update_last_sent_at) AS last_progress_update,
+            SUM(sessions.duration)/60.0 AS hours_delivered,
+            CASE
+                WHEN EXTRACT(days FROM MAX(sessions.starts_at) - MAX(tutoring_histories.progress_update_last_sent_at)) > 60
+                  OR MAX(tutoring_histories.progress_update_last_sent_at) IS NULL
+                THEN FALSE ELSE TRUE
+            END AS on_time
+        FROM dw.sessions
+        JOIN dw.courses ON courses.id = sessions.course_id
+        JOIN dw.enrollments ON enrollments.course_id = courses.id
+        JOIN dw.tutoring_histories ON tutoring_histories.enrollment_id = enrollments.id
+            AND sessions.supervisor_id = tutoring_histories.tutor_id
+        JOIN dw.employees ON tutoring_histories.tutor_id = employees.id
+        JOIN dw.users tutor_users ON employees.user_id = tutor_users.id
+        JOIN dw.tiers ON employees.tier_id = tiers.id
+        JOIN dw.students ON enrollments.enrollee_id = students.id
+        JOIN dw.users student_users ON students.user_id = student_users.id
+        JOIN dw.team_members ON employees.id = team_members.member_id
+        JOIN dw.teams ON team_members.team_id = teams.id
+        WHERE sessions.starts_at < '{as_of_date}'
+          AND courses.brand_id IN (41, 42, 2)
+          AND teams.name = '{team_name}'
+        GROUP BY 1,2,3,4,5
+        HAVING SUM(sessions.duration)/60.0 >= 6
+           AND MAX(sessions.starts_at) >= '{last_session_from}'
+    """
+    try:
+        df = pd.read_sql(query, conn)
+    finally:
+        conn.close()
+    return df
+
 def load_ppw_data(start_date: str, end_date: str, team_name: str):
     """Load PPW (first session attachment) data for a given date range and team."""
     conn = get_redshift_connection()
@@ -1545,6 +1588,7 @@ def render_app(config):
         "Archivable Students & Unscheduled Hours",
         "📋 Annual Reviews",
         "📄 PPW Report",
+        "📊 Progress Updates",
     ]
     _default_index = _page_options.index(_goto) if _goto in _page_options else 0
     page = st.sidebar.radio("\U0001f4c2 Navigation", _page_options, index=_default_index)
@@ -5586,6 +5630,101 @@ def render_app(config):
     # ─────────────────────────────────────────────
     # PAGE: PPW REPORT
     # ─────────────────────────────────────────────
+    elif page == "📊 Progress Updates":
+        st.markdown("## 📊 Progress Update Summary")
+        st.caption("Students with 6+ hours delivered who require a progress update.")
+
+        col1, col2 = st.columns(2)
+        with col1:
+            pu_as_of = st.date_input("Sessions Before", value=pd.Timestamp.now(),
+                                      key="pu_as_of")
+        with col2:
+            pu_since = st.date_input("Last Session On/After",
+                                      value=pd.Timestamp.now() - pd.DateOffset(months=1),
+                                      key="pu_since")
+
+        if st.button("🔄 Load Progress Update Data"):
+            st.session_state["pu_as_of_val"]  = str(pu_as_of)
+            st.session_state["pu_since_val"]   = str(pu_since)
+
+        pu_as_of_val  = st.session_state.get("pu_as_of_val")
+        pu_since_val  = st.session_state.get("pu_since_val")
+
+        if not pu_as_of_val:
+            st.info("Select dates and click Load Progress Update Data.")
+        else:
+            try:
+                with st.spinner("Loading progress update data..."):
+                    pu_df = load_progress_updates(pu_as_of_val, pu_since_val, "Team Haase-Alvey")
+            except Exception as _e:
+                st.error(f"Query error: {_e}")
+                pu_df = pd.DataFrame()
+
+            if pu_df.empty:
+                st.warning("No data found for this date range.")
+            else:
+                total_students  = len(pu_df)
+                on_time_count   = int(pu_df["on_time"].sum())
+                needs_update    = total_students - on_time_count
+                pct_on_time     = round(on_time_count / total_students * 100, 1) if total_students else 0
+
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("Total Active Students", total_students)
+                c2.metric("Updates Current",       on_time_count)
+                c3.metric("Needs Update",          needs_update)
+                c4.metric("% Current",             f"{pct_on_time}%")
+                st.divider()
+
+                # ── Tutor summary ──
+                st.subheader("By Tutor")
+                tutor_pu = pu_df.groupby("tutor_name").agg(
+                    Students=("student_name", "count"),
+                    Requiring_Update=("on_time", lambda x: int((~x).sum())),
+                    Current=("on_time", lambda x: int(x.sum())),
+                ).reset_index()
+                tutor_pu["% Current"] = (tutor_pu["Current"] / tutor_pu["Students"] * 100).round(1)
+                tutor_pu = tutor_pu.rename(columns={
+                    "tutor_name": "Tutor", "Requiring_Update": "Needs Update"})
+
+                def _pu_color(val):
+                    if val >= 80: return "color: #2e7d32; font-weight: bold"
+                    elif val >= 60: return "color: #f57f17; font-weight: bold"
+                    else: return "color: #c62828; font-weight: bold"
+
+                st.dataframe(tutor_pu.style.map(_pu_color, subset=["% Current"]),
+                             use_container_width=True, hide_index=True)
+                st.divider()
+
+                # ── Detail view ──
+                st.subheader("Detail View")
+                col_f1, col_f2 = st.columns(2)
+                with col_f1:
+                    tutor_list = ["All Tutors"] + sorted(pu_df["tutor_name"].unique().tolist())
+                    sel_tutor  = st.selectbox("Filter by Tutor", tutor_list, key="pu_tutor")
+                with col_f2:
+                    status_opts = ["All", "Needs Update", "Current"]
+                    sel_status  = st.selectbox("Filter by Status", status_opts, key="pu_status")
+
+                detail = pu_df.copy()
+                if sel_tutor != "All Tutors":
+                    detail = detail[detail["tutor_name"] == sel_tutor]
+                if sel_status == "Needs Update":
+                    detail = detail[detail["on_time"] == False]
+                elif sel_status == "Current":
+                    detail = detail[detail["on_time"] == True]
+
+                display = detail[["tutor_name","tier","student_name","hours_delivered",
+                                   "last_session","last_progress_update","on_time"]].copy()
+                display["last_session"]         = pd.to_datetime(display["last_session"]).dt.strftime("%m/%d/%Y")
+                display["last_progress_update"] = pd.to_datetime(display["last_progress_update"]).dt.strftime("%m/%d/%Y").fillna("Never")
+                display["hours_delivered"]      = display["hours_delivered"].round(1)
+                display["on_time"]              = display["on_time"].map({True: "✅", False: "❌"})
+                display = display.rename(columns={
+                    "tutor_name": "Tutor", "tier": "Tier", "student_name": "Student",
+                    "hours_delivered": "Hours", "last_session": "Last Session",
+                    "last_progress_update": "Last Progress Update", "on_time": "Current"})
+                st.dataframe(display, use_container_width=True, hide_index=True)
+
     elif page == "📄 PPW Report":
         st.markdown("## 📄 PPW Report")
         st.caption("First-session parent progress write-up attachment data.")
