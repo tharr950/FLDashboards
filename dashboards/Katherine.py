@@ -354,6 +354,62 @@ def load_availability_compliance():
 
 
 @st.cache_data(ttl=3600)
+def load_ppw_data(start_date: str, end_date: str, team_name: str):
+    """Load PPW (first session attachment) data for a given date range and team."""
+    conn = get_redshift_connection()
+    query = f"""
+        WITH first_course AS (
+            SELECT
+                students.id AS student_id,
+                MIN(courses.starts_at) AS course_start
+            FROM dw.students
+            JOIN dw.enrollments ON enrollments.enrollee_id = students.id
+            JOIN dw.courses ON courses.id = enrollments.course_id
+            WHERE courses.brand_id IN (2, 42, 41, 43, 36)
+            GROUP BY students.id
+        )
+        SELECT
+            courses.starts_at,
+            courses.brand_id,
+            employees.id AS tutor_id,
+            tutor_users.first_name||' '||tutor_users.last_name AS tutor_name,
+            student_users.first_name||' '||student_users.last_name AS student_name,
+            CASE
+                WHEN orbit_stitch.attachments.updated_at IS NOT NULL
+                AND (EXTRACT(DAY FROM (orbit_stitch.attachments.created_at - courses.starts_at))*24
+                     + EXTRACT(HOUR FROM (orbit_stitch.attachments.created_at - courses.starts_at)) < 72)
+                THEN 1 ELSE 0
+            END AS attachment_uploaded
+        FROM first_course
+        JOIN dw.students ON first_course.student_id = students.id
+        JOIN dw.users student_users ON students.user_id = student_users.id
+        JOIN dw.enrollments ON students.id = enrollments.enrollee_id
+        JOIN dw.courses ON (courses.id = enrollments.course_id AND courses.starts_at = first_course.course_start)
+        JOIN dw.sessions ON (sessions.course_id = courses.id AND sessions.starts_at = courses.starts_at)
+        JOIN dw.employees ON sessions.supervisor_id = employees.id
+        JOIN dw.users tutor_users ON employees.user_id = tutor_users.id
+        JOIN dw.team_members ON employees.id = team_members.member_id
+        JOIN dw.teams ON team_members.team_id = teams.id
+        LEFT JOIN orbit_stitch.attachments ON (
+            orbit_stitch.attachments.attachable_id = sessions.id
+            AND orbit_stitch.attachments.attachable_type = 'Session'
+        )
+        WHERE courses.starts_at >= '{start_date}'
+          AND courses.starts_at <= '{end_date}'
+          AND teams.name = '{team_name}'
+        ORDER BY tutor_name, courses.starts_at
+    """
+    try:
+        df = pd.read_sql(query, conn)
+    finally:
+        conn.close()
+    # Map brand_id to name
+    brand_map = {2: 'Private Tutoring', 41: 'Back-Up Care Tutoring', 42: 'Academics',
+                 43: 'School Pay', 36: 'Trial'}
+    df['brand'] = df['brand_id'].map(brand_map).fillna(df['brand_id'].astype(str))
+    return df
+
+@st.cache_data(ttl=3600)
 def load_exam_data():
     try:
         github_repo  = st.secrets["github"]["repo"]
@@ -1489,6 +1545,7 @@ def render_app(config):
         "📹 Parent Update Videos",
         "Archivable Students & Unscheduled Hours",
         "📋 Annual Reviews",
+        "📄 PPW Report",
     ]
     _default_index = _page_options.index(_goto) if _goto in _page_options else 0
     page = st.sidebar.radio("\U0001f4c2 Navigation", _page_options, index=_default_index)
@@ -5526,6 +5583,73 @@ def render_app(config):
         if st.sidebar.button("🔄 Refresh Live Data"):
             st.cache_data.clear(); st.rerun()
 
+
+    # ─────────────────────────────────────────────
+    # PAGE: PPW REPORT
+    # ─────────────────────────────────────────────
+    elif page == "📄 PPW Report":
+        st.markdown("## 📄 PPW Report")
+        st.caption("First-session parent progress write-up attachment data.")
+
+        col1, col2 = st.columns(2)
+        with col1:
+            start_date = st.date_input("Course Start From", value=pd.Timestamp.now().replace(day=1) - pd.DateOffset(months=1))
+        with col2:
+            end_date   = st.date_input("Course Start To",   value=pd.Timestamp.now())
+
+        if st.button("🔄 Load PPW Data"):
+            st.session_state["ppw_df"] = load_ppw_data(
+                str(start_date), str(end_date), "Katherine Marino")
+
+        ppw_df = st.session_state.get("ppw_df", pd.DataFrame())
+
+        if ppw_df.empty:
+            st.info("Select a date range and click Load PPW Data.")
+        else:
+            # ── Summary metrics ──
+            total    = len(ppw_df)
+            uploaded = ppw_df["attachment_uploaded"].sum()
+            pct      = round(uploaded / total * 100, 1) if total > 0 else 0
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Total First Sessions", total)
+            c2.metric("PPWs Uploaded",        int(uploaded))
+            c3.metric("% Uploaded",           f"{pct}%")
+            st.divider()
+
+            # ── Tutor summary table ──
+            st.subheader("By Tutor")
+            tutor_summary = ppw_df.groupby("tutor_name").agg(
+                First_Sessions=("student_name", "count"),
+                PPWs_Uploaded=("attachment_uploaded", "sum"),
+            ).reset_index()
+            tutor_summary["% Uploaded"] = (tutor_summary["PPWs_Uploaded"] / tutor_summary["First_Sessions"] * 100).round(1)
+            tutor_summary = tutor_summary.rename(columns={"tutor_name": "Tutor", "First_Sessions": "First Sessions", "PPWs_Uploaded": "PPWs Uploaded"})
+
+            def color_pct(val):
+                if val >= 80: color = "#2e7d32"
+                elif val >= 60: color = "#f57f17"
+                else: color = "#c62828"
+                return f"color: {color}; font-weight: bold"
+
+            st.dataframe(
+                tutor_summary.style.applymap(color_pct, subset=["% Uploaded"]),
+                use_container_width=True, hide_index=True)
+            st.divider()
+
+            # ── Tutor filter for detail ──
+            st.subheader("Detail View")
+            tutor_list = ["All Tutors"] + sorted(ppw_df["tutor_name"].unique().tolist())
+            selected_tutor = st.selectbox("Filter by Tutor", tutor_list)
+            detail_df = ppw_df if selected_tutor == "All Tutors" else ppw_df[ppw_df["tutor_name"] == selected_tutor]
+
+            display = detail_df[["tutor_name","student_name","brand","starts_at","attachment_uploaded"]].copy()
+            display["starts_at"] = pd.to_datetime(display["starts_at"]).dt.strftime("%m/%d/%Y")
+            display["attachment_uploaded"] = display["attachment_uploaded"].map({1: "✅", 0: "❌"})
+            display = display.rename(columns={
+                "tutor_name": "Tutor", "student_name": "Student",
+                "brand": "Brand", "starts_at": "Course Start", "attachment_uploaded": "PPW Uploaded"
+            })
+            st.dataframe(display, use_container_width=True, hide_index=True)
 
     # ─────────────────────────────────────────────
     # PAGE: ANNUAL REVIEWS
