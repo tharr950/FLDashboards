@@ -353,7 +353,6 @@ def load_availability_compliance():
     return df
 
 
-@st.cache_data(ttl=3600)
 def load_ppw_data(start_date: str, end_date: str, team_name: str):
     """Load PPW (first session attachment) data for a given date range and team."""
     conn = get_redshift_connection()
