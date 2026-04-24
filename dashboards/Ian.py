@@ -5595,7 +5595,7 @@ def render_app(config):
         with col1:
             start_date = st.date_input("Course Start From", value=pd.Timestamp.now().replace(day=1) - pd.DateOffset(months=1))
         with col2:
-            end_date   = st.date_input("Course Start To",   value=pd.Timestamp.now())
+            end_date = st.date_input("Course Start To", value=pd.Timestamp.now())
 
         if st.button("🔄 Load PPW Data"):
             st.session_state["ppw_start"] = str(start_date)
@@ -5609,51 +5609,48 @@ def render_app(config):
         else:
             with st.spinner("Loading PPW data..."):
                 ppw_df = load_ppw_data(ppw_start, ppw_end, "Ian Plamondon")
-        else:
-            # ── Summary metrics ──
-            total    = len(ppw_df)
-            uploaded = ppw_df["attachment_uploaded"].sum()
-            pct      = round(uploaded / total * 100, 1) if total > 0 else 0
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Total First Sessions", total)
-            c2.metric("PPWs Uploaded",        int(uploaded))
-            c3.metric("% Uploaded",           f"{pct}%")
-            st.divider()
+            if ppw_df.empty:
+                st.warning("No PPW data found for this date range.")
+            else:
+                total    = len(ppw_df)
+                uploaded = int(ppw_df["attachment_uploaded"].sum())
+                pct      = round(uploaded / total * 100, 1) if total > 0 else 0
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Total First Sessions", total)
+                c2.metric("PPWs Uploaded", uploaded)
+                c3.metric("% Uploaded", f"{pct}%")
+                st.divider()
 
-            # ── Tutor summary table ──
-            st.subheader("By Tutor")
-            tutor_summary = ppw_df.groupby("tutor_name").agg(
-                First_Sessions=("student_name", "count"),
-                PPWs_Uploaded=("attachment_uploaded", "sum"),
-            ).reset_index()
-            tutor_summary["% Uploaded"] = (tutor_summary["PPWs_Uploaded"] / tutor_summary["First_Sessions"] * 100).round(1)
-            tutor_summary = tutor_summary.rename(columns={"tutor_name": "Tutor", "First_Sessions": "First Sessions", "PPWs_Uploaded": "PPWs Uploaded"})
+                st.subheader("By Tutor")
+                tutor_summary = ppw_df.groupby("tutor_name").agg(
+                    First_Sessions=("student_name", "count"),
+                    PPWs_Uploaded=("attachment_uploaded", "sum"),
+                ).reset_index()
+                tutor_summary["% Uploaded"] = (tutor_summary["PPWs_Uploaded"] / tutor_summary["First_Sessions"] * 100).round(1)
+                tutor_summary = tutor_summary.rename(columns={
+                    "tutor_name": "Tutor", "First_Sessions": "First Sessions", "PPWs_Uploaded": "PPWs Uploaded"})
 
-            def color_pct(val):
-                if val >= 80: color = "#2e7d32"
-                elif val >= 60: color = "#f57f17"
-                else: color = "#c62828"
-                return f"color: {color}; font-weight: bold"
+                def _color_pct(val):
+                    if val >= 80: color = "#2e7d32"
+                    elif val >= 60: color = "#f57f17"
+                    else: color = "#c62828"
+                    return f"color: {color}; font-weight: bold"
 
-            st.dataframe(
-                tutor_summary.style.applymap(color_pct, subset=["% Uploaded"]),
-                use_container_width=True, hide_index=True)
-            st.divider()
+                st.dataframe(tutor_summary.style.applymap(_color_pct, subset=["% Uploaded"]),
+                             use_container_width=True, hide_index=True)
+                st.divider()
 
-            # ── Tutor filter for detail ──
-            st.subheader("Detail View")
-            tutor_list = ["All Tutors"] + sorted(ppw_df["tutor_name"].unique().tolist())
-            selected_tutor = st.selectbox("Filter by Tutor", tutor_list)
-            detail_df = ppw_df if selected_tutor == "All Tutors" else ppw_df[ppw_df["tutor_name"] == selected_tutor]
-
-            display = detail_df[["tutor_name","student_name","brand","starts_at","attachment_uploaded"]].copy()
-            display["starts_at"] = pd.to_datetime(display["starts_at"]).dt.strftime("%m/%d/%Y")
-            display["attachment_uploaded"] = display["attachment_uploaded"].map({1: "✅", 0: "❌"})
-            display = display.rename(columns={
-                "tutor_name": "Tutor", "student_name": "Student",
-                "brand": "Brand", "starts_at": "Course Start", "attachment_uploaded": "PPW Uploaded"
-            })
-            st.dataframe(display, use_container_width=True, hide_index=True)
+                st.subheader("Detail View")
+                tutor_list = ["All Tutors"] + sorted(ppw_df["tutor_name"].unique().tolist())
+                selected_tutor = st.selectbox("Filter by Tutor", tutor_list)
+                detail_df = ppw_df if selected_tutor == "All Tutors" else ppw_df[ppw_df["tutor_name"] == selected_tutor]
+                display = detail_df[["tutor_name","student_name","brand","starts_at","attachment_uploaded"]].copy()
+                display["starts_at"] = pd.to_datetime(display["starts_at"]).dt.strftime("%m/%d/%Y")
+                display["attachment_uploaded"] = display["attachment_uploaded"].map({1: "✅", 0: "❌"})
+                display = display.rename(columns={
+                    "tutor_name": "Tutor", "student_name": "Student",
+                    "brand": "Brand", "starts_at": "Course Start", "attachment_uploaded": "PPW Uploaded"})
+                st.dataframe(display, use_container_width=True, hide_index=True)
 
     # ─────────────────────────────────────────────
     # PAGE: ANNUAL REVIEWS
