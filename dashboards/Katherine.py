@@ -5640,7 +5640,7 @@ def render_app(config):
                     else: color = "#c62828"
                     return f"color: {color}; font-weight: bold"
 
-                st.dataframe(tutor_summary.style.applymap(_color_pct, subset=["% Uploaded"]),
+                st.dataframe(tutor_summary.style.map(_color_pct, subset=["% Uploaded"]),
                              use_container_width=True, hide_index=True)
                 st.divider()
 
