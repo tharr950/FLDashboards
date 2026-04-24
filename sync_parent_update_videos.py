@@ -5,7 +5,7 @@ sync_parent_update_videos.py
 2. For every row where parent update sent = True, opens the course
    contact page in headless Chrome, finds the correct tutor message
    within the week date range, checks for a video, and captures duration.
-3. Runs scraping in parallel (5 workers by default) for speed.
+3. Runs scraping in parallel (3 workers by default) for speed.
 4. Saves results to CSV and pushes to GitHub.
 
 Run weekly via cron or GitHub Actions.
@@ -18,7 +18,7 @@ Environment variables:
     RP_ADMIN_EMAIL, RP_ADMIN_PASSWORD
     GITHUB_TOKEN, GITHUB_REPO        (e.g. "tylerharrington/fl-dashboards-data")
     GITHUB_DATA_PATH                 (optional, default "data/parent_update_videos.csv")
-    SCRAPE_WORKERS                   (optional, default 5)
+    SCRAPE_WORKERS                   (optional, default 3)
 """
 
 import os
@@ -66,7 +66,7 @@ GITHUB_REPO  = os.environ.get("GITHUB_REPO",  "")
 GITHUB_PATH  = os.environ.get("GITHUB_DATA_PATH", "data/parent_update_videos.csv")
 OUTPUT_FILE  = "parent_update_videos.csv"
 
-WORKERS    = int(os.environ.get("SCRAPE_WORKERS", 5))
+WORKERS    = int(os.environ.get("SCRAPE_WORKERS", 3))
 CLICK_WAIT = 2
 PAGE_WAIT  = 4
 
@@ -155,6 +155,16 @@ updates_sent AS (
     AND ca.created_at::date BETWEEN
         (SELECT week_start FROM previous_week)
     AND (SELECT week_end   FROM previous_week)
+  UNION
+  -- Catch updates stored at course level (e.g. Progress Updates)
+  SELECT DISTINCT ca.employee_id, ca.regarding_id AS course_id
+  FROM dw.contact_activities ca
+  WHERE ca.type = 'Contact::Message'
+    AND ca.message_type IN ('Parent Update','Progress Update')
+    AND ca.regarding_type = 'Course'
+    AND ca.created_at::date BETWEEN
+        (SELECT week_start FROM previous_week)
+    AND (SELECT week_end   FROM previous_week)
 ),
 parent_updates_only AS (
   -- Only Parent Updates count for video scraping
@@ -167,11 +177,46 @@ parent_updates_only AS (
     AND ca.created_at::date BETWEEN
         (SELECT week_start FROM previous_week)
     AND (SELECT week_end   FROM previous_week)
+  UNION
+  -- Catch Parent Updates stored at course level
+  SELECT DISTINCT ca.employee_id, ca.regarding_id AS course_id
+  FROM dw.contact_activities ca
+  WHERE ca.type = 'Contact::Message'
+    AND ca.message_type = 'Parent Update'
+    AND ca.regarding_type = 'Course'
+    AND ca.created_at::date BETWEEN
+        (SELECT week_start FROM previous_week)
+    AND (SELECT week_end   FROM previous_week)
 ),
 -- One row per update unit — exactly like the reference query
 -- For 1-on-1: one row per student (update_unit_id = student_id)
 -- For group: one row per course (update_unit_id = course_id)
 -- For trial: one row per session (update_unit_id = session_id)
+homework_mentioned AS (
+  -- Check if update body mentions homework-related keywords
+  SELECT DISTINCT ca.employee_id, s.course_id
+  FROM dw.contact_activities ca
+  JOIN dw.sessions s ON ca.regarding_id = s.id
+  WHERE ca.type = 'Contact::Message'
+    AND ca.message_type IN ('Parent Update','Progress Update')
+    AND ca.regarding_type = 'Session'
+    AND ca.body IS NOT NULL
+    AND LOWER(ca.body) SIMILAR TO '%(homework|home work|assignment|assignments|practice problems|practice work|workbook|independent work|study guide|worksheet|exercises)%'
+    AND ca.created_at::date BETWEEN
+        (SELECT week_start FROM previous_week)
+    AND (SELECT week_end   FROM previous_week)
+  UNION
+  SELECT DISTINCT ca.employee_id, ca.regarding_id AS course_id
+  FROM dw.contact_activities ca
+  WHERE ca.type = 'Contact::Message'
+    AND ca.message_type IN ('Parent Update','Progress Update')
+    AND ca.regarding_type = 'Course'
+    AND ca.body IS NOT NULL
+    AND LOWER(ca.body) SIMILAR TO '%(homework|home work|assignment|assignments|practice problems|practice work|workbook|independent work|study guide|worksheet|exercises)%'
+    AND ca.created_at::date BETWEEN
+        (SELECT week_start FROM previous_week)
+    AND (SELECT week_end   FROM previous_week)
+),
 unit_summary AS (
   SELECT
     ws.tutor_name,
@@ -198,7 +243,11 @@ unit_summary AS (
     MAX(CASE
       WHEN ws.update_required_flag = 1 AND pu.course_id IS NOT NULL THEN 1
       ELSE 0
-    END) AS parent_update_sent_flag
+    END) AS parent_update_sent_flag,
+    MAX(CASE
+      WHEN ws.update_required_flag = 1 AND hw.course_id IS NOT NULL THEN 1
+      ELSE 0
+    END) AS homework_mentioned_flag
   FROM weekly_sessions ws
   LEFT JOIN updates_sent us
     ON ws.course_id = us.course_id
@@ -206,6 +255,9 @@ unit_summary AS (
   LEFT JOIN parent_updates_only pu
     ON ws.course_id = pu.course_id
     AND ws.supervisor_id = pu.employee_id
+  LEFT JOIN homework_mentioned hw
+    ON ws.course_id = hw.course_id
+    AND ws.supervisor_id = hw.employee_id
   GROUP BY
     ws.tutor_name, ws.faculty_leader_name, ws.update_unit_id,
     ws.brand_name, ws.supervisor_id
@@ -229,7 +281,12 @@ SELECT
     WHEN parent_update_sent_flag = 1 THEN 'True'
     ELSE                               'False'
   END AS "parent update only sent",
-  update_required_flag AS "update required"
+  update_required_flag AS "update required",
+  CASE
+    WHEN update_sent_flag        = 0 THEN 'False'
+    WHEN homework_mentioned_flag = 1 THEN 'True'
+    ELSE                               'False'
+  END AS "homework mentioned"
 FROM unit_summary
 ORDER BY tutor_name, display_name
 """
@@ -431,7 +488,20 @@ def worker_scrape_batch(
         login(driver)
         log.info(f"[Worker {worker_id}] Logged in")
 
-        for course_id, tutor_name in batch:
+        RESTART_EVERY = 100  # restart browser every N courses to free memory
+        for i, (course_id, tutor_name) in enumerate(batch):
+            # Periodic browser restart to prevent memory accumulation
+            if i > 0 and i % RESTART_EVERY == 0:
+                log.info(f"[Worker {worker_id}] Restarting browser after {i} courses to free memory...")
+                try:
+                    driver.quit()
+                except Exception:
+                    pass
+                time.sleep(3)
+                driver = build_driver()
+                login(driver)
+                log.info(f"[Worker {worker_id}] Browser restarted ✅")
+
             result = scrape_course(driver, course_id, tutor_name, week_start, week_end)
             results[(course_id, tutor_name)] = result
 
