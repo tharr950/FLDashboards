@@ -5598,12 +5598,14 @@ def render_app(config):
             end_date   = st.date_input("Course Start To",   value=pd.Timestamp.now())
 
         if st.button("🔄 Load PPW Data"):
-            st.session_state["ppw_df"] = load_ppw_data(
-                str(start_date), str(end_date), "Ela Cross")
+            with st.spinner("Loading PPW data..."):
+                st.session_state["ppw_df"] = load_ppw_data(
+                    str(start_date), str(end_date), "Ela Cross")
+                st.session_state["ppw_loaded"] = True
 
         ppw_df = st.session_state.get("ppw_df", pd.DataFrame())
 
-        if ppw_df.empty:
+        if not st.session_state.get("ppw_loaded") or ppw_df.empty:
             st.info("Select a date range and click Load PPW Data.")
         else:
             # ── Summary metrics ──
