@@ -314,29 +314,38 @@ def load_availability_compliance():
     today = pd.Timestamp.now()
     days_since_sunday = (today.weekday() + 1) % 7
     this_sunday = (today - pd.Timedelta(days=days_since_sunday)).strftime("%Y-%m-%d")
-    next_sunday = (today - pd.Timedelta(days=days_since_sunday) + pd.Timedelta(weeks=1)).strftime("%Y-%m-%d")
-    query = f"""
-        with avail_deduped as (
-            select distinct rp_bi.tutor_availabilities_daily.employee_id,
-            rp_bi.tutor_availabilities_daily.full_date,
-            rp_bi.dates.first_day_of_week_sunday_start as week_start
-            from rp_bi.tutor_availabilities_daily
-            join rp_bi.dates on rp_bi.tutor_availabilities_daily.full_date = rp_bi.dates.full_date
-            where rp_bi.dates.first_day_of_week_sunday_start = '{this_sunday}')
-        select dw.users.first_name||' '||dw.users.last_name as tutor_name,
-        dw.employees.id as employee_id, dw.addresses.state,
-        dw.teams.name as team, avail_deduped.week_start
-        from avail_deduped
-        join dw.employees on avail_deduped.employee_id = dw.employees.id
-        join dw.users on dw.employees.user_id = dw.users.id
-        join dw.team_members on dw.employees.id = dw.team_members.member_id
-        join dw.teams on dw.team_members.team_id = dw.teams.id
-        join dw.addresses on dw.users.address_id = dw.addresses.id
-        where dw.teams.name <> 'Proctors' and dw.employees.end_date IS NULL
-        group by 1,2,3,4,5
-        having count(distinct avail_deduped.full_date) >= 7
-        order by 4,1
-    """
+    query = """
+        WITH cte_availabilities_by_tutor_time_zone AS (
+            SELECT
+                availabilities.employee_id,
+                availabilities.starts_at,
+                availabilities.starts_at AT TIME ZONE 'America/Los_Angeles' AT TIME ZONE users.time_zone AS tutor_starts_at,
+                users.first_name||' '||users.last_name AS tutor,
+                addresses.state,
+                teams.name AS team,
+                users.time_zone AS tutor_time_zone
+            FROM dw.availabilities
+            JOIN dw.employees ON availabilities.employee_id = employees.id
+            JOIN dw.users ON users.id = employees.user_id
+            JOIN dw.team_members ON employees.id = team_members.member_id
+            JOIN dw.teams ON team_members.team_id = teams.id
+            JOIN dw.addresses ON users.address_id = addresses.id
+        )
+        SELECT
+            ttz.tutor AS tutor_name,
+            ttz.employee_id,
+            ttz.tutor_time_zone,
+            ttz.state,
+            ttz.team,
+            dates.first_day_of_week_sunday_start AS week_start
+        FROM cte_availabilities_by_tutor_time_zone ttz
+        JOIN rp_bi.dates ON ttz.tutor_starts_at::DATE = dates.full_date
+        WHERE dates.first_day_of_week_sunday_start = '{this_sunday}'
+        GROUP BY ttz.tutor, ttz.employee_id, ttz.tutor_time_zone, ttz.state, ttz.team,
+                 dates.first_day_of_week_sunday_start
+        HAVING COUNT(DISTINCT ttz.tutor_starts_at::DATE) > 6
+        ORDER BY ttz.team, ttz.tutor
+    """.format(this_sunday=this_sunday)
     try:
         df = pd.read_sql(query, conn)
     finally:
