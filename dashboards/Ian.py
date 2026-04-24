@@ -5608,7 +5608,7 @@ def render_app(config):
         else:
             try:
                 with st.spinner("Loading PPW data..."):
-                    ppw_df = load_ppw_data(ppw_start, ppw_end, "Ian Plamondon")
+                    ppw_df = load_ppw_data(ppw_start, ppw_end, "Team Plamondon")
                 st.caption(f"Debug: {len(ppw_df)} rows, dates {ppw_start} to {ppw_end}, team: Ian Plamondon")
             except Exception as _e:
                 st.error(f"Query error: {_e}")
