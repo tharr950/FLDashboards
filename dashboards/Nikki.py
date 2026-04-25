@@ -1676,7 +1676,7 @@ def render_app(config):
         "Grades Summary",
         "Test Prep & Exams",
         "📹 Parent Update Videos",
-        "📝 Update Quality Scores",
+        "📝 Progress Update Quality Scores",
         "Archivable Students & Unscheduled Hours",
         "📋 Annual Reviews",
         "📄 PPW Report",
@@ -5437,8 +5437,22 @@ def render_app(config):
     # PAGE: UPDATE QUALITY SCORES
     # ─────────────────────────────────────────────
 
-    if page == "📝 Update Quality Scores":
-        st.markdown('<div class="main-title">📝 Update Quality Scores</div>', unsafe_allow_html=True)
+    if page == "📝 Progress Update Quality Scores":
+        st.markdown('<div class="main-title">📝 Progress Update Quality Scores</div>', unsafe_allow_html=True)
+
+        with st.expander("ℹ️ About this data"):
+            st.markdown("""
+**What is this page?**
+Each progress update sent by a tutor is automatically scored by a local AI model (Llama 3.1) across 4 dimensions. Scores are updated weekly every Sunday night.
+
+**Scoring rubric (max total: 10):**
+- **What Worked On (0–2):** 0 = no specifics or broad subject only; 1 = one specific topic or concept named; 2 = two or more specific topics, or one topic plus measurable score improvement
+- **Goals (0–2):** 0 = no goal or vague; 1 = goal restated (e.g. "the goal is a 1300"); 2 = explicit progress shown from X to Y, or gap quantified
+- **Velocity (0–3):** 0 = no recommendation; 1 = vague or frequency only or duration only; 2 = specific frequency AND duration both stated; 3 = score 2 plus explicit package size recommended
+- **Plan Forward (0–3):** 0 = no plan; 1 = vague or single topic; 2 = outlined plan connecting content to goal; 3 = score 2 plus explicit hours/timeline tied to goal
+
+**Tutors with no updates sent that week will appear with blank scores.**
+            """)
 
         try:
             raw_scores_df, scores_fetched_at = load_progress_scores()
@@ -5478,33 +5492,56 @@ def render_app(config):
 
         st.markdown("### 📊 Team Overview")
         st.caption(f"{len(filtered_df)} updates scored · Max total score is 10")
-        m1, m2, m3, m4, m5, m6, m7 = st.columns(7)
+        m1, m2, m3, m4, m5 = st.columns(5)
         m1.metric("Avg Total",          f"{filtered_df['total'].mean():.1f} / 10")
         m2.metric("Avg What Worked On", f"{filtered_df['what_worked_on'].mean():.1f} / 2")
         m3.metric("Avg Goals",          f"{filtered_df['goals'].mean():.1f} / 2")
         m4.metric("Avg Velocity",       f"{filtered_df['velocity'].mean():.1f} / 3")
         m5.metric("Avg Plan Forward",   f"{filtered_df['plan_forward'].mean():.1f} / 3")
-        m6.metric("% No Goal",          f"{(filtered_df['goals']==0).mean()*100:.0f}%",
+
+        m6, m7, m8, m9 = st.columns(4)
+        m6.metric("% No What Worked On", f"{(filtered_df['what_worked_on']==0).mean()*100:.0f}%",
+                  delta_color="inverse" if (filtered_df["what_worked_on"]==0).mean() > 0.1 else "off")
+        m7.metric("% No Goal",           f"{(filtered_df['goals']==0).mean()*100:.0f}%",
                   delta_color="inverse" if (filtered_df["goals"]==0).mean() > 0.1 else "off")
-        m7.metric("% No Velocity",      f"{(filtered_df['velocity']==0).mean()*100:.0f}%",
+        m8.metric("% No Velocity",       f"{(filtered_df['velocity']==0).mean()*100:.0f}%",
                   delta_color="inverse" if (filtered_df["velocity"]==0).mean() > 0.1 else "off")
+        m9.metric("% No Plan Forward",   f"{(filtered_df['plan_forward']==0).mean()*100:.0f}%",
+                  delta_color="inverse" if (filtered_df["plan_forward"]==0).mean() > 0.1 else "off")
 
         st.divider()
 
-        tutor_agg = (
-            filtered_df.groupby("tutor")
-            .agg(
-                updates        = ("update_id",      "count"),
-                avg_total      = ("total",          "mean"),
-                avg_worked_on  = ("what_worked_on", "mean"),
-                avg_goals      = ("goals",           "mean"),
-                avg_velocity   = ("velocity",        "mean"),
-                avg_plan       = ("plan_forward",    "mean"),
-                pct_zero_goals = ("goals",    lambda x: (x==0).mean()*100),
-                pct_zero_vel   = ("velocity", lambda x: (x==0).mean()*100),
+        # Build agg — include ALL team tutors even if no updates sent
+        if not filtered_df.empty:
+            _agg = (
+                filtered_df.groupby("tutor")
+                .agg(
+                    updates        = ("update_id",      "count"),
+                    avg_total      = ("total",          "mean"),
+                    avg_worked_on  = ("what_worked_on", "mean"),
+                    avg_goals      = ("goals",           "mean"),
+                    avg_velocity   = ("velocity",        "mean"),
+                    avg_plan       = ("plan_forward",    "mean"),
+                    pct_zero_goals = ("goals",    lambda x: (x==0).mean()*100),
+                    pct_zero_vel   = ("velocity", lambda x: (x==0).mean()*100),
+                )
+                .reset_index()
             )
-            .reset_index()
-        )
+        else:
+            _agg = pd.DataFrame(columns=["tutor","updates","avg_total","avg_worked_on",
+                                          "avg_goals","avg_velocity","avg_plan",
+                                          "pct_zero_goals","pct_zero_vel"])
+        # Add tutors with no updates
+        missing_tutors = [t for t in annelies_tutors if t not in _agg["tutor"].values]
+        if missing_tutors:
+            _missing = pd.DataFrame([{
+                "tutor": t, "updates": 0,
+                "avg_total": None, "avg_worked_on": None, "avg_goals": None,
+                "avg_velocity": None, "avg_plan": None,
+                "pct_zero_goals": None, "pct_zero_vel": None,
+            } for t in missing_tutors])
+            _agg = pd.concat([_agg, _missing], ignore_index=True)
+        tutor_agg = _agg.sort_values("tutor").reset_index(drop=True)
 
         st.markdown("### 🚨 Tutors to Address")
         fc1, fc2, fc3, fc4 = st.columns(4)
@@ -5562,7 +5599,7 @@ def render_app(config):
         st.divider()
 
         st.markdown("### 📈 Avg Total Score — By Tutor")
-        chart_df = tutor_agg.sort_values("avg_total", ascending=True)
+        chart_df = tutor_agg.sort_values("tutor", ascending=False)
         fig_bar = px.bar(
             chart_df, x="avg_total", y="tutor", orientation="h",
             color="avg_total",
@@ -5590,7 +5627,7 @@ def render_app(config):
             display_agg[col] = display_agg[col].round(1)
         display_agg["pct_zero_goals"] = display_agg["pct_zero_goals"].round(0).astype(int).astype(str) + "%"
         display_agg["pct_zero_vel"]   = display_agg["pct_zero_vel"].round(0).astype(int).astype(str) + "%"
-        display_agg = display_agg.sort_values("avg_total", ascending=False).rename(columns={
+        display_agg = display_agg.sort_values("tutor", ascending=True).rename(columns={
             "tutor":          "Tutor",
             "updates":        "# Updates",
             "avg_total":      "Avg Total (/10)",
@@ -5670,10 +5707,12 @@ def render_app(config):
         detail_df = detail_df[detail_df["total"] >= min_score].sort_values("sent_at", ascending=False)
         st.caption(f"Showing {len(detail_df)} updates")
 
-        detail_display = detail_df[["sent_at","tutor","student_name",
-            "what_worked_on","goals","velocity","plan_forward","total","notes"]].copy()
+        available_cols = [c for c in ["sent_at","tutor","student_name",
+            "what_worked_on","goals","velocity","plan_forward","total","notes","body"]
+            if c in detail_df.columns]
+        detail_display = detail_df[available_cols].copy()
         detail_display["sent_at"] = detail_display["sent_at"].dt.strftime("%Y-%m-%d")
-        detail_display = detail_display.rename(columns={
+        detail_display = detail_display.sort_values(["tutor","sent_at"]).rename(columns={
             "sent_at":        "Date",
             "tutor":          "Tutor",
             "student_name":   "Student",
@@ -5683,6 +5722,7 @@ def render_app(config):
             "plan_forward":   "Plan Forward",
             "total":          "Total",
             "notes":          "AI Notes",
+            "body":           "Progress Update",
         })
 
         def highlight_detail_row(row):
@@ -5691,17 +5731,20 @@ def render_app(config):
             if score < 7:  return ["background-color: #fff3cc"] * len(row)
             return [""] * len(row)
 
+        col_config = {
+            "What Worked On":  st.column_config.NumberColumn("Worked On",       help="0-2",  format="%d"),
+            "Goals":           st.column_config.NumberColumn("Goals",           help="0-2",  format="%d"),
+            "Velocity":        st.column_config.NumberColumn("Velocity",        help="0-3",  format="%d"),
+            "Plan Forward":    st.column_config.NumberColumn("Plan",            help="0-3",  format="%d"),
+            "Total":           st.column_config.NumberColumn("Total",           help="0-10", format="%d"),
+            "AI Notes":        st.column_config.TextColumn("AI Notes",          width="large"),
+            "Progress Update": st.column_config.TextColumn("Progress Update",   width="large"),
+        }
+
         st.dataframe(
             detail_display.style.apply(highlight_detail_row, axis=1),
             use_container_width=True, hide_index=True,
-            column_config={
-                "What Worked On": st.column_config.NumberColumn("Worked On", help="0-2", format="%d"),
-                "Goals":          st.column_config.NumberColumn("Goals",     help="0-2", format="%d"),
-                "Velocity":       st.column_config.NumberColumn("Velocity",  help="0-3", format="%d"),
-                "Plan Forward":   st.column_config.NumberColumn("Plan",      help="0-3", format="%d"),
-                "Total":          st.column_config.NumberColumn("Total",     help="0-10", format="%d"),
-                "AI Notes":       st.column_config.TextColumn("AI Notes", width="large"),
-            }
+            column_config=col_config,
         )
 
         out_qs = io.BytesIO()
