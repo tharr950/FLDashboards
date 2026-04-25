@@ -353,6 +353,48 @@ def load_availability_compliance():
     return df
 
 
+def load_nps_scores(start_date: str, end_date: str, team_name: str):
+    """Load NPS scores for a team within a date range."""
+    conn = get_redshift_connection()
+    query = f"""
+        WITH cte_remove_nps_dups AS (
+            SELECT parent_id, student_id, created_at, responded_at, id,
+                   ROW_NUMBER() OVER (PARTITION BY parent_id, student_id, created_at, responded_at ORDER BY id) AS dupnumber
+            FROM dw.nps_histories
+        )
+        SELECT DISTINCT
+            nps_histories.id AS nps_id,
+            nps_histories.responded_at AS nps_responded_at,
+            nps_histories.comment AS nps_comment,
+            nps_histories.parent_id,
+            nps_histories.student_id AS nps_student_id,
+            student_users.first_name||' '||student_users.last_name AS student_name,
+            nps_histories.tutor_id,
+            employee_users.first_name||' '||employee_users.last_name AS tutor_name,
+            employees.tutor_type,
+            teams.name AS tutor_team,
+            tiers.name AS tier_name,
+            nps_histories.score AS nps
+        FROM dw.nps_histories
+        LEFT JOIN dw.students ON nps_histories.student_id = students.id
+        LEFT JOIN dw.users student_users ON students.user_id = student_users.id
+        LEFT JOIN dw.employees ON nps_histories.tutor_id = employees.id
+        LEFT JOIN dw.tiers ON employees.tier_id = tiers.id
+        LEFT JOIN dw.team_members ON employees.id = team_members.member_id
+        LEFT JOIN dw.teams ON team_members.team_id = teams.id
+        LEFT JOIN dw.users employee_users ON employees.user_id = employee_users.id
+        WHERE nps_histories.responded_at >= '{start_date}'
+          AND nps_histories.responded_at <= '{end_date}'
+          AND nps_histories.id IN (SELECT id FROM cte_remove_nps_dups WHERE dupnumber = 1)
+          AND teams.name = '{team_name}'
+        ORDER BY nps_histories.responded_at DESC
+    """
+    try:
+        df = pd.read_sql(query, conn)
+    finally:
+        conn.close()
+    return df
+
 def load_progress_updates(as_of_date: str, last_session_from: str, team_name: str):
     """Load progress update compliance data for active students."""
     conn = get_redshift_connection()
@@ -1589,6 +1631,7 @@ def render_app(config):
         "📋 Annual Reviews",
         "📄 PPW Report",
         "📊 Progress Updates",
+        "⭐ NPS Scores",
     ]
     _default_index = _page_options.index(_goto) if _goto in _page_options else 0
     page = st.sidebar.radio("\U0001f4c2 Navigation", _page_options, index=_default_index)
@@ -5630,6 +5673,107 @@ def render_app(config):
     # ─────────────────────────────────────────────
     # PAGE: PPW REPORT
     # ─────────────────────────────────────────────
+    elif page == "⭐ NPS Scores":
+        st.markdown("## ⭐ NPS Scores")
+        st.caption("Net Promoter Score responses for your team.")
+
+        col1, col2 = st.columns(2)
+        with col1:
+            nps_start = st.date_input("Response Date From",
+                value=pd.Timestamp.now() - pd.DateOffset(years=1), key="nps_start")
+        with col2:
+            nps_end = st.date_input("Response Date To",
+                value=pd.Timestamp.now(), key="nps_end")
+
+        if st.button("🔄 Load NPS Data"):
+            st.session_state["nps_start_val"] = str(nps_start)
+            st.session_state["nps_end_val"]   = str(nps_end)
+
+        nps_start_val = st.session_state.get("nps_start_val")
+        nps_end_val   = st.session_state.get("nps_end_val")
+
+        if not nps_start_val:
+            st.info("Select a date range and click Load NPS Data.")
+        else:
+            try:
+                with st.spinner("Loading NPS data..."):
+                    nps_df = load_nps_scores(nps_start_val, nps_end_val, "Team Plamondon")
+            except Exception as _e:
+                st.error(f"Query error: {_e}")
+                nps_df = pd.DataFrame()
+
+            if nps_df.empty:
+                st.warning("No NPS data found for this date range.")
+            else:
+                total       = len(nps_df)
+                avg_score   = round(nps_df["nps"].mean(), 2)
+                promoters   = int((nps_df["nps"] >= 9).sum())
+                detractors  = int((nps_df["nps"] <= 6).sum())
+                nps_score   = round((promoters - detractors) / total * 100, 1)
+
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("Total Responses", total)
+                c2.metric("Avg Score",       avg_score)
+                c3.metric("NPS Score",       nps_score)
+                c4.metric("Promoters (9-10)", promoters)
+                st.divider()
+
+                # ── Score distribution ──
+                st.subheader("Score Distribution")
+                score_dist = nps_df["nps"].value_counts().sort_index().reset_index()
+                score_dist.columns = ["Score", "Count"]
+                fig_dist = px.bar(score_dist, x="Score", y="Count",
+                                  color="Score",
+                                  color_continuous_scale=["#c62828","#f57f17","#2e7d32"],
+                                  title="NPS Score Distribution")
+                fig_dist.update_layout(height=300, showlegend=False,
+                                       margin=dict(l=20,r=20,t=40,b=20))
+                st.plotly_chart(fig_dist, use_container_width=True)
+                st.divider()
+
+                # ── Tutor summary ──
+                st.subheader("By Tutor")
+                tutor_nps = nps_df.groupby("tutor_name").agg(
+                    Responses=("nps", "count"),
+                    Avg_Score=("nps", "mean"),
+                    Promoters=("nps", lambda x: int((x >= 9).sum())),
+                    Detractors=("nps", lambda x: int((x <= 6).sum())),
+                ).reset_index()
+                tutor_nps["Avg Score"]  = tutor_nps["Avg_Score"].round(2)
+                tutor_nps["NPS Score"]  = ((tutor_nps["Promoters"] - tutor_nps["Detractors"]) / tutor_nps["Responses"] * 100).round(1)
+                tutor_nps = tutor_nps.rename(columns={"tutor_name": "Tutor"})
+                tutor_nps = tutor_nps[["Tutor","Responses","Avg Score","NPS Score","Promoters","Detractors"]].sort_values("NPS Score", ascending=False)
+                st.dataframe(tutor_nps, use_container_width=True, hide_index=True)
+                st.divider()
+
+                # ── Detail view ──
+                st.subheader("Detail View")
+                col_f1, col_f2 = st.columns(2)
+                with col_f1:
+                    nps_tutor_list = ["All Tutors"] + sorted(nps_df["tutor_name"].dropna().unique().tolist())
+                    sel_nps_tutor  = st.selectbox("Filter by Tutor", nps_tutor_list, key="nps_tutor")
+                with col_f2:
+                    score_opts = ["All Scores", "Promoters (9-10)", "Passives (7-8)", "Detractors (0-6)"]
+                    sel_score  = st.selectbox("Filter by Score", score_opts, key="nps_score_filter")
+
+                detail = nps_df.copy()
+                if sel_nps_tutor != "All Tutors":
+                    detail = detail[detail["tutor_name"] == sel_nps_tutor]
+                if sel_score == "Promoters (9-10)":
+                    detail = detail[detail["nps"] >= 9]
+                elif sel_score == "Passives (7-8)":
+                    detail = detail[detail["nps"].between(7, 8)]
+                elif sel_score == "Detractors (0-6)":
+                    detail = detail[detail["nps"] <= 6]
+
+                display = detail[["tutor_name","tier_name","student_name","nps","nps_responded_at","nps_comment"]].copy()
+                display["nps_responded_at"] = pd.to_datetime(display["nps_responded_at"]).dt.strftime("%m/%d/%Y")
+                display["nps_comment"]      = display["nps_comment"].fillna("")
+                display = display.rename(columns={
+                    "tutor_name": "Tutor", "tier_name": "Tier", "student_name": "Student",
+                    "nps": "Score", "nps_responded_at": "Response Date", "nps_comment": "Comment"})
+                st.dataframe(display, use_container_width=True, hide_index=True)
+
     elif page == "📊 Progress Updates":
         st.markdown("## 📊 Progress Update Summary")
         st.caption("Students with 6+ hours delivered who require a progress update.")
