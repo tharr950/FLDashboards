@@ -5742,7 +5742,7 @@ def render_app(config):
                 tutor_nps["Avg Score"]  = tutor_nps["Avg_Score"].round(2)
                 tutor_nps["NPS Score"]  = ((tutor_nps["Promoters"] - tutor_nps["Detractors"]) / tutor_nps["Responses"] * 100).round(1)
                 tutor_nps = tutor_nps.rename(columns={"tutor_name": "Tutor"})
-                tutor_nps = tutor_nps[["Tutor","Responses","Avg Score","NPS Score","Promoters","Detractors"]].sort_values("NPS Score", ascending=False)
+                tutor_nps = tutor_nps[["Tutor","Responses","Avg Score","NPS Score","Promoters","Detractors"]].sort_values("Tutor")
                 st.dataframe(tutor_nps, use_container_width=True, hide_index=True)
                 st.divider()
 
@@ -5766,7 +5766,7 @@ def render_app(config):
                 elif sel_score == "Detractors (0-6)":
                     detail = detail[detail["nps"] <= 6]
 
-                display = detail[["tutor_name","tier_name","student_name","nps","nps_responded_at","nps_comment"]].copy()
+                display = detail[["tutor_name","tier_name","student_name","nps","nps_responded_at","nps_comment"]].sort_values(["tutor_name","student_name"]).copy()
                 display["nps_responded_at"] = pd.to_datetime(display["nps_responded_at"]).dt.strftime("%m/%d/%Y")
                 display["nps_comment"]      = display["nps_comment"].fillna("")
                 display = display.rename(columns={
@@ -5828,7 +5828,7 @@ def render_app(config):
                 ).reset_index()
                 tutor_pu["% Current"] = (tutor_pu["Current"] / tutor_pu["Students"] * 100).round(1)
                 tutor_pu = tutor_pu.rename(columns={
-                    "tutor_name": "Tutor", "Requiring_Update": "Needs Update"})
+                    "tutor_name": "Tutor", "Requiring_Update": "Needs Update"}).sort_values("Tutor")
 
                 def _pu_color(val):
                     if val >= 80: return "color: #2e7d32; font-weight: bold"
@@ -5858,7 +5858,7 @@ def render_app(config):
                     detail = detail[detail["on_time"] == True]
 
                 display = detail[["tutor_name","tier","student_name","hours_delivered",
-                                   "last_session","last_progress_update","on_time"]].copy()
+                                   "last_session","last_progress_update","on_time"]].sort_values(["tutor_name","student_name"]).copy()
                 display["last_session"]         = pd.to_datetime(display["last_session"]).dt.strftime("%m/%d/%Y")
                 display["last_progress_update"] = pd.to_datetime(display["last_progress_update"]).dt.strftime("%m/%d/%Y").fillna("Never")
                 display["hours_delivered"]      = display["hours_delivered"].round(1)
@@ -5931,7 +5931,7 @@ def render_app(config):
                 tutor_list = ["All Tutors"] + sorted(ppw_df["tutor_name"].unique().tolist())
                 selected_tutor = st.selectbox("Filter by Tutor", tutor_list)
                 detail_df = ppw_df if selected_tutor == "All Tutors" else ppw_df[ppw_df["tutor_name"] == selected_tutor]
-                display = detail_df[["tutor_name","student_name","brand","starts_at","attachment_uploaded"]].copy()
+                display = detail_df[["tutor_name","student_name","brand","starts_at","attachment_uploaded"]].sort_values(["tutor_name","student_name"]).copy()
                 display["starts_at"] = pd.to_datetime(display["starts_at"]).dt.strftime("%m/%d/%Y")
                 display["attachment_uploaded"] = display["attachment_uploaded"].map({1: "✅", 0: "❌"})
                 display = display.rename(columns={
