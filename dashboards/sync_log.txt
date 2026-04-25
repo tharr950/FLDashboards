@@ -64971,3 +64971,106 @@ requests.exceptions.ConnectionError: HTTPSConnectionPool(host='api.github.com', 
 [2026-04-21 06:01:31] ✅ Done.
 2026-04-24 06:00:01,803 [INFO] Connecting to MySQL...
 2026-04-24 06:00:01,803 [INFO] Connecting to MySQL...
+2026-04-24 06:02:32,135 [INFO] Connecting to MySQL...
+[2026-04-24 06:00:32] Attempt 1/5 failed: 2003 (HY000): Can't connect to MySQL server on 'replica.revolutionprep.com:3306' (60)
+[2026-04-24 06:00:32] Retrying in 120 seconds...
+2026-04-24 06:02:32,135 [INFO] Connecting to MySQL...
+2026-04-24 06:05:02,442 [INFO] Connecting to MySQL...
+[2026-04-24 06:03:02] Attempt 2/5 failed: 2003 (HY000): Can't connect to MySQL server on 'replica.revolutionprep.com:3306' (60)
+[2026-04-24 06:03:02] Retrying in 120 seconds...
+2026-04-24 06:05:02,442 [INFO] Connecting to MySQL...
+2026-04-24 06:07:32,828 [INFO] Connecting to MySQL...
+[2026-04-24 06:05:32] Attempt 3/5 failed: 2003 (HY000): Can't connect to MySQL server on 'replica.revolutionprep.com:3306' (60)
+[2026-04-24 06:05:32] Retrying in 120 seconds...
+2026-04-24 06:07:32,828 [INFO] Connecting to MySQL...
+2026-04-24 06:10:02,942 [INFO] Connecting to MySQL...
+[2026-04-24 06:08:02] Attempt 4/5 failed: 2003 (HY000): Can't connect to MySQL server on 'replica.revolutionprep.com:3306' (60)
+[2026-04-24 06:08:02] Retrying in 120 seconds...
+2026-04-24 06:10:02,942 [INFO] Connecting to MySQL...
+[2026-04-24 06:00:01] Connecting to MySQL...
+[2026-04-24 06:00:32] Attempt 1/5 failed: 2003 (HY000): Can't connect to MySQL server on 'replica.revolutionprep.com:3306' (60)
+[2026-04-24 06:00:32] Retrying in 120 seconds...
+[2026-04-24 06:02:32] Connecting to MySQL...
+[2026-04-24 06:03:02] Attempt 2/5 failed: 2003 (HY000): Can't connect to MySQL server on 'replica.revolutionprep.com:3306' (60)
+[2026-04-24 06:03:02] Retrying in 120 seconds...
+[2026-04-24 06:05:02] Connecting to MySQL...
+[2026-04-24 06:05:32] Attempt 3/5 failed: 2003 (HY000): Can't connect to MySQL server on 'replica.revolutionprep.com:3306' (60)
+[2026-04-24 06:05:32] Retrying in 120 seconds...
+[2026-04-24 06:07:32] Connecting to MySQL...
+[2026-04-24 06:08:02] Attempt 4/5 failed: 2003 (HY000): Can't connect to MySQL server on 'replica.revolutionprep.com:3306' (60)
+[2026-04-24 06:08:02] Retrying in 120 seconds...
+[2026-04-24 06:10:02] Connecting to MySQL...
+[2026-04-24 06:10:32] Attempt 5/5 failed: 2003 (HY000): Can't connect to MySQL server on 'replica.revolutionprep.com:3306' (60)
+[2026-04-24 06:10:32] All 5 attempts failed.
+Traceback (most recent call last):
+[2026-04-24 06:10:32] Attempt 5/5 failed: 2003 (HY000): Can't connect to MySQL server on 'replica.revolutionprep.com:3306' (60)
+[2026-04-24 06:10:32] All 5 attempts failed.
+  File "/opt/anaconda3/lib/python3.13/site-packages/mysql/connector/connection_cext.py", line 354, in _open_connection
+    self._cmysql.connect(**cnx_kwargs)
+    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^
+_mysql_connector.MySQLInterfaceError: Can't connect to MySQL server on 'replica.revolutionprep.com:3306' (60)
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/Users/tylerharrington/Desktop/Revolution Prep/FL_Dashboards/dashboards/sync_exam_data.py", line 364, in <module>
+    run_with_retry(_run)
+    ~~~~~~~~~~~~~~^^^^^^
+  File "/Users/tylerharrington/Desktop/Revolution Prep/FL_Dashboards/dashboards/sync_exam_data.py", line 47, in run_with_retry
+    return func()
+  File "/Users/tylerharrington/Desktop/Revolution Prep/FL_Dashboards/dashboards/sync_exam_data.py", line 361, in _run
+    df = fetch_exam_data()
+  File "/Users/tylerharrington/Desktop/Revolution Prep/FL_Dashboards/dashboards/sync_exam_data.py", line 311, in fetch_exam_data
+    conn = mysql.connector.connect(
+        host=RP_HOST,
+    ...<5 lines>...
+        auth_plugin="mysql_native_password",
+    )
+  File "/opt/anaconda3/lib/python3.13/site-packages/mysql/connector/pooling.py", line 322, in connect
+    return CMySQLConnection(*args, **kwargs)
+  File "/opt/anaconda3/lib/python3.13/site-packages/mysql/connector/connection_cext.py", line 142, in __init__
+    self.connect(**kwargs)
+    ~~~~~~~~~~~~^^^^^^^^^^
+  File "/opt/anaconda3/lib/python3.13/site-packages/mysql/connector/abstracts.py", line 1604, in connect
+    self._open_connection()
+    ~~~~~~~~~~~~~~~~~~~~~^^
+  File "/opt/anaconda3/lib/python3.13/site-packages/mysql/connector/connection_cext.py", line 360, in _open_connection
+    raise get_mysql_exception(
+        err.errno, msg=err.msg, sqlstate=err.sqlstate
+    ) from err
+mysql.connector.errors.DatabaseError: 2003 (HY000): Can't connect to MySQL server on 'replica.revolutionprep.com:3306' (60)
+Traceback (most recent call last):
+  File "/opt/anaconda3/lib/python3.13/site-packages/mysql/connector/connection_cext.py", line 354, in _open_connection
+    self._cmysql.connect(**cnx_kwargs)
+    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^
+_mysql_connector.MySQLInterfaceError: Can't connect to MySQL server on 'replica.revolutionprep.com:3306' (60)
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/Users/tylerharrington/Desktop/Revolution Prep/FL_Dashboards/dashboards/sync_brand_permissions.py", line 124, in <module>
+    run_with_retry(_run)
+    ~~~~~~~~~~~~~~^^^^^^
+  File "/Users/tylerharrington/Desktop/Revolution Prep/FL_Dashboards/dashboards/sync_brand_permissions.py", line 21, in run_with_retry
+    return func()
+  File "/Users/tylerharrington/Desktop/Revolution Prep/FL_Dashboards/dashboards/sync_brand_permissions.py", line 120, in _run
+    df = fetch_data()
+  File "/Users/tylerharrington/Desktop/Revolution Prep/FL_Dashboards/dashboards/sync_brand_permissions.py", line 76, in fetch_data
+    conn = mysql.connector.connect(
+        host=RP_HOST, port=RP_PORT,
+    ...<3 lines>...
+        auth_plugin="mysql_native_password",
+    )
+  File "/opt/anaconda3/lib/python3.13/site-packages/mysql/connector/pooling.py", line 322, in connect
+    return CMySQLConnection(*args, **kwargs)
+  File "/opt/anaconda3/lib/python3.13/site-packages/mysql/connector/connection_cext.py", line 142, in __init__
+    self.connect(**kwargs)
+    ~~~~~~~~~~~~^^^^^^^^^^
+  File "/opt/anaconda3/lib/python3.13/site-packages/mysql/connector/abstracts.py", line 1604, in connect
+    self._open_connection()
+    ~~~~~~~~~~~~~~~~~~~~~^^
+  File "/opt/anaconda3/lib/python3.13/site-packages/mysql/connector/connection_cext.py", line 360, in _open_connection
+    raise get_mysql_exception(
+        err.errno, msg=err.msg, sqlstate=err.sqlstate
+    ) from err
+mysql.connector.errors.DatabaseError: 2003 (HY000): Can't connect to MySQL server on 'replica.revolutionprep.com:3306' (60)

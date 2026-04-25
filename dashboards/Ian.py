@@ -515,6 +515,27 @@ def load_exam_data():
         raise RuntimeError(f"Could not load exam data from GitHub: {e}")
 
 
+
+@st.cache_data(ttl=3600)
+def load_progress_scores():
+    try:
+        github_repo  = st.secrets["github"]["repo"]
+        github_token = st.secrets["github"]["token"]
+        github_path  = st.secrets["github"].get("progress_scores_path", "data/scored_progress_updates.json")
+        import urllib.request, json as _json
+        ts  = int(pd.Timestamp.now().timestamp())
+        url = f"https://raw.githubusercontent.com/{github_repo}/main/{github_path}?ts={ts}"
+        req = urllib.request.Request(url, headers={"Authorization": f"token {github_token}"})
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = _json.loads(resp.read().decode("utf-8"))
+        df = pd.DataFrame(data)
+        df["sent_at"]   = pd.to_datetime(df["sent_at"],   errors="coerce")
+        df["scored_at"] = pd.to_datetime(df["scored_at"], errors="coerce")
+        fetched_at = df["scored_at"].max().strftime("%Y-%m-%d") if not df.empty else "unknown"
+        return df, fetched_at
+    except Exception as e:
+        raise RuntimeError(f"Could not load progress scores from GitHub: {e}")
+
 @st.cache_data(ttl=3600)
 def load_parent_update_videos():
     try:
@@ -599,6 +620,7 @@ SNAPSHOT_HISTORY_FILE = "ian_archive_snapshots_history.csv"
 GRADES_SNAPSHOT_FILE = "ian_grades_snapshots.csv"
 EXAMS_SNAPSHOT_FILE  = "ian_exams_snapshots.csv"
 VIDEO_SNAPSHOT_FILE  = "ian_video_snapshots.csv"
+PROGRESS_SNAPSHOT_FILE = "ian_progress_score_snapshots.csv"
 
 
 def save_weekly_snapshot(df):
@@ -766,6 +788,33 @@ def load_exams_snapshots():
 
 def load_video_snapshots():
     df = gh_read(VIDEO_SNAPSHOT_FILE)
+    if not df.empty and "week_date" in df.columns:
+        df["week_date"] = pd.to_datetime(df["week_date"])
+    return df
+
+def save_progress_weekly_snapshot(score_summary_df, week_date=None):
+    """Save per-tutor weekly progress update score snapshot."""
+    if week_date is None:
+        today = pd.Timestamp.now()
+        days_back = (today.dayofweek + 1) % 7 or 7
+        week_date = (today - pd.Timedelta(days=days_back)).strftime("%Y-%m-%d")
+    week_key = (pd.Timestamp(week_date) + pd.Timedelta(days=1)).strftime("%Y-W%V")
+    existing = gh_read(PROGRESS_SNAPSHOT_FILE)
+    summary = score_summary_df.copy()
+    summary["week_key"]  = week_key
+    summary["week_date"] = week_date
+    if not existing.empty and week_key in existing["week_key"].values:
+        new_total = len(summary)
+        old_total = len(existing[existing["week_key"] == week_key])
+        if new_total <= old_total:
+            return existing
+        existing = existing[existing["week_key"] != week_key]
+    updated = pd.concat([existing, summary], ignore_index=True) if not existing.empty else summary
+    gh_write(PROGRESS_SNAPSHOT_FILE, updated)
+    return updated
+
+def load_progress_snapshots():
+    df = gh_read(PROGRESS_SNAPSHOT_FILE)
     if not df.empty and "week_date" in df.columns:
         df["week_date"] = pd.to_datetime(df["week_date"])
     return df
@@ -1627,6 +1676,7 @@ def render_app(config):
         "Grades Summary",
         "Test Prep & Exams",
         "📹 Parent Update Videos",
+        "📝 Update Quality Scores",
         "Archivable Students & Unscheduled Hours",
         "📋 Annual Reviews",
         "📄 PPW Report",
@@ -4033,6 +4083,10 @@ def render_app(config):
         st.divider()
 
         # Top concern flags
+        # Save weekly snapshot
+        snap_week_date = filtered_df["sent_at"].max().strftime("%Y-%m-%d") if not filtered_df.empty else None
+        save_progress_weekly_snapshot(tutor_agg, week_date=snap_week_date)
+
         st.markdown("### 🚨 Tutors to Address")
         fc1, fc2, fc3, fc4 = st.columns(4)
         medals_v = ["🥇","🥈","🥉","4️⃣","5️⃣"]
@@ -5378,7 +5432,293 @@ def render_app(config):
 
 
     # ─────────────────────────────────────────────
-    # PAGE: ARCHIVABLE STUDENTS & UNSCHEDULED HOURS
+
+    # ─────────────────────────────────────────────
+    # PAGE: UPDATE QUALITY SCORES
+    # ─────────────────────────────────────────────
+
+    if page == "📝 Update Quality Scores":
+        st.markdown('<div class="main-title">📝 Update Quality Scores</div>', unsafe_allow_html=True)
+
+        try:
+            raw_scores_df, scores_fetched_at = load_progress_scores()
+        except Exception as e:
+            st.error(f"Could not load progress update scores: {e}")
+            st.stop()
+
+        if raw_scores_df.empty:
+            st.info("No scored data available yet — run analyze_progress_updates.py first.")
+            st.stop()
+
+        st.caption(f"🕐 Data last scored: **{scores_fetched_at}**")
+        st.sidebar.markdown(f"🕐 **Scores last updated**  \n{scores_fetched_at}")
+
+        team_scores_df = raw_scores_df[raw_scores_df["tutor"].isin(annelies_tutors)].copy()
+
+        if team_scores_df.empty:
+            st.warning(f"No scored progress updates found for Team Plamondon.")
+            st.stop()
+
+        min_date = team_scores_df["sent_at"].min().date()
+        max_date = team_scores_df["sent_at"].max().date()
+        dc1, dc2 = st.columns(2)
+        with dc1:
+            start_filter = st.date_input("From", value=min_date, min_value=min_date, max_value=max_date, key="qs_start")
+        with dc2:
+            end_filter = st.date_input("To", value=max_date, min_value=min_date, max_value=max_date, key="qs_end")
+
+        mask = (team_scores_df["sent_at"].dt.date >= start_filter) & (team_scores_df["sent_at"].dt.date <= end_filter)
+        filtered_df = team_scores_df[mask].copy()
+
+        if filtered_df.empty:
+            st.info("No updates found in this date range.")
+            st.stop()
+
+        st.divider()
+
+        st.markdown("### 📊 Team Overview")
+        st.caption(f"{len(filtered_df)} updates scored · Max total score is 10")
+        m1, m2, m3, m4, m5, m6, m7 = st.columns(7)
+        m1.metric("Avg Total",          f"{filtered_df['total'].mean():.1f} / 10")
+        m2.metric("Avg What Worked On", f"{filtered_df['what_worked_on'].mean():.1f} / 2")
+        m3.metric("Avg Goals",          f"{filtered_df['goals'].mean():.1f} / 2")
+        m4.metric("Avg Velocity",       f"{filtered_df['velocity'].mean():.1f} / 3")
+        m5.metric("Avg Plan Forward",   f"{filtered_df['plan_forward'].mean():.1f} / 3")
+        m6.metric("% No Goal",          f"{(filtered_df['goals']==0).mean()*100:.0f}%",
+                  delta_color="inverse" if (filtered_df["goals"]==0).mean() > 0.1 else "off")
+        m7.metric("% No Velocity",      f"{(filtered_df['velocity']==0).mean()*100:.0f}%",
+                  delta_color="inverse" if (filtered_df["velocity"]==0).mean() > 0.1 else "off")
+
+        st.divider()
+
+        tutor_agg = (
+            filtered_df.groupby("tutor")
+            .agg(
+                updates        = ("update_id",      "count"),
+                avg_total      = ("total",          "mean"),
+                avg_worked_on  = ("what_worked_on", "mean"),
+                avg_goals      = ("goals",           "mean"),
+                avg_velocity   = ("velocity",        "mean"),
+                avg_plan       = ("plan_forward",    "mean"),
+                pct_zero_goals = ("goals",    lambda x: (x==0).mean()*100),
+                pct_zero_vel   = ("velocity", lambda x: (x==0).mean()*100),
+            )
+            .reset_index()
+        )
+
+        st.markdown("### 🚨 Tutors to Address")
+        fc1, fc2, fc3, fc4 = st.columns(4)
+        medals = ["🥇","🥈","🥉","4️⃣","5️⃣"]
+
+        with fc1:
+            st.markdown("**Lowest Avg Total Score**")
+            low_total = tutor_agg[tutor_agg["updates"] >= 2].sort_values("avg_total")
+            if low_total.empty:
+                st.success("✅ Not enough data per tutor yet.")
+            else:
+                for rank, (_, row) in enumerate(low_total.head(5).iterrows()):
+                    st.markdown(
+                        f"{medals[min(rank,4)]} **{row['tutor']}** — "
+                        f"<span style='color:#cc0000; font-weight:bold'>{row['avg_total']:.1f} / 10</span> "
+                        f"({int(row['updates'])} updates)",
+                        unsafe_allow_html=True)
+
+        with fc2:
+            st.markdown("**Most Missing Goals**")
+            no_goals = tutor_agg[tutor_agg["pct_zero_goals"] > 0].sort_values("pct_zero_goals", ascending=False)
+            if no_goals.empty:
+                st.success("✅ All tutors included a goal in every update.")
+            else:
+                for rank, (_, row) in enumerate(no_goals.head(5).iterrows()):
+                    st.markdown(
+                        f"{medals[min(rank,4)]} **{row['tutor']}** — "
+                        f"<span style='color:#cc0000; font-weight:bold'>{row['pct_zero_goals']:.0f}% no goal</span>",
+                        unsafe_allow_html=True)
+
+        with fc3:
+            st.markdown("**Most Missing Velocity**")
+            no_vel = tutor_agg[tutor_agg["pct_zero_vel"] > 0].sort_values("pct_zero_vel", ascending=False)
+            if no_vel.empty:
+                st.success("✅ All tutors included a velocity recommendation.")
+            else:
+                for rank, (_, row) in enumerate(no_vel.head(5).iterrows()):
+                    st.markdown(
+                        f"{medals[min(rank,4)]} **{row['tutor']}** — "
+                        f"<span style='color:#cc0000; font-weight:bold'>{row['pct_zero_vel']:.0f}% no velocity</span>",
+                        unsafe_allow_html=True)
+
+        with fc4:
+            st.markdown("**Lowest Plan Forward Score**")
+            low_plan = tutor_agg[tutor_agg["updates"] >= 2].sort_values("avg_plan")
+            if low_plan.empty:
+                st.success("✅ Not enough data per tutor yet.")
+            else:
+                for rank, (_, row) in enumerate(low_plan.head(5).iterrows()):
+                    st.markdown(
+                        f"{medals[min(rank,4)]} **{row['tutor']}** — "
+                        f"<span style='color:#b35c00; font-weight:bold'>{row['avg_plan']:.1f} / 3</span>",
+                        unsafe_allow_html=True)
+
+        st.divider()
+
+        st.markdown("### 📈 Avg Total Score — By Tutor")
+        chart_df = tutor_agg.sort_values("avg_total", ascending=True)
+        fig_bar = px.bar(
+            chart_df, x="avg_total", y="tutor", orientation="h",
+            color="avg_total",
+            color_continuous_scale=["#cc0000","#ffdd99","#006400"],
+            range_color=[0, 10],
+            text=chart_df["avg_total"].apply(lambda v: f"{v:.1f}"),
+            height=max(350, len(chart_df) * 30),
+        )
+        fig_bar.add_vline(x=7, line_dash="dash", line_color="#cc0000",
+                          annotation_text="7.0 target", annotation_position="top right")
+        fig_bar.update_layout(
+            showlegend=False, coloraxis_showscale=False,
+            xaxis=dict(range=[0, 11], title="Avg Total Score"),
+            yaxis_title="", plot_bgcolor="white", paper_bgcolor="white",
+            margin=dict(l=160, r=20, t=30, b=40)
+        )
+        fig_bar.update_traces(textposition="outside")
+        st.plotly_chart(fig_bar, use_container_width=True)
+
+        st.divider()
+
+        st.markdown("### 📋 Tutor Summary Table")
+        display_agg = tutor_agg.copy()
+        for col in ["avg_total","avg_worked_on","avg_goals","avg_velocity","avg_plan"]:
+            display_agg[col] = display_agg[col].round(1)
+        display_agg["pct_zero_goals"] = display_agg["pct_zero_goals"].round(0).astype(int).astype(str) + "%"
+        display_agg["pct_zero_vel"]   = display_agg["pct_zero_vel"].round(0).astype(int).astype(str) + "%"
+        display_agg = display_agg.sort_values("avg_total", ascending=False).rename(columns={
+            "tutor":          "Tutor",
+            "updates":        "# Updates",
+            "avg_total":      "Avg Total (/10)",
+            "avg_worked_on":  "What Worked On (/2)",
+            "avg_goals":      "Goals (/2)",
+            "avg_velocity":   "Velocity (/3)",
+            "avg_plan":       "Plan Forward (/3)",
+            "pct_zero_goals": "% No Goal",
+            "pct_zero_vel":   "% No Velocity",
+        })
+
+        def highlight_score_row(row):
+            score = row.get("Avg Total (/10)", 10)
+            if score < 5:  return ["background-color: #ffe5e5"] * len(row)
+            if score < 7:  return ["background-color: #fff3cc"] * len(row)
+            return [""] * len(row)
+
+        st.dataframe(display_agg.style.apply(highlight_score_row, axis=1),
+                     use_container_width=True, hide_index=True)
+
+        st.divider()
+
+        st.markdown("### 📅 Trends Over Time")
+        progress_snap = load_progress_snapshots()
+        if progress_snap.empty:
+            st.caption("No historical data yet — trends will build automatically each week.")
+        else:
+            trend_metric_p = st.selectbox(
+                "Trend metric",
+                ["avg_total","avg_worked_on","avg_goals","avg_velocity","avg_plan"],
+                format_func=lambda x: {
+                    "avg_total":     "Avg Total Score",
+                    "avg_worked_on": "Avg What Worked On",
+                    "avg_goals":     "Avg Goals",
+                    "avg_velocity":  "Avg Velocity",
+                    "avg_plan":      "Avg Plan Forward",
+                }[x], key="progress_trend_metric"
+            )
+            trend_tutor_p = st.selectbox(
+                "Filter by tutor (optional)",
+                ["All Tutors"] + sorted(progress_snap["tutor"].dropna().unique().tolist()),
+                key="progress_trend_tutor"
+            )
+            tutors_to_plot_p = [trend_tutor_p] if trend_tutor_p != "All Tutors" else                                 sorted(progress_snap["tutor"].dropna().unique().tolist())
+            for tutor in tutors_to_plot_p:
+                tsnap_p = progress_snap[progress_snap["tutor"] == tutor].sort_values("week_date")
+                if len(tsnap_p) < 2:
+                    if trend_tutor_p != "All Tutors":
+                        st.caption(f"Only one week of data for {tutor} — trend will appear as more weeks accumulate.")
+                    continue
+                fig_pt = px.line(tsnap_p, x="week_date", y=trend_metric_p,
+                                 markers=True,
+                                 title=f"{tutor} — {trend_metric_p.replace('_',' ').title()} Week over Week",
+                                 color_discrete_sequence=["#004466"])
+                if trend_metric_p == "avg_total":
+                    fig_pt.add_hline(y=7, line_dash="dash", line_color="#cc0000",
+                                     annotation_text="7.0 target")
+                fig_pt.update_layout(
+                    title=dict(x=0.5, xanchor="center"),
+                    xaxis_title="Week", yaxis_title="", height=300,
+                    margin=dict(l=20, r=20, t=50, b=40),
+                    plot_bgcolor="white", paper_bgcolor="white",
+                )
+                fig_pt.update_traces(line=dict(width=2.5))
+                st.plotly_chart(fig_pt, use_container_width=True)
+
+        st.divider()
+
+        st.markdown("### 🔍 Row-Level Detail")
+        tutor_opts = ["All Tutors"] + sorted(annelies_tutors)
+        sel_tutor  = st.selectbox("Filter by Tutor", tutor_opts, key="qs_tutor_filter")
+        min_score  = st.slider("Minimum total score", 0, 10, 0, key="qs_score_filter")
+
+        detail_df = filtered_df.copy()
+        if sel_tutor != "All Tutors":
+            detail_df = detail_df[detail_df["tutor"] == sel_tutor]
+        detail_df = detail_df[detail_df["total"] >= min_score].sort_values("sent_at", ascending=False)
+        st.caption(f"Showing {len(detail_df)} updates")
+
+        detail_display = detail_df[["sent_at","tutor","student_name",
+            "what_worked_on","goals","velocity","plan_forward","total","notes"]].copy()
+        detail_display["sent_at"] = detail_display["sent_at"].dt.strftime("%Y-%m-%d")
+        detail_display = detail_display.rename(columns={
+            "sent_at":        "Date",
+            "tutor":          "Tutor",
+            "student_name":   "Student",
+            "what_worked_on": "What Worked On",
+            "goals":          "Goals",
+            "velocity":       "Velocity",
+            "plan_forward":   "Plan Forward",
+            "total":          "Total",
+            "notes":          "AI Notes",
+        })
+
+        def highlight_detail_row(row):
+            score = row.get("Total", 10)
+            if score < 5:  return ["background-color: #ffe5e5"] * len(row)
+            if score < 7:  return ["background-color: #fff3cc"] * len(row)
+            return [""] * len(row)
+
+        st.dataframe(
+            detail_display.style.apply(highlight_detail_row, axis=1),
+            use_container_width=True, hide_index=True,
+            column_config={
+                "What Worked On": st.column_config.NumberColumn("Worked On", help="0-2", format="%d"),
+                "Goals":          st.column_config.NumberColumn("Goals",     help="0-2", format="%d"),
+                "Velocity":       st.column_config.NumberColumn("Velocity",  help="0-3", format="%d"),
+                "Plan Forward":   st.column_config.NumberColumn("Plan",      help="0-3", format="%d"),
+                "Total":          st.column_config.NumberColumn("Total",     help="0-10", format="%d"),
+                "AI Notes":       st.column_config.TextColumn("AI Notes", width="large"),
+            }
+        )
+
+        out_qs = io.BytesIO()
+        detail_display.to_excel(out_qs, index=False)
+        out_qs.seek(0)
+        st.download_button(
+            label="⬇️ Download Detail",
+            data=out_qs,
+            file_name=f"Update_Quality_Scores_{sel_tutor.replace(' ','_') if sel_tutor != 'All Tutors' else 'Ian_Plamondon'}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+
+        if st.sidebar.button("🔄 Refresh Score Data", key="refresh_qs"):
+            st.cache_data.clear(); st.rerun()
+
+
+        # PAGE: ARCHIVABLE STUDENTS & UNSCHEDULED HOURS
     # ─────────────────────────────────────────────
 
     if page == "Archivable Students & Unscheduled Hours":
