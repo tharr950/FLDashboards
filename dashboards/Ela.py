@@ -4172,7 +4172,7 @@ def render_app(config):
                           annotation_text="80% threshold", annotation_position="top right")
         fig_pct.update_layout(
             title=dict(x=0.5, xanchor="center"),
-            showlegend=False, coloraxis_showscale=False,
+            showlegend=False,
             xaxis=dict(range=[0,110], title="% With Video"),
             yaxis_title="", margin=dict(l=160, r=20, t=50, b=40)
         )
@@ -5123,7 +5123,7 @@ def render_app(config):
                             fig_ov.update_layout(
                                 title=dict(x=0.5, xanchor="center"),
                                 xaxis_title="Avg Score Change", yaxis_title="",
-                                showlegend=False, coloraxis_showscale=False,
+                                showlegend=False,
                                 margin=dict(l=160, r=60, t=50, b=30))
                             fig_ov.add_vline(x=0, line_dash="dash", line_color="grey")
                             fig_ov.update_traces(textposition="outside")
@@ -5268,7 +5268,7 @@ def render_app(config):
                         fig_imp.update_layout(
                             title=dict(x=0.5, xanchor="center"),
                             xaxis_title="Score Change", yaxis_title="",
-                            showlegend=False, coloraxis_showscale=False,
+                            showlegend=False,
                             margin=dict(l=180, r=60, t=50, b=40))
                         fig_imp.add_vline(x=0, line_dash="dash", line_color="grey")
                         fig_imp.update_traces(textposition="outside")
@@ -5311,7 +5311,7 @@ def render_app(config):
                         fig_sec.update_layout(
                             title=dict(x=0.5, xanchor="center"),
                             xaxis_title="Score Change", yaxis_title="",
-                            showlegend=False, coloraxis_showscale=False,
+                            showlegend=False,
                             margin=dict(l=180, r=60, t=50, b=30))
                         fig_sec.add_vline(x=0, line_dash="dash", line_color="grey")
                         fig_sec.update_traces(textposition="outside")
@@ -5602,16 +5602,14 @@ Each progress update sent by a tutor is automatically scored by a local AI model
         chart_df = tutor_agg.dropna(subset=["avg_total"]).sort_values("avg_total", ascending=True)
         fig_bar = px.bar(
             chart_df, x="avg_total", y="tutor", orientation="h",
-            color="avg_total",
-            color_continuous_scale=["#cc0000","#ffdd99","#006400"],
-            range_color=[0, 10],
+            color_discrete_sequence=["#7b2d8b"],
             text=chart_df["avg_total"].apply(lambda v: f"{v:.1f}" if v is not None and v == v else "—"),
             height=max(350, len(chart_df) * 30),
         )
         fig_bar.add_vline(x=7, line_dash="dash", line_color="#cc0000",
                           annotation_text="7.0 target", annotation_position="top right")
         fig_bar.update_layout(
-            showlegend=False, coloraxis_showscale=False,
+            showlegend=False,
             xaxis=dict(range=[0, 11], title="Avg Total Score"),
             yaxis_title="", plot_bgcolor="white", paper_bgcolor="white",
             margin=dict(l=160, r=20, t=30, b=40)
