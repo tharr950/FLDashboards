@@ -1699,9 +1699,9 @@ def render_app(config):
         "📝 Progress Update Quality Scores",
         "Archivable Students & Unscheduled Hours",
         "📋 Annual Reviews",
-        "📄 PPW Report",
-        "📊 Progress Updates",
-        "⭐ NPS Scores",
+        "📄 PPW Report (Tableau)",
+        "📊 Progress Updates (Tableau)",
+        "⭐ NPS Scores (Tableau)",
     ]
     _default_index = _page_options.index(_goto) if _goto in _page_options else 0
     page = st.sidebar.radio("\U0001f4c2 Navigation", _page_options, index=_default_index)
@@ -6106,7 +6106,7 @@ Each progress update sent by a tutor is automatically scored by a local AI model
     # ─────────────────────────────────────────────
     # PAGE: PPW REPORT
     # ─────────────────────────────────────────────
-    elif page == "⭐ NPS Scores":
+    elif page == "⭐ NPS Scores (Tableau)":
         st.markdown("## ⭐ NPS Scores")
         st.caption("Net Promoter Score responses for your team.")
 
@@ -6207,7 +6207,7 @@ Each progress update sent by a tutor is automatically scored by a local AI model
                     "nps": "Score", "nps_responded_at": "Response Date", "nps_comment": "Comment"})
                 st.dataframe(display, use_container_width=True, hide_index=True)
 
-    elif page == "📊 Progress Updates":
+    elif page == "📊 Progress Updates (Tableau)":
         st.markdown("## 📊 Progress Update Summary")
         st.caption("Students with 6+ hours delivered who require a progress update.")
 
@@ -6302,7 +6302,7 @@ Each progress update sent by a tutor is automatically scored by a local AI model
                     "last_progress_update": "Last Progress Update", "on_time": "Current"})
                 st.dataframe(display, use_container_width=True, hide_index=True)
 
-    elif page == "📄 PPW Report":
+    elif page == "📄 PPW Report (Tableau)":
         st.markdown("## 📄 PPW Report")
         st.caption("First-session parent progress write-up attachment data.")
 
