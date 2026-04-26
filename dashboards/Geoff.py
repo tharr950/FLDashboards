@@ -793,11 +793,7 @@ def save_video_weekly_snapshot(video_summary_df, raw_video_df=None):
     summary["week_key"]  = week_key
     summary["week_date"] = week_date
     if not existing.empty and week_key in existing["week_key"].values:
-        # Only overwrite if new data has more total videos
-        new_total = summary["videos_found"].sum() if "videos_found" in summary.columns else 0
-        old_total = existing[existing["week_key"] == week_key]["videos_found"].sum()                     if "videos_found" in existing.columns else 0
-        if new_total <= old_total:
-            return existing
+        # Always overwrite with latest data for this week
         existing = existing[existing["week_key"] != week_key]
     updated = pd.concat([existing, summary], ignore_index=True) if not existing.empty else summary
     gh_write(VIDEO_SNAPSHOT_FILE, updated)
