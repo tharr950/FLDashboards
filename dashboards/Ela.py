@@ -516,6 +516,26 @@ def load_exam_data():
 
 
 
+
+@st.cache_data(ttl=3600)
+def load_progress_history():
+    try:
+        github_repo  = st.secrets["github"]["repo"]
+        github_token = st.secrets["github"]["token"]
+        github_path  = "data/progress_updates_history.json"
+        import urllib.request, json as _json
+        ts  = int(pd.Timestamp.now().timestamp())
+        url = f"https://raw.githubusercontent.com/{github_repo}/main/{github_path}?ts={ts}"
+        req = urllib.request.Request(url, headers={"Authorization": f"token {github_token}"})
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = _json.loads(resp.read().decode("utf-8"))
+        df = pd.DataFrame(data)
+        df["sent_at"]   = pd.to_datetime(df["sent_at"],   errors="coerce")
+        df["scored_at"] = pd.to_datetime(df["scored_at"], errors="coerce")
+        return df
+    except Exception:
+        return pd.DataFrame()
+
 @st.cache_data(ttl=3600)
 def load_progress_scores():
     try:
@@ -5466,6 +5486,11 @@ Each progress update sent by a tutor is automatically scored by a local AI model
 
         st.caption(f"🕐 Data last scored: **{scores_fetched_at}**")
         st.sidebar.markdown(f"🕐 **Scores last updated**  \n{scores_fetched_at}")
+
+        # Use full history if available, fall back to current week
+        _history_df = load_progress_history()
+        if not _history_df.empty and "tutor" in _history_df.columns:
+            raw_scores_df = _history_df
 
         team_scores_df = raw_scores_df[raw_scores_df["tutor"].isin(annelies_tutors)].copy()
 
