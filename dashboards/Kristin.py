@@ -5599,7 +5599,7 @@ Each progress update sent by a tutor is automatically scored by a local AI model
         st.divider()
 
         st.markdown("### 📈 Avg Total Score — By Tutor")
-        chart_df = tutor_agg.sort_values("tutor", ascending=False)
+        chart_df = tutor_agg.dropna(subset=["avg_total"]).sort_values("avg_total", ascending=True)
         fig_bar = px.bar(
             chart_df, x="avg_total", y="tutor", orientation="h",
             color="avg_total",
