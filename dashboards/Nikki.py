@@ -4065,13 +4065,37 @@ def render_app(config):
         st.caption(f"🕐 Data last updated: **{video_fetched_at}**")
         st.sidebar.markdown(f"🕐 **Video data last updated**  \n{video_fetched_at}")
 
-        team_video_df = raw_video_df[
-            (raw_video_df["faculty leader"] == "Team Pencak") &
-            (raw_video_df["tutor"] != "Nikki Pencak")
-        ].copy()
+        # Load from history if available, fall back to current week
+        _vid_history = load_parent_update_history()
+        if not _vid_history.empty and "faculty leader" in _vid_history.columns:
+            _all_video_df = _vid_history[
+                (_vid_history["faculty leader"] == "Team Pencak") &
+                (_vid_history["tutor"] != "Nikki Pencak")
+            ].copy()
+        else:
+            _all_video_df = raw_video_df[
+                (raw_video_df["faculty leader"] == "Team Pencak") &
+                (raw_video_df["tutor"] != "Nikki Pencak")
+            ].copy()
+
+        if _all_video_df.empty:
+            st.warning("No parent update rows found for Team Pencak.")
+            st.stop()
+
+        # Week selector
+        _all_video_df["week of"] = pd.to_datetime(_all_video_df["week of"], errors="coerce").dt.date
+        _available_weeks_v = sorted(_all_video_df["week of"].dropna().unique(), reverse=True)
+        _week_labels_v     = {w: f"Week of {w.strftime('%b %d, %Y')}" for w in _available_weeks_v}
+        _selected_week_v   = st.selectbox(
+            "Select Week Of (Sunday):",
+            options=_available_weeks_v,
+            format_func=lambda w: _week_labels_v[w],
+            key="video_week_select"
+        )
+        team_video_df = _all_video_df[_all_video_df["week of"] == _selected_week_v].copy()
 
         if team_video_df.empty:
-            st.warning("No parent update rows found for Team Pencak.")
+            st.warning("No data found for selected week.")
             st.stop()
 
         team_video_df["duration_secs"] = team_video_df["video duration"].apply(duration_to_secs)
@@ -4081,7 +4105,7 @@ def render_app(config):
 
         # Team overview
         st.markdown("### 📊 Team Overview")
-        week_of = team_video_df["week of"].iloc[0] if "week of" in team_video_df.columns else "—"
+        week_of = str(_selected_week_v)
         st.caption(f"Week of: **{week_of}**")
 
         sent_video_df      = team_video_df[team_video_df["parent update sent"].astype(str) == "True"]
