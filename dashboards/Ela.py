@@ -536,6 +536,22 @@ def load_progress_history():
     except Exception:
         return pd.DataFrame()
 
+
+@st.cache_data(ttl=3600)
+def load_parent_update_history():
+    try:
+        github_repo  = st.secrets["github"]["repo"]
+        github_token = st.secrets["github"]["token"]
+        github_path  = "data/parent_update_videos_history.csv"
+        import urllib.request, io
+        ts  = int(pd.Timestamp.now().timestamp())
+        url = f"https://raw.githubusercontent.com/{github_repo}/main/{github_path}?ts={ts}"
+        req = urllib.request.Request(url, headers={"Authorization": f"token {github_token}"})
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return pd.read_csv(io.StringIO(resp.read().decode("utf-8")))
+    except Exception:
+        return pd.DataFrame()
+
 @st.cache_data(ttl=3600)
 def load_progress_scores():
     try:
