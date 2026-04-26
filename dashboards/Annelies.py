@@ -5600,21 +5600,22 @@ Each progress update sent by a tutor is automatically scored by a local AI model
 
         st.markdown("### 📈 Avg Total Score — By Tutor")
         chart_df = tutor_agg.dropna(subset=["avg_total"]).sort_values("avg_total", ascending=True)
+        n_qs = len(chart_df)
         fig_bar = px.bar(
             chart_df, x="avg_total", y="tutor", orientation="h",
             color="avg_total",
             color_continuous_scale=["#cc0000","#ffdd99","#006400"],
-            range_color=[0, 10],
             text=chart_df["avg_total"].apply(lambda v: f"{v:.1f}" if v is not None and v == v else "—"),
-            height=max(350, len(chart_df) * 30),
+            title="Avg Total Score — By Tutor",
+            height=max(350, n_qs * 30),
         )
         fig_bar.add_vline(x=7, line_dash="dash", line_color="#cc0000",
                           annotation_text="7.0 target", annotation_position="top right")
         fig_bar.update_layout(
+            title=dict(x=0.5, xanchor="center"),
             showlegend=False, coloraxis_showscale=False,
             xaxis=dict(range=[0, 11], title="Avg Total Score"),
-            yaxis_title="", plot_bgcolor="white", paper_bgcolor="white",
-            margin=dict(l=160, r=20, t=30, b=40)
+            yaxis_title="", margin=dict(l=160, r=20, t=50, b=40)
         )
         fig_bar.update_traces(textposition="outside")
         st.plotly_chart(fig_bar, use_container_width=True)
