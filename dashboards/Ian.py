@@ -5510,16 +5510,24 @@ Each progress update sent by a tutor is automatically scored by a local AI model
             st.warning(f"No scored progress updates found for Team Plamondon.")
             st.stop()
 
-        min_date = team_scores_df["sent_at"].min().date()
-        max_date = team_scores_df["sent_at"].max().date()
-        dc1, dc2 = st.columns(2)
-        with dc1:
-            start_filter = st.date_input("From", value=min_date, min_value=min_date, max_value=max_date, key="qs_start")
-        with dc2:
-            end_filter = st.date_input("To", value=max_date, min_value=min_date, max_value=max_date, key="qs_end")
-
-        mask = (team_scores_df["sent_at"].dt.date >= start_filter) & (team_scores_df["sent_at"].dt.date <= end_filter)
-        filtered_df = team_scores_df[mask].copy()
+        # Week selector — Sunday of each week in data
+        team_scores_df["week_sunday"] = team_scores_df["sent_at"].dt.to_period("W-SAT").apply(
+            lambda p: p.start_time.date()
+        )
+        available_weeks = sorted(team_scores_df["week_sunday"].dropna().unique(), reverse=True)
+        week_labels     = {w: f"Week of {w.strftime('%b %d, %Y')}" for w in available_weeks}
+        selected_week   = st.selectbox(
+            "Select Week Of (Sunday):",
+            options=available_weeks,
+            format_func=lambda w: week_labels[w],
+            key="qs_week_select"
+        )
+        week_start  = pd.Timestamp(selected_week)
+        week_end    = week_start + pd.Timedelta(days=7)
+        filtered_df = team_scores_df[
+            (team_scores_df["sent_at"] >= week_start) &
+            (team_scores_df["sent_at"] <  week_end)
+        ].copy()
 
         if filtered_df.empty:
             st.info("No updates found in this date range.")
