@@ -4103,10 +4103,6 @@ def render_app(config):
         st.divider()
 
         # Top concern flags
-        # Save weekly snapshot
-        snap_week_date = filtered_df["sent_at"].max().strftime("%Y-%m-%d") if not filtered_df.empty else None
-        save_progress_weekly_snapshot(tutor_agg, week_date=snap_week_date)
-
         st.markdown("### 🚨 Tutors to Address")
         fc1, fc2, fc3, fc4 = st.columns(4)
         medals_v = ["🥇","🥈","🥉","4️⃣","5️⃣"]
@@ -5567,6 +5563,10 @@ Each progress update sent by a tutor is automatically scored by a local AI model
             } for t in missing_tutors])
             _agg = pd.concat([_agg, _missing], ignore_index=True)
         tutor_agg = _agg.sort_values("tutor").reset_index(drop=True)
+
+        # Save weekly snapshot
+        snap_week_date = filtered_df["sent_at"].max().strftime("%Y-%m-%d") if not filtered_df.empty else None
+        save_progress_weekly_snapshot(tutor_agg, week_date=snap_week_date)
 
         st.markdown("### 🚨 Tutors to Address")
         medals = ["🥇","🥈","🥉","4️⃣","5️⃣"]
