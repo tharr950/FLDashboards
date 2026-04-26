@@ -5605,7 +5605,7 @@ Each progress update sent by a tutor is automatically scored by a local AI model
             color="avg_total",
             color_continuous_scale=["#cc0000","#ffdd99","#006400"],
             range_color=[0, 10],
-            text=chart_df["avg_total"].apply(lambda v: f"{v:.1f}"),
+            text=chart_df["avg_total"].apply(lambda v: f"{v:.1f}" if v is not None and v == v else "—"),
             height=max(350, len(chart_df) * 30),
         )
         fig_bar.add_vline(x=7, line_dash="dash", line_color="#cc0000",
