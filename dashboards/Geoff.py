@@ -5544,12 +5544,31 @@ Each progress update sent by a tutor is automatically scored by a local AI model
         tutor_agg = _agg.sort_values("tutor").reset_index(drop=True)
 
         st.markdown("### 🚨 Tutors to Address")
-        fc1, fc2, fc3, fc4 = st.columns(4)
         medals = ["🥇","🥈","🥉","4️⃣","5️⃣"]
 
+        # Compute raw zero counts per tutor
+        if not filtered_df.empty:
+            zero_counts = (
+                filtered_df.groupby("tutor")
+                .agg(
+                    updates           = ("update_id",      "count"),
+                    zero_worked_on    = ("what_worked_on", lambda x: (x==0).sum()),
+                    zero_goals        = ("goals",          lambda x: (x==0).sum()),
+                    zero_velocity     = ("velocity",       lambda x: (x==0).sum()),
+                    zero_plan         = ("plan_forward",   lambda x: (x==0).sum()),
+                )
+                .reset_index()
+            )
+        else:
+            zero_counts = pd.DataFrame(columns=["tutor","updates","zero_worked_on",
+                                                 "zero_goals","zero_velocity","zero_plan"])
+
+        fc1, fc2 = st.columns(2)
+
         with fc1:
-            st.markdown("**Lowest Avg Total Score**")
-            low_total = tutor_agg[tutor_agg["updates"] >= 2].sort_values("avg_total")
+            st.markdown("**Lowest Avg Total Score (min 2 updates)**")
+            low_total = tutor_agg.dropna(subset=["avg_total"])
+            low_total = low_total[low_total["updates"] >= 2].sort_values("avg_total")
             if low_total.empty:
                 st.success("✅ Not enough data per tutor yet.")
             else:
@@ -5561,39 +5580,53 @@ Each progress update sent by a tutor is automatically scored by a local AI model
                         unsafe_allow_html=True)
 
         with fc2:
-            st.markdown("**Most Missing Goals**")
-            no_goals = tutor_agg[tutor_agg["pct_zero_goals"] > 0].sort_values("pct_zero_goals", ascending=False)
+            st.markdown("**Most Updates Missing What Worked On (score = 0)**")
+            no_worked = zero_counts[zero_counts["zero_worked_on"] > 0].sort_values("zero_worked_on", ascending=False)
+            if no_worked.empty:
+                st.success("✅ All tutors described what was worked on.")
+            else:
+                for rank, (_, row) in enumerate(no_worked.head(5).iterrows()):
+                    st.markdown(
+                        f"{medals[min(rank,4)]} **{row['tutor']}** — "
+                        f"<span style='color:#cc0000; font-weight:bold'>{int(row['zero_worked_on'])} of {int(row['updates'])} updates missing</span>",
+                        unsafe_allow_html=True)
+
+        fc3, fc4, fc5 = st.columns(3)
+
+        with fc3:
+            st.markdown("**Most Updates Missing a Goal (score = 0)**")
+            no_goals = zero_counts[zero_counts["zero_goals"] > 0].sort_values("zero_goals", ascending=False)
             if no_goals.empty:
                 st.success("✅ All tutors included a goal in every update.")
             else:
                 for rank, (_, row) in enumerate(no_goals.head(5).iterrows()):
                     st.markdown(
                         f"{medals[min(rank,4)]} **{row['tutor']}** — "
-                        f"<span style='color:#cc0000; font-weight:bold'>{row['pct_zero_goals']:.0f}% no goal</span>",
+                        f"<span style='color:#cc0000; font-weight:bold'>{int(row['zero_goals'])} of {int(row['updates'])} updates missing</span>",
                         unsafe_allow_html=True)
 
-        with fc3:
-            st.markdown("**Most Missing Velocity**")
-            no_vel = tutor_agg[tutor_agg["pct_zero_vel"] > 0].sort_values("pct_zero_vel", ascending=False)
+        with fc4:
+            st.markdown("**Most Updates Missing a Velocity Rec (score = 0)**")
+            no_vel = zero_counts[zero_counts["zero_velocity"] > 0].sort_values("zero_velocity", ascending=False)
             if no_vel.empty:
                 st.success("✅ All tutors included a velocity recommendation.")
             else:
                 for rank, (_, row) in enumerate(no_vel.head(5).iterrows()):
                     st.markdown(
                         f"{medals[min(rank,4)]} **{row['tutor']}** — "
-                        f"<span style='color:#cc0000; font-weight:bold'>{row['pct_zero_vel']:.0f}% no velocity</span>",
+                        f"<span style='color:#cc0000; font-weight:bold'>{int(row['zero_velocity'])} of {int(row['updates'])} updates missing</span>",
                         unsafe_allow_html=True)
 
-        with fc4:
-            st.markdown("**Lowest Plan Forward Score**")
-            low_plan = tutor_agg[tutor_agg["updates"] >= 2].sort_values("avg_plan")
-            if low_plan.empty:
-                st.success("✅ Not enough data per tutor yet.")
+        with fc5:
+            st.markdown("**Most Updates Missing a Plan Forward (score = 0)**")
+            no_plan = zero_counts[zero_counts["zero_plan"] > 0].sort_values("zero_plan", ascending=False)
+            if no_plan.empty:
+                st.success("✅ All tutors included a plan forward.")
             else:
-                for rank, (_, row) in enumerate(low_plan.head(5).iterrows()):
+                for rank, (_, row) in enumerate(no_plan.head(5).iterrows()):
                     st.markdown(
                         f"{medals[min(rank,4)]} **{row['tutor']}** — "
-                        f"<span style='color:#b35c00; font-weight:bold'>{row['avg_plan']:.1f} / 3</span>",
+                        f"<span style='color:#cc0000; font-weight:bold'>{int(row['zero_plan'])} of {int(row['updates'])} updates missing</span>",
                         unsafe_allow_html=True)
 
         st.divider()
