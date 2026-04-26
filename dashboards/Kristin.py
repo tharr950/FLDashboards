@@ -5615,6 +5615,7 @@ Each progress update sent by a tutor is automatically scored by a local AI model
             title=dict(x=0.5, xanchor="center"),
             showlegend=False, coloraxis_showscale=False,
             xaxis=dict(range=[0, 11], title="Avg Total Score"),
+            yaxis=dict(autorange="reversed"),
             yaxis_title="", margin=dict(l=160, r=20, t=50, b=40)
         )
         fig_bar.update_traces(textposition="outside")
