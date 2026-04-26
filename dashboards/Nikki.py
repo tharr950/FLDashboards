@@ -3561,6 +3561,19 @@ def render_app(config):
                 p_monthly_t = pd.DataFrame(); p_master = pd.DataFrame(); p_annual = pd.DataFrame()
                 p_errors.append(f"Monthly KPI: {e}")
 
+            p_scores_df = pd.DataFrame()
+            try:
+                _p_scores_all = load_progress_history()
+                if _p_scores_all.empty:
+                    _p_scores_all, _ = load_progress_scores()
+                if not _p_scores_all.empty:
+                    p_scores_df = _p_scores_all[
+                        _p_scores_all["tutor"] == profile_tutor
+                    ].copy()
+                    p_scores_df["sent_at"] = pd.to_datetime(p_scores_df["sent_at"], errors="coerce")
+            except Exception as e:
+                p_errors.append(f"Progress Scores: {e}")
+
             p_video_df  = pd.DataFrame()
             p_video_row = None
             try:
@@ -3972,6 +3985,87 @@ def render_app(config):
                 return [""] * len(row)
             st.dataframe(v_detail.style.apply(_highlight_v, axis=1),
                          use_container_width=True, hide_index=True)
+
+        st.markdown("---")
+
+        # ── Progress Update Quality Scores ────────────────────────────────────
+        st.markdown("### 📝 Progress Update Quality Scores")
+        if p_scores_df.empty:
+            st.info("No progress update scores found for this tutor.")
+        else:
+            # Latest week summary
+            latest_week = p_scores_df["sent_at"].max()
+            week_start  = pd.Timestamp(latest_week).to_period("W-SAT").start_time
+            week_end    = week_start + pd.Timedelta(days=7)
+            latest_df   = p_scores_df[
+                (p_scores_df["sent_at"] >= week_start) &
+                (p_scores_df["sent_at"] <  week_end)
+            ]
+            all_time_df = p_scores_df
+
+            ps1, ps2, ps3, ps4, ps5 = st.columns(5)
+            ps1.metric("Avg Total (Latest Week)",    f"{latest_df['total'].mean():.1f} / 10" if not latest_df.empty else "—")
+            ps2.metric("Avg What Worked On",         f"{latest_df['what_worked_on'].mean():.1f} / 2" if not latest_df.empty else "—")
+            ps3.metric("Avg Goals",                  f"{latest_df['goals'].mean():.1f} / 2" if not latest_df.empty else "—")
+            ps4.metric("Avg Velocity",               f"{latest_df['velocity'].mean():.1f} / 3" if not latest_df.empty else "—")
+            ps5.metric("Avg Plan Forward",           f"{latest_df['plan_forward'].mean():.1f} / 3" if not latest_df.empty else "—")
+
+            ps6, ps7 = st.columns(2)
+            ps6.metric("Updates This Week",          len(latest_df))
+            ps7.metric("Avg Total (All Time)",       f"{all_time_df['total'].mean():.1f} / 10")
+
+            # Trend chart
+            _p_snap = load_progress_snapshots()
+            if not _p_snap.empty and "tutor" in _p_snap.columns and profile_tutor in _p_snap["tutor"].values:
+                _tv_p = _p_snap[_p_snap["tutor"] == profile_tutor].sort_values("week_date")
+                if len(_tv_p) >= 2:
+                    fig_pt = px.line(_tv_p, x="week_date", y="avg_total",
+                                     markers=True,
+                                     title=f"{profile_tutor} — Avg Total Score Week over Week",
+                                     color_discrete_sequence=["#004466"])
+                    fig_pt.add_hline(y=7, line_dash="dash", line_color="#cc0000",
+                                     annotation_text="7.0 target")
+                    fig_pt.update_layout(
+                        title=dict(x=0.5, xanchor="center"),
+                        xaxis_title="Week", yaxis_title="Avg Total Score",
+                        yaxis=dict(range=[0, 11]), height=280,
+                        margin=dict(l=20, r=20, t=50, b=40),
+                        plot_bgcolor="white", paper_bgcolor="white")
+                    st.plotly_chart(fig_pt, use_container_width=True)
+
+            # Individual updates table
+            st.markdown("**Individual updates:**")
+            _p_detail = p_scores_df.sort_values("sent_at", ascending=False)[[
+                "sent_at","student_name","what_worked_on","goals","velocity","plan_forward","total","notes"
+            ]].copy()
+            _p_detail["sent_at"] = _p_detail["sent_at"].dt.strftime("%Y-%m-%d")
+            _p_detail = _p_detail.rename(columns={
+                "sent_at":        "Date",
+                "student_name":   "Student",
+                "what_worked_on": "Worked On",
+                "goals":          "Goals",
+                "velocity":       "Velocity",
+                "plan_forward":   "Plan",
+                "total":          "Total",
+                "notes":          "AI Notes",
+            })
+            def _highlight_ps(row):
+                score = row.get("Total", 10)
+                if score < 5: return ["background-color: #ffe5e5"] * len(row)
+                if score < 7: return ["background-color: #fff3cc"] * len(row)
+                return [""] * len(row)
+            st.dataframe(
+                _p_detail.style.apply(_highlight_ps, axis=1),
+                use_container_width=True, hide_index=True,
+                column_config={
+                    "Worked On": st.column_config.NumberColumn("Worked On", help="0-2", format="%d"),
+                    "Goals":     st.column_config.NumberColumn("Goals",     help="0-2", format="%d"),
+                    "Velocity":  st.column_config.NumberColumn("Velocity",  help="0-3", format="%d"),
+                    "Plan":      st.column_config.NumberColumn("Plan",      help="0-3", format="%d"),
+                    "Total":     st.column_config.NumberColumn("Total",     help="0-10", format="%d"),
+                    "AI Notes":  st.column_config.TextColumn("AI Notes", width="large"),
+                }
+            )
 
         st.markdown("---")
 
@@ -5495,7 +5589,7 @@ def render_app(config):
         with st.expander("ℹ️ About this data"):
             st.markdown("""
 **What is this page?**
-Each progress update sent by a tutor is automatically scored by a local AI model (Llama 3.1) across 4 dimensions. Scores are updated weekly every Sunday night.
+Each progress update sent by a tutor is automatically scored across 4 dimensions. Scores are updated weekly.
 
 **Scoring rubric (max total: 10):**
 - **What Worked On (0–2):** 0 = no specifics or broad subject only; 1 = one specific topic or concept named; 2 = two or more specific topics, or one topic plus measurable score improvement
