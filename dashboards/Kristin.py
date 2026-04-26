@@ -1283,6 +1283,7 @@ def generate_tutor_pdf(
     concern_df=None, faculty_leader=None,
     inc_arch=True, inc_grades=True, inc_exams=True,
     inc_video=True, inc_kpi=True, inc_concern=True,
+    inc_scores=True, p_scores_df=None,
 ):
     """Generate a PDF report for a tutor profile page."""
     from reportlab.lib.pagesizes import letter
@@ -1618,6 +1619,69 @@ def generate_tutor_pdf(
             ]))
         else:
             story.append(Paragraph("No video data found.", normal_style))
+        story.extend(section_divider())
+
+    if inc_scores:
+        # ── Progress Update Quality Scores ────────────────────────────────────
+        story.append(Paragraph("📝 Progress Update Quality Scores", h2_style))
+        if p_scores_df is not None and not p_scores_df.empty:
+            _ps = p_scores_df.copy()
+            _ps["sent_at"] = pd.to_datetime(_ps["sent_at"], errors="coerce")
+            avg_total    = _ps["total"].mean()
+            avg_worked   = _ps["what_worked_on"].mean()
+            avg_goals    = _ps["goals"].mean()
+            avg_velocity = _ps["velocity"].mean()
+            avg_plan     = _ps["plan_forward"].mean()
+            summary_data = [
+                ["# Updates", "Avg Total (/10)", "Worked On (/2)", "Goals (/2)", "Velocity (/3)", "Plan (/3)"],
+                [str(len(_ps)), f"{avg_total:.1f}", f"{avg_worked:.1f}",
+                 f"{avg_goals:.1f}", f"{avg_velocity:.1f}", f"{avg_plan:.1f}"]
+            ]
+            t = make_table(summary_data)
+            if t: story.append(t)
+            story.append(Spacer(1, 6))
+            # Individual updates
+            _ps_rows = []
+            for _, row in _ps.sort_values("sent_at", ascending=False).head(20).iterrows():
+                _ps_rows.append([
+                    str(row["sent_at"].strftime("%Y-%m-%d") if pd.notna(row["sent_at"]) else "—"),
+                    str(row.get("student_name","—")),
+                    str(int(row.get("total", 0))),
+                    str(int(row.get("what_worked_on", 0))),
+                    str(int(row.get("goals", 0))),
+                    str(int(row.get("velocity", 0))),
+                    str(int(row.get("plan_forward", 0))),
+                ])
+            if _ps_rows:
+                _ps_table = [["Date","Student","Total","Worked On","Goals","Velocity","Plan"]] + _ps_rows
+                t3 = Table(_ps_table, repeatRows=1)
+                _ps_colors = []
+                for row in _ps_rows:
+                    score = int(row[2]) if row[2].isdigit() else 0
+                    if score < 5:   _ps_colors.append(colors.HexColor("#ffe5e5"))
+                    elif score < 7: _ps_colors.append(colors.HexColor("#fffbea"))
+                    else:           _ps_colors.append(colors.white)
+                style_cmds = [
+                    ("BACKGROUND", (0,0), (-1,0),  colors.HexColor("#2c5f8a")),
+                    ("TEXTCOLOR",  (0,0), (-1,0),  colors.white),
+                    ("FONTNAME",   (0,0), (-1,0),  "Helvetica-Bold"),
+                    ("FONTSIZE",   (0,0), (-1,-1), 8),
+                    ("GRID",       (0,0), (-1,-1), 0.3, colors.HexColor("#ddd")),
+                    ("VALIGN",     (0,0), (-1,-1), "MIDDLE"),
+                    ("PADDING",    (0,0), (-1,-1), 4),
+                ]
+                for i, bg in enumerate(_ps_colors):
+                    style_cmds.append(("BACKGROUND", (0, i+1), (-1, i+1), bg))
+                t3.setStyle(TableStyle(style_cmds))
+                story.append(t3)
+            story.append(Spacer(1, 4))
+            story.append(make_legend([
+                ("#ffe5e5", "Total score < 5"),
+                ("#fffbea", "Total score 5–6"),
+                ("#ffffff", "Total score 7+"),
+            ]))
+        else:
+            story.append(Paragraph("No progress update scores found.", normal_style))
         story.extend(section_divider())
 
     if inc_kpi:
@@ -3635,6 +3699,7 @@ def render_app(config):
             with _pdf_col3:
                 _inc_kpi     = st.checkbox("📈 KPI Trends",               value=True, key="pdf_inc_kpi")
                 _inc_concern = st.checkbox("📌 Concern History",          value=True, key="pdf_inc_concern")
+                _inc_scores  = st.checkbox("📝 Update Quality Scores",    value=True, key="pdf_inc_scores")
 
             if st.button("Generate PDF", key="download_pdf"):
                 with st.spinner("Generating PDF..."):
@@ -3657,6 +3722,8 @@ def render_app(config):
                             inc_video      = _inc_video,
                             inc_kpi        = _inc_kpi,
                             inc_concern    = _inc_concern,
+                            inc_scores     = _inc_scores,
+                            p_scores_df    = p_scores_df,
                         )
                         st.download_button(
                             label     = "📄 Click to Download PDF",
