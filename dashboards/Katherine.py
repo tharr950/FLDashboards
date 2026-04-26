@@ -5624,9 +5624,11 @@ Each progress update sent by a tutor is automatically scored by a local AI model
         st.markdown("### 📋 Tutor Summary Table")
         display_agg = tutor_agg.copy()
         for col in ["avg_total","avg_worked_on","avg_goals","avg_velocity","avg_plan"]:
-            display_agg[col] = display_agg[col].round(1)
-        display_agg["pct_zero_goals"] = display_agg["pct_zero_goals"].round(0).astype(int).astype(str) + "%"
-        display_agg["pct_zero_vel"]   = display_agg["pct_zero_vel"].round(0).astype(int).astype(str) + "%"
+            display_agg[col] = pd.to_numeric(display_agg[col], errors="coerce").round(1)
+        display_agg["pct_zero_goals"] = display_agg["pct_zero_goals"].apply(
+            lambda v: f"{int(round(v))}%" if v is not None and v == v else "—")
+        display_agg["pct_zero_vel"] = display_agg["pct_zero_vel"].apply(
+            lambda v: f"{int(round(v))}%" if v is not None and v == v else "—")
         display_agg = display_agg.sort_values("tutor", ascending=True).rename(columns={
             "tutor":          "Tutor",
             "updates":        "# Updates",
