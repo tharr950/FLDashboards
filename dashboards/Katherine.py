@@ -5563,10 +5563,10 @@ Each progress update sent by a tutor is automatically scored by a local AI model
             zero_counts = pd.DataFrame(columns=["tutor","updates","zero_worked_on",
                                                  "zero_goals","zero_velocity","zero_plan"])
 
-        fc1, fc2 = st.columns(2)
+        fc1, fc2, fc3, fc4 = st.columns(4)
 
         with fc1:
-            st.markdown("**Lowest Avg Total Score (min 2 updates)**")
+            st.markdown("**Lowest Avg Total Score**")
             low_total = tutor_agg.dropna(subset=["avg_total"])
             low_total = low_total[low_total["updates"] >= 2].sort_values("avg_total")
             if low_total.empty:
@@ -5580,21 +5580,7 @@ Each progress update sent by a tutor is automatically scored by a local AI model
                         unsafe_allow_html=True)
 
         with fc2:
-            st.markdown("**Most Updates Missing What Worked On (score = 0)**")
-            no_worked = zero_counts[zero_counts["zero_worked_on"] > 0].sort_values("zero_worked_on", ascending=False)
-            if no_worked.empty:
-                st.success("✅ All tutors described what was worked on.")
-            else:
-                for rank, (_, row) in enumerate(no_worked.head(5).iterrows()):
-                    st.markdown(
-                        f"{medals[min(rank,4)]} **{row['tutor']}** — "
-                        f"<span style='color:#cc0000; font-weight:bold'>{int(row['zero_worked_on'])} of {int(row['updates'])} updates missing</span>",
-                        unsafe_allow_html=True)
-
-        fc3, fc4, fc5 = st.columns(3)
-
-        with fc3:
-            st.markdown("**Most Updates Missing a Goal (score = 0)**")
+            st.markdown("**Most Missing Goals**")
             no_goals = zero_counts[zero_counts["zero_goals"] > 0].sort_values("zero_goals", ascending=False)
             if no_goals.empty:
                 st.success("✅ All tutors included a goal in every update.")
@@ -5602,11 +5588,11 @@ Each progress update sent by a tutor is automatically scored by a local AI model
                 for rank, (_, row) in enumerate(no_goals.head(5).iterrows()):
                     st.markdown(
                         f"{medals[min(rank,4)]} **{row['tutor']}** — "
-                        f"<span style='color:#cc0000; font-weight:bold'>{int(row['zero_goals'])} of {int(row['updates'])} updates missing</span>",
+                        f"<span style='color:#cc0000; font-weight:bold'>{int(row['zero_goals'])} of {int(row['updates'])} missing</span>",
                         unsafe_allow_html=True)
 
-        with fc4:
-            st.markdown("**Most Updates Missing a Velocity Rec (score = 0)**")
+        with fc3:
+            st.markdown("**Most Missing Velocity**")
             no_vel = zero_counts[zero_counts["zero_velocity"] > 0].sort_values("zero_velocity", ascending=False)
             if no_vel.empty:
                 st.success("✅ All tutors included a velocity recommendation.")
@@ -5614,11 +5600,11 @@ Each progress update sent by a tutor is automatically scored by a local AI model
                 for rank, (_, row) in enumerate(no_vel.head(5).iterrows()):
                     st.markdown(
                         f"{medals[min(rank,4)]} **{row['tutor']}** — "
-                        f"<span style='color:#cc0000; font-weight:bold'>{int(row['zero_velocity'])} of {int(row['updates'])} updates missing</span>",
+                        f"<span style='color:#cc0000; font-weight:bold'>{int(row['zero_velocity'])} of {int(row['updates'])} missing</span>",
                         unsafe_allow_html=True)
 
-        with fc5:
-            st.markdown("**Most Updates Missing a Plan Forward (score = 0)**")
+        with fc4:
+            st.markdown("**Most Missing Plan Forward**")
             no_plan = zero_counts[zero_counts["zero_plan"] > 0].sort_values("zero_plan", ascending=False)
             if no_plan.empty:
                 st.success("✅ All tutors included a plan forward.")
@@ -5626,7 +5612,7 @@ Each progress update sent by a tutor is automatically scored by a local AI model
                 for rank, (_, row) in enumerate(no_plan.head(5).iterrows()):
                     st.markdown(
                         f"{medals[min(rank,4)]} **{row['tutor']}** — "
-                        f"<span style='color:#cc0000; font-weight:bold'>{int(row['zero_plan'])} of {int(row['updates'])} updates missing</span>",
+                        f"<span style='color:#cc0000; font-weight:bold'>{int(row['zero_plan'])} of {int(row['updates'])} missing</span>",
                         unsafe_allow_html=True)
 
         st.divider()
