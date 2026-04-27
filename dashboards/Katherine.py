@@ -438,6 +438,25 @@ def load_progress_updates(as_of_date: str, last_session_from: str, team_name: st
         conn.close()
     return df
 
+@st.cache_data(ttl=3600)
+def load_rematch_tracker():
+    """Load rematch tracker from Excel file."""
+    file = "rematch trcker.xlsx"
+    if os.path.exists(file):
+        df = pd.read_excel(file)
+        # Parse rematch date — format is like "4.1.2025"
+        def parse_rematch_date(s):
+            try:
+                parts = str(s).strip().split(".")
+                if len(parts) == 3:
+                    return pd.Timestamp(f"{parts[2]}-{parts[0].zfill(2)}-{parts[1].zfill(2)}")
+            except:
+                pass
+            return pd.NaT
+        df["Rematch Date Parsed"] = df["Rematch Date"].apply(parse_rematch_date)
+        return df
+    return pd.DataFrame()
+
 def load_ppw_data(start_date: str, end_date: str, team_name: str):
     """Load PPW (first session attachment) data for a given date range and team."""
     conn = get_redshift_connection()
@@ -7766,7 +7785,49 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
         ar_card(6, "Grades Data", _s6)
 
         # ── 7. Rematches ─────────────────────────────────────────────────────
-        ar_card(7, "Rematches", None, coming_soon=True)
+        # ── 7. Rematches ─────────────────────────────────────────────────────
+        def _s7():
+            rematch_df = load_rematch_tracker()
+            if rematch_df.empty:
+                st.info("No rematch data available.")
+                return
+
+            # Filter to this tutor and within 12-month review period
+            cutoff_start = pd.to_datetime(AR_12M_START)
+            cutoff_end   = pd.to_datetime(AR_12M_END)
+            tutor_rematches = rematch_df[
+                (rematch_df["Former Tutor"].str.strip() == ar_tutor) &
+                (rematch_df["Rematch Date Parsed"] >= cutoff_start) &
+                (rematch_df["Rematch Date Parsed"] <= cutoff_end)
+            ].copy()
+
+            # All tutors for peer comparison
+            all_rematches = rematch_df[
+                (rematch_df["Rematch Date Parsed"] >= cutoff_start) &
+                (rematch_df["Rematch Date Parsed"] <= cutoff_end)
+            ]
+            all_tutor_counts = all_rematches.groupby("Former Tutor").size()
+            peer_avg = round(all_tutor_counts.mean(), 1) if not all_tutor_counts.empty else 0
+
+            count = len(tutor_rematches)
+            d, dc = ar_delta_num(count, peer_avg, higher_is_better=False, label="vs all-tutor avg")
+
+            c1, c2 = st.columns(2)
+            c1.metric("Rematches (12M)", count, delta=d, delta_color=dc)
+            c2.metric("All-Tutor Avg",   fmt_num(peer_avg, 1))
+
+            if count > 0:
+                st.markdown("**Rematch Details:**")
+                display = tutor_rematches[["Rematch Date Parsed","Student Name","Reason for Rematch Request",
+                                           "Does the Rematch Seem Valid?","FL Thoughts"]].copy()
+                display["Rematch Date Parsed"] = display["Rematch Date Parsed"].dt.strftime("%m/%d/%Y")
+                display = display.rename(columns={{
+                    "Rematch Date Parsed": "Date", "Student Name": "Student",
+                    "Reason for Rematch Request": "Reason",
+                    "Does the Rematch Seem Valid?": "Valid?", "FL Thoughts": "FL Thoughts"}})
+                st.dataframe(display, use_container_width=True, hide_index=True)
+            st.caption("Counts rematches where this tutor was the former tutor during the 12-month review period.")
+        ar_card(7, "Rematches", _s7)
 
         # ── 8. Weighted Repurchase ───────────────────────────────────────────
         # ── 8. Weighted Repurchase ───────────────────────────────────────────
