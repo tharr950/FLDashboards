@@ -7261,10 +7261,10 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
         st.warning("⚠️ **This page is currently IN PROGRESS.** Data and layout are not finalized — please do not use this for reviews yet.", icon="🚧")
 
         # ── Date ranges (hardcoded) ──────────────────────────────────────────
-        AR_12M_START = "2025-04-17"
-        AR_12M_END   = "2026-04-17"
-        AR_3M_START  = "2026-01-17"
-        AR_3M_END    = "2026-04-17"
+        AR_12M_START = "2025-04-27"
+        AR_12M_END   = "2026-04-26"
+        AR_3M_START  = "2026-02-01"
+        AR_3M_END    = "2026-04-26"
 
         st.caption(f"📅 12-month period: **{AR_12M_START}** to **{AR_12M_END}** | 3-month period: **{AR_3M_START}** to **{AR_3M_END}**")
 
@@ -7376,7 +7376,7 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                       AND CAST(ca.created_at AS DATE) < (SELECT day_end FROM time_period)
                 ),
                 tutor_updates AS (
-                    SELECT ws.supervisor_id, ws.first_day_of_week_sunday_start AS week,
+                    SELECT DISTINCT ws.supervisor_id, ws.first_day_of_week_sunday_start AS week,
                         COUNT(DISTINCT CASE WHEN ws.update_required_flag = 1 THEN ws.update_unit_id END) AS updates_required,
                         COUNT(DISTINCT CASE WHEN ws.update_required_flag = 1 AND us.course_id IS NOT NULL THEN ws.update_unit_id END) AS updates_sent_on_time
                     FROM weekly_sessions ws
