@@ -7769,7 +7769,64 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
         ar_card(7, "Rematches", None, coming_soon=True)
 
         # ── 8. Weighted Repurchase ───────────────────────────────────────────
-        ar_card(8, "Weighted Repurchase", None, coming_soon=True)
+        # ── 8. Weighted Repurchase ───────────────────────────────────────────
+        def _s8():
+            tutor_mm = monthly_metric_annual_review_df[
+                monthly_metric_annual_review_df["Tutor Name"] == ar_tutor].copy()
+            if tutor_mm.empty:
+                st.info("No monthly metric data found for this tutor.")
+                return
+
+            def _parse_end_ar(s):
+                if pd.isna(s): return pd.NaT
+                s2 = str(s).replace("-","to").replace("–","to")
+                parts = s2.split("to")
+                end = parts[-1].strip() if len(parts)>1 else parts[0].strip()
+                return pd.to_datetime(end, errors="coerce", dayfirst=False)
+
+            tutor_mm["Date Parsed"] = tutor_mm["Date Range"].apply(_parse_end_ar)
+            tutor_mm = tutor_mm.dropna(subset=["Date Parsed"]).sort_values("Date Parsed")
+
+            # 12-month and 3-month totals
+            cutoff_12m = pd.to_datetime(AR_12M_START)
+            cutoff_3m  = pd.to_datetime(AR_3M_START)
+            wr_col = "Weighted Repurchases"
+            if wr_col not in tutor_mm.columns:
+                st.info("Weighted Repurchases column not found in data.")
+                return
+
+            wr_12m = pd.to_numeric(tutor_mm[tutor_mm["Date Parsed"] >= cutoff_12m][wr_col], errors="coerce").sum()
+            wr_3m  = pd.to_numeric(tutor_mm[tutor_mm["Date Parsed"] >= cutoff_3m][wr_col], errors="coerce").sum()
+
+            # Peer avg — same tier & delivery target
+            peer_mm_12m = monthly_metric_annual_review_df[
+                (monthly_metric_annual_review_df["Tier"] == tier_val) &
+                (monthly_metric_annual_review_df["Tutor Name"] != ar_tutor)
+            ].copy()
+            peer_mm_12m["Date Parsed"] = peer_mm_12m["Date Range"].apply(_parse_end_ar)
+            peer_wr = peer_mm_12m[peer_mm_12m["Date Parsed"] >= cutoff_12m].groupby("Tutor Name")[wr_col].apply(
+                lambda x: pd.to_numeric(x, errors="coerce").sum()).mean()
+
+            d, dc = ar_delta_num(wr_12m, peer_wr, higher_is_better=True, label="vs peer avg")
+            c1, c2, c3 = st.columns(3)
+            c1.metric("12-Month Total", fmt_num(wr_12m, 1), delta=d, delta_color=dc)
+            c2.metric("3-Month Total",  fmt_num(wr_3m, 1))
+            c3.metric("Peer Avg (12M, same tier)", fmt_num(peer_wr, 1))
+
+            # Trend chart
+            tutor_wr = tutor_mm[tutor_mm["Date Parsed"] >= cutoff_12m][["Date Range","Date Parsed",wr_col]].copy()
+            tutor_wr[wr_col] = pd.to_numeric(tutor_wr[wr_col], errors="coerce")
+            if len(tutor_wr) >= 2:
+                fig_wr = px.bar(tutor_wr, x="Date Range", y=wr_col,
+                                title="Weighted Repurchases by Month",
+                                color_discrete_sequence=["#7b2d8b"])
+                fig_wr.update_layout(height=250, margin=dict(l=20,r=20,t=40,b=60),
+                                     xaxis_title="", yaxis_title="Repurchases",
+                                     xaxis_tickangle=-30,
+                                     title=dict(x=0.5, xanchor="center"))
+                st.plotly_chart(fig_wr, use_container_width=True)
+            st.caption(f"Compared to {len(peers_12m)} peers — same tier ({tier_val}) & delivery target.")
+        ar_card(8, "Weighted Repurchase", _s8)
 
         # ── 9. Archivable Students ───────────────────────────────────────────
         def _s9():
@@ -7934,7 +7991,63 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
         ar_card(14, "Parent Update Mentioning Homework", _s14)
 
         # ── 15. Progress Updates ─────────────────────────────────────────────
-        ar_card(15, "Progress Updates", None, coming_soon=True)
+        # ── 15. Progress Updates ─────────────────────────────────────────────
+        def _s15():
+            pu_col = "% of Active Students with Progress Updates Completed in last 2 months"
+            tutor_mm = monthly_metric_annual_review_df[
+                monthly_metric_annual_review_df["Tutor Name"] == ar_tutor].copy()
+            if tutor_mm.empty or pu_col not in tutor_mm.columns:
+                st.info("No progress update data found for this tutor.")
+                return
+
+            def _parse_end_pu(s):
+                if pd.isna(s): return pd.NaT
+                s2 = str(s).replace("-","to").replace("–","to")
+                parts = s2.split("to")
+                end = parts[-1].strip() if len(parts)>1 else parts[0].strip()
+                return pd.to_datetime(end, errors="coerce", dayfirst=False)
+
+            tutor_mm["Date Parsed"] = tutor_mm["Date Range"].apply(_parse_end_pu)
+            tutor_mm = tutor_mm.dropna(subset=["Date Parsed"]).sort_values("Date Parsed")
+            tutor_mm[pu_col] = pd.to_numeric(tutor_mm[pu_col], errors="coerce")
+
+            cutoff_12m = pd.to_datetime(AR_12M_START)
+            cutoff_3m  = pd.to_datetime(AR_3M_START)
+
+            pu_12m = tutor_mm[tutor_mm["Date Parsed"] >= cutoff_12m][pu_col].mean()
+            pu_3m  = tutor_mm[tutor_mm["Date Parsed"] >= cutoff_3m][pu_col].mean()
+
+            # Peer avg
+            peer_mm = monthly_metric_annual_review_df[
+                (monthly_metric_annual_review_df["Tier"] == tier_val) &
+                (monthly_metric_annual_review_df["Tutor Name"] != ar_tutor)
+            ].copy()
+            peer_mm["Date Parsed"] = peer_mm["Date Range"].apply(_parse_end_pu)
+            peer_pu = peer_mm[peer_mm["Date Parsed"] >= cutoff_12m].groupby("Tutor Name")[pu_col].apply(
+                lambda x: pd.to_numeric(x, errors="coerce").mean()).mean()
+
+            d12, dc12 = ar_delta(pu_12m, peer_pu, higher_is_better=True)
+            d3,  dc3  = ar_delta(pu_3m,  peer_pu, higher_is_better=True)
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Avg % (12M)", fmt_pct(pu_12m), delta=d12, delta_color=dc12)
+            c2.metric("Avg % (3M)",  fmt_pct(pu_3m),  delta=d3,  delta_color=dc3)
+            c3.metric("Peer Avg (12M, same tier)", fmt_pct(peer_pu))
+
+            # Trend
+            tutor_pu_trend = tutor_mm[tutor_mm["Date Parsed"] >= cutoff_12m][["Date Range","Date Parsed",pu_col]].copy()
+            if len(tutor_pu_trend) >= 2:
+                fig_pu = px.line(tutor_pu_trend, x="Date Range", y=pu_col,
+                                 markers=True, title="% Progress Updates Completed — by Month",
+                                 color_discrete_sequence=["#1565c0"])
+                fig_pu.add_hline(y=0.8, line_dash="dash", line_color="#f57f17",
+                                 annotation_text="80% threshold")
+                fig_pu.update_layout(height=250, margin=dict(l=20,r=20,t=40,b=60),
+                                     xaxis_title="", yaxis_title="%",
+                                     xaxis_tickangle=-30,
+                                     title=dict(x=0.5, xanchor="center"))
+                st.plotly_chart(fig_pu, use_container_width=True)
+            st.caption(f"% of active students with a progress update in the last 2 months. Compared to peers — same tier ({tier_val}).")
+        ar_card(15, "Progress Updates", _s15)
 
         # ── 16. Current SCI ──────────────────────────────────────────────────
         def _s16():
