@@ -439,6 +439,14 @@ def load_progress_updates(as_of_date: str, last_session_from: str, team_name: st
     return df
 
 @st.cache_data(ttl=3600)
+def load_cancellation_data():
+    """Load cancellation data from Excel file."""
+    file = "CancellationData.xlsx"
+    if os.path.exists(file):
+        return pd.read_excel(file)
+    return pd.DataFrame()
+
+@st.cache_data(ttl=3600)
 def load_rematch_tracker():
     """Load rematch tracker from Excel file."""
     file = "rematch trcker.xlsx"
@@ -7724,7 +7732,24 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
         ar_card(3, "Prep Time Percentage", _s3)
 
         # ── 4. Cancellations by Tutor ────────────────────────────────────────
-        ar_card(4, "Cancellations by Tutor", None, coming_soon=True)
+        # ── 4. Cancellations by Tutor ────────────────────────────────────────
+        def _s4():
+            cancel_df = load_cancellation_data()
+            if cancel_df.empty:
+                st.info("No cancellation data available.")
+                return
+
+            tutor_row = cancel_df[cancel_df["Tutor Name"].str.strip() == ar_tutor]
+            tutor_count = int(tutor_row["Count of Days Cancelled"].iloc[0]) if not tutor_row.empty else 0
+
+            peer_avg = round(cancel_df["Count of Days Cancelled"].mean(), 1)
+            d, dc = ar_delta_num(tutor_count, peer_avg, higher_is_better=False, label="vs all-tutor avg")
+
+            c1, c2 = st.columns(2)
+            c1.metric("Days Cancelled", tutor_count, delta=d, delta_color=dc)
+            c2.metric("All-Tutor Avg", fmt_num(peer_avg, 1))
+            st.caption("Count of days with tutor-initiated cancellations during the review period. Lower is better.")
+        ar_card(4, "Cancellations by Tutor", _s4)
 
         # ── 5. Exams Data ────────────────────────────────────────────────────
         def _s5():
