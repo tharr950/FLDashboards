@@ -1802,6 +1802,7 @@ def render_app(config):
         "📝 Progress Update Quality Scores",
         "Archivable Students & Unscheduled Hours",
         "📋 Annual Reviews",
+        "🔰 90-Day Review",
         "📄 PPW Report (Tableau)",
         "📊 Progress Updates (Tableau)",
         "⭐ NPS Scores (Tableau)",
@@ -7281,6 +7282,129 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
     # ─────────────────────────────────────────────────────────────────────────
     # ANNUAL REVIEWS PAGE
     # ─────────────────────────────────────────────────────────────────────────
+    elif page == "🔰 90-Day Review":
+        st.markdown("## 🔰 90-Day Review")
+        st.caption("Performance metrics for tutors in their first 90 days.")
+
+        team_tutors_df = master_tutor_df[
+            (master_tutor_df["Faculty Leader"] == "Geoff St. Marie") &
+            (~master_tutor_df["Full Name"].isin(["Geoff St. Marie"]))
+        ].copy()
+        team_tutors_df["hire_date"] = pd.to_datetime(team_tutors_df["hire_date"], errors="coerce")
+        today = pd.Timestamp.now().normalize()
+        team_tutors_df["days_since_hire"] = (today - team_tutors_df["hire_date"]).dt.days
+
+        recent_hires = team_tutors_df[team_tutors_df["days_since_hire"] <= 150]["Full Name"].tolist()
+        all_90d_names = sorted(team_tutors_df["Full Name"].dropna().unique().tolist())
+        non_recent = [n for n in all_90d_names if n not in recent_hires]
+
+        def _90d_label(n):
+            return f"\u2b50 {n} (recent hire)" if n in recent_hires else n
+
+        display_options = ["\u2014 Select —"] + sorted(recent_hires) + (["\u2500\u2500\u2500\u2500\u2500"] if non_recent else []) + non_recent
+        display_labels  = ["\u2014 Select —"] + [_90d_label(n) for n in sorted(recent_hires)] + (["\u2500\u2500\u2500\u2500\u2500"] if non_recent else []) + non_recent
+
+        sel_90d_idx = st.selectbox("Select Tutor", range(len(display_options)),
+                                   format_func=lambda i: display_labels[i], key="90d_tutor_select")
+        nr90_tutor = display_options[sel_90d_idx] if sel_90d_idx > 0 and "\u2500" not in display_options[sel_90d_idx] else None
+
+        if not nr90_tutor or nr90_tutor == "\u2014 Select —":
+            st.info("Select a tutor above to view their 90-day review.")
+            if recent_hires:
+                st.markdown(f"**\u2b50 Tutors within 150-day review window ({len(recent_hires)}):** " + ", ".join(sorted(recent_hires)))
+        else:
+            tutor_row_90d = team_tutors_df[team_tutors_df["Full Name"] == nr90_tutor].iloc[0]
+            hire_date_90d = tutor_row_90d["hire_date"]
+            days_in_90d   = int(tutor_row_90d["days_since_hire"]) if pd.notna(tutor_row_90d["days_since_hire"]) else None
+
+            st.markdown(f"### {nr90_tutor} \u2014 90-Day Review")
+            hire_str_90d = hire_date_90d.strftime("%B %d, %Y") if pd.notna(hire_date_90d) else "Unknown"
+            if days_in_90d is not None:
+                st.caption(f"Hired: **{hire_str_90d}** | Days since hire: **{days_in_90d}**")
+            else:
+                st.caption(f"Hired: **{hire_str_90d}**")
+
+            end_90d    = today.strftime("%Y-%m-%d")
+            start_1m   = (today - pd.DateOffset(months=1)).strftime("%Y-%m-%d")
+            start_6w   = (today - pd.DateOffset(weeks=6)).strftime("%Y-%m-%d")
+            start_8w   = (today - pd.DateOffset(weeks=8)).strftime("%Y-%m-%d")
+            if pd.notna(hire_date_90d):
+                hire_sql = hire_date_90d.strftime("%Y-%m-%d")
+                if start_1m < hire_sql: start_1m = hire_sql
+                if start_6w < hire_sql: start_6w = hire_sql
+                if start_8w < hire_sql: start_8w = hire_sql
+
+            if st.button("\U0001f504 Load 90-Day Data", key="load_90d"):
+                with st.spinner("Loading data..."):
+                    try:
+                        st.session_state["90d_1m"]    = load_ar_kpi(start_1m, end_90d)
+                        st.session_state["90d_6w"]    = load_ar_kpi(start_6w, end_90d)
+                        st.session_state["90d_8w"]    = load_ar_kpi(start_8w, end_90d)
+                        st.session_state["90d_tutor"] = nr90_tutor
+                    except Exception as _e:
+                        st.error(f"Error loading data: {_e}")
+
+            d_1m_90 = st.session_state.get("90d_1m", pd.DataFrame())
+            d_6w_90 = st.session_state.get("90d_6w", pd.DataFrame())
+            d_8w_90 = st.session_state.get("90d_8w", pd.DataFrame())
+
+            if d_1m_90.empty:
+                st.info("Click Load 90-Day Data to view metrics.")
+            elif st.session_state.get("90d_tutor") != nr90_tutor:
+                st.info("Tutor changed \u2014 click Load 90-Day Data to refresh.")
+            else:
+                def _get_row_90(df, tutor):
+                    r = df[df["tutor_name"] == tutor]
+                    return r.iloc[0] if not r.empty else None
+
+                def _safe_90(r, col):
+                    if r is None: return None
+                    v = r.get(col)
+                    return None if pd.isna(v) else float(v)
+
+                r1m_90 = _get_row_90(d_1m_90, nr90_tutor)
+                r6w_90 = _get_row_90(d_6w_90, nr90_tutor)
+                r8w_90 = _get_row_90(d_8w_90, nr90_tutor)
+
+                def _fmt_prep_90(v):
+                    return f"{v*100:.1f}%" if v is not None else "\u2014"
+
+                st.divider()
+                _metrics_90 = [
+                    ("Sessions Launched on Time", "sessions_on_time_pct", fmt_pct,      True,  0.90),
+                    ("Parent Updates on Time",     "parent_update_pct",    fmt_pct,      True,  0.90),
+                    ("Delivery %",                 "delivery_pct",         fmt_pct,      True,  None),
+                    ("Availability %",             "availability_pct",     fmt_pct,      True,  None),
+                    ("Prep Time Ratio",            "prep_time_ratio",      _fmt_prep_90, False, None),
+                    ("Auto-Attendance Sessions",   "autoattendance_sessions", lambda v: fmt_num(v,0), False, None),
+                    ("Avg NPS Score",              "avg_nps",              lambda v: fmt_num(v,2), True, None),
+                    ("# NPS Responses",            "number_of_nps",        lambda v: fmt_num(v,0), True, None),
+                    ("Weeks at Target",            "weeks_at_target",      lambda v: fmt_num(v,0), True, None),
+                ]
+
+                for _lbl, _col, _fmt, _hib, _tgt in _metrics_90:
+                    v1 = _safe_90(r1m_90, _col)
+                    v6 = _safe_90(r6w_90, _col)
+                    v8 = _safe_90(r8w_90, _col)
+                    with st.container(border=True):
+                        st.markdown(f"**{_lbl}**")
+                        _c1, _c2, _c3 = st.columns(3)
+                        if _tgt is not None:
+                            def _delt(v, tgt=_tgt, hib=_hib):
+                                if v is None: return None, "off"
+                                diff = v - tgt
+                                arrow = "\u25b2" if diff > 0 else "\u25bc"
+                                color = "normal" if (diff > 0) == hib else "inverse"
+                                return f"{arrow} {abs(diff)*100:.1f}pp vs {tgt*100:.0f}%", color
+                            d1,dc1 = _delt(v1); d6,dc6 = _delt(v6); d8,dc8 = _delt(v8)
+                            _c1.metric("Last Month",   _fmt(v1) if v1 is not None else "\u2014", delta=d1, delta_color=dc1)
+                            _c2.metric("Last 6 Weeks", _fmt(v6) if v6 is not None else "\u2014", delta=d6, delta_color=dc6)
+                            _c3.metric("Last 8 Weeks", _fmt(v8) if v8 is not None else "\u2014", delta=d8, delta_color=dc8)
+                        else:
+                            _c1.metric("Last Month",   _fmt(v1) if v1 is not None else "\u2014")
+                            _c2.metric("Last 6 Weeks", _fmt(v6) if v6 is not None else "\u2014")
+                            _c3.metric("Last 8 Weeks", _fmt(v8) if v8 is not None else "\u2014")
+
     if page == "📋 Annual Reviews":
         st.markdown('<div class="main-title">📋 Annual Reviews</div>', unsafe_allow_html=True)
 
