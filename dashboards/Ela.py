@@ -7556,48 +7556,110 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                     v = r.get(col)
                     return None if pd.isna(v) else float(v)
 
-                r1m_90 = _get_row_90(d_1m_90, nr90_tutor)
-                r6w_90 = _get_row_90(d_6w_90, nr90_tutor)
-                r8w_90 = _get_row_90(d_8w_90, nr90_tutor)
-
                 def _fmt_prep_90(v):
-                    return f"{v*100:.1f}%" if v is not None else "\u2014"
+                    return f"{v*100:.1f}%" if v is not None else "—"
+
+                def _card_90(title, content_fn):
+                    with st.expander(f"**{title}**", expanded=True):
+                        content_fn()
+
+                def _three_metrics(lbl1, lbl6, lbl8, v1, v6, v8, fmt_fn,
+                                   higher_is_better=True, target=None):
+                    c1, c2, c3 = st.columns(3)
+                    def _d(v):
+                        if v is None or target is None: return None, "off"
+                        diff = v - target
+                        arrow = "▲" if diff > 0 else "▼"
+                        color = "normal" if (diff > 0) == higher_is_better else "inverse"
+                        return f"{arrow} {abs(diff)*100:.1f}pp vs {target*100:.0f}%", color
+                    if target is not None:
+                        d1,dc1=_d(v1); d6,dc6=_d(v6); d8,dc8=_d(v8)
+                        c1.metric(lbl1, fmt_fn(v1) if v1 is not None else "—", delta=d1, delta_color=dc1)
+                        c2.metric(lbl6, fmt_fn(v6) if v6 is not None else "—", delta=d6, delta_color=dc6)
+                        c3.metric(lbl8, fmt_fn(v8) if v8 is not None else "—", delta=d8, delta_color=dc8)
+                    else:
+                        c1.metric(lbl1, fmt_fn(v1) if v1 is not None else "—")
+                        c2.metric(lbl6, fmt_fn(v6) if v6 is not None else "—")
+                        c3.metric(lbl8, fmt_fn(v8) if v8 is not None else "—")
+
+                r1m = _get_row_90(d_1m_90, nr90_tutor)
+                r6w = _get_row_90(d_6w_90, nr90_tutor)
+                r8w = _get_row_90(d_8w_90, nr90_tutor)
 
                 st.divider()
-                _metrics_90 = [
-                    ("Sessions Launched on Time", "sessions_on_time_pct", fmt_pct_90,      True,  0.90),
-                    ("Parent Updates on Time",     "parent_update_pct",    fmt_pct_90,      True,  0.90),
-                    ("Delivery %",                 "delivery_pct",         fmt_pct_90,      True,  None),
-                    ("Availability %",             "availability_pct",     fmt_pct_90,      True,  None),
-                    ("Prep Time Ratio",            "prep_time_ratio",      _fmt_prep_90,    False, None),
-                    ("Auto-Attendance Sessions",   "autoattendance_sessions", lambda v: fmt_num_90(v,0), False, None),
-                    ("Avg NPS Score",              "avg_nps",              lambda v: fmt_num_90(v,2), True, None),
-                    ("# NPS Responses",            "number_of_nps",        lambda v: fmt_num_90(v,0), True, None),
-                    ("Weeks at Target",            "weeks_at_target",      lambda v: fmt_num_90(v,0), True, None),
-                ]
+                st.caption(f"📅 Periods: Last Month ({start_1m} – {end_90d}) | Last 6 Weeks ({start_6w} – {end_90d}) | Last 8 Weeks ({start_8w} – {end_90d})")
 
-                for _lbl, _col, _fmt, _hib, _tgt in _metrics_90:
-                    v1 = _safe_90(r1m_90, _col)
-                    v6 = _safe_90(r6w_90, _col)
-                    v8 = _safe_90(r8w_90, _col)
-                    with st.container(border=True):
-                        st.markdown(f"**{_lbl}**")
-                        _c1, _c2, _c3 = st.columns(3)
-                        if _tgt is not None:
-                            def _delt(v, tgt=_tgt, hib=_hib):
-                                if v is None: return None, "off"
-                                diff = v - tgt
-                                arrow = "\u25b2" if diff > 0 else "\u25bc"
-                                color = "normal" if (diff > 0) == hib else "inverse"
-                                return f"{arrow} {abs(diff)*100:.1f}pp vs {tgt*100:.0f}%", color
-                            d1,dc1 = _delt(v1); d6,dc6 = _delt(v6); d8,dc8 = _delt(v8)
-                            _c1.metric("Last Month",   _fmt(v1) if v1 is not None else "—", delta=d1, delta_color=dc1)
-                            _c2.metric("Last 6 Weeks", _fmt(v6) if v6 is not None else "—", delta=d6, delta_color=dc6)
-                            _c3.metric("Last 8 Weeks", _fmt(v8) if v8 is not None else "—", delta=d8, delta_color=dc8)
-                        else:
-                            _c1.metric("Last Month",   _fmt(v1) if v1 is not None else "—")
-                            _c2.metric("Last 6 Weeks", _fmt(v6) if v6 is not None else "—")
-                            _c3.metric("Last 8 Weeks", _fmt(v8) if v8 is not None else "—")
+                def _90s1():
+                    _three_metrics("Last Month","Last 6 Wks","Last 8 Wks",
+                        _safe_90(r1m,"sessions_on_time_pct"), _safe_90(r6w,"sessions_on_time_pct"), _safe_90(r8w,"sessions_on_time_pct"),
+                        fmt_pct_90, higher_is_better=True, target=0.90)
+                    st.caption("Target: 90%+")
+                _card_90("1. Sessions Launched on Time", _90s1)
+
+                def _90s2():
+                    _three_metrics("Last Month","Last 6 Wks","Last 8 Wks",
+                        _safe_90(r1m,"parent_update_pct"), _safe_90(r6w,"parent_update_pct"), _safe_90(r8w,"parent_update_pct"),
+                        fmt_pct_90, higher_is_better=True, target=0.90)
+                    st.caption("Target: 90%+")
+                _card_90("2. Parent Updates Sent on Time", _90s2)
+
+                def _90s3():
+                    _three_metrics("Last Month","Last 6 Wks","Last 8 Wks",
+                        _safe_90(r1m,"prep_time_ratio"), _safe_90(r6w,"prep_time_ratio"), _safe_90(r8w,"prep_time_ratio"),
+                        _fmt_prep_90, higher_is_better=False)
+                    st.caption("Prep hours as % of attended hours. Lower is better.")
+                _card_90("3. Prep Time Percentage", _90s3)
+
+                def _90s4():
+                    cancel_df = load_cancellation_data()
+                    if not cancel_df.empty:
+                        row = cancel_df[cancel_df["Tutor Name"].str.strip() == nr90_tutor]
+                        count = int(row["Count of Days Cancelled"].iloc[0]) if not row.empty else 0
+                        st.metric("Days Cancelled", count)
+                        st.caption("Lower is better.")
+                    else:
+                        st.info("No cancellation data available.")
+                _card_90("4. Cancellations", _90s4)
+
+                def _90s5():
+                    _three_metrics("Last Month","Last 6 Wks","Last 8 Wks",
+                        _safe_90(r1m,"autoattendance_sessions"), _safe_90(r6w,"autoattendance_sessions"), _safe_90(r8w,"autoattendance_sessions"),
+                        lambda v: fmt_num_90(v,0), higher_is_better=False)
+                    st.caption("Lower is better.")
+                _card_90("5. Auto-Attendance Sessions", _90s5)
+
+                def _90s6():
+                    _three_metrics("Last Month","Last 6 Wks","Last 8 Wks",
+                        _safe_90(r1m,"avg_nps"), _safe_90(r6w,"avg_nps"), _safe_90(r8w,"avg_nps"),
+                        lambda v: fmt_num_90(v,2), higher_is_better=True)
+                    c1,c2,c3 = st.columns(3)
+                    c1.metric("# Responses (1M)", fmt_num_90(_safe_90(r1m,"number_of_nps"),0))
+                    c2.metric("# Responses (6W)", fmt_num_90(_safe_90(r6w,"number_of_nps"),0))
+                    c3.metric("# Responses (8W)", fmt_num_90(_safe_90(r8w,"number_of_nps"),0))
+                _card_90("6. NPS Score", _90s6)
+
+                def _90s7():
+                    _three_metrics("Last Month","Last 6 Wks","Last 8 Wks",
+                        _safe_90(r1m,"delivery_pct"), _safe_90(r6w,"delivery_pct"), _safe_90(r8w,"delivery_pct"),
+                        fmt_pct_90, higher_is_better=True)
+                _card_90("7. Delivery Percentage", _90s7)
+
+                def _90s8():
+                    _three_metrics("Last Month","Last 6 Wks","Last 8 Wks",
+                        _safe_90(r1m,"availability_pct"), _safe_90(r6w,"availability_pct"), _safe_90(r8w,"availability_pct"),
+                        fmt_pct_90, higher_is_better=True)
+                _card_90("8. Availability Percentage", _90s8)
+
+                def _90s9():
+                    _three_metrics("Last Month","Last 6 Wks","Last 8 Wks",
+                        _safe_90(r1m,"weeks_at_target"), _safe_90(r6w,"weeks_at_target"), _safe_90(r8w,"weeks_at_target"),
+                        lambda v: fmt_num_90(v,0), higher_is_better=True)
+                _card_90("9. Weeks Meeting Delivery Target", _90s9)
+
+                def _90s10():
+                    st.metric("Current SCI", fmt_num_90(_safe_90(r1m,"current_sci"),1))
+                    st.caption("SCI is a point-in-time value.")
+                _card_90("10. Current SCI", _90s10)
 
     if page == "📋 Annual Reviews":
         st.markdown('<div class="main-title">📋 Annual Reviews</div>', unsafe_allow_html=True)
