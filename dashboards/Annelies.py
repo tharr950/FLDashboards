@@ -7284,8 +7284,6 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
     if page == "📋 Annual Reviews":
         st.markdown('<div class="main-title">📋 Annual Reviews</div>', unsafe_allow_html=True)
 
-        # IN PROGRESS banner
-        st.warning("⚠️ **This page is currently IN PROGRESS.** Data and layout are not finalized — please do not use this for reviews yet.", icon="🚧")
 
         # ── Date ranges (hardcoded) ──────────────────────────────────────────
         AR_12M_START = "2025-04-27"
