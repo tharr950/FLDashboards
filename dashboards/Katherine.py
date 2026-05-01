@@ -7846,10 +7846,10 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                 display = tutor_rematches[["Rematch Date Parsed","Student Name","Reason for Rematch Request",
                                            "Does the Rematch Seem Valid?","FL Thoughts"]].copy()
                 display["Rematch Date Parsed"] = display["Rematch Date Parsed"].dt.strftime("%m/%d/%Y")
-                display = display.rename(columns={{
+                display = display.rename(columns={
                     "Rematch Date Parsed": "Date", "Student Name": "Student",
                     "Reason for Rematch Request": "Reason",
-                    "Does the Rematch Seem Valid?": "Valid?", "FL Thoughts": "FL Thoughts"}})
+                    "Does the Rematch Seem Valid?": "Valid?", "FL Thoughts": "FL Thoughts"})
                 st.dataframe(display, use_container_width=True, hide_index=True)
             st.caption("Counts rematches where this tutor was the former tutor during the 12-month review period.")
         ar_card(7, "Rematches", _s7)
