@@ -637,6 +637,7 @@ def load_ar_kpi(start, end):
         df = pd.read_sql(query, conn)
     finally:
         conn.close()
+    return df
 
 @st.cache_data(ttl=3600)
 def load_rematch_tracker():
