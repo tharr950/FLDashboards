@@ -7623,9 +7623,7 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                 return pd.read_csv(io.StringIO(resp.text))
             return pd.DataFrame()
 
-        @st.cache_data(ttl=3600)
         # load_ar_kpi defined at module level
-            return df
 
         if "ar_data_loaded" not in st.session_state:
             st.session_state["ar_data_loaded"] = False
