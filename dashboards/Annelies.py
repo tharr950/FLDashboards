@@ -7527,6 +7527,14 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                 if start_6w < hire_sql: start_6w = hire_sql
                 if start_8w < hire_sql: start_8w = hire_sql
 
+            # Helper formatters for 90-day review
+            def fmt_pct_90(v, decimals=1):
+                if v is None or (isinstance(v, float) and pd.isna(v)): return "—"
+                return f"{float(v)*100:.{decimals}f}%"
+            def fmt_num_90(v, decimals=1):
+                if v is None or (isinstance(v, float) and pd.isna(v)): return "—"
+                return f"{float(v):.{decimals}f}"
+
             with st.spinner("Loading 90-day data..."):
                 try:
                     d_1m_90 = load_ar_kpi(start_1m, end_90d)
@@ -7557,15 +7565,15 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
 
                 st.divider()
                 _metrics_90 = [
-                    ("Sessions Launched on Time", "sessions_on_time_pct", fmt_pct,      True,  0.90),
-                    ("Parent Updates on Time",     "parent_update_pct",    fmt_pct,      True,  0.90),
-                    ("Delivery %",                 "delivery_pct",         fmt_pct,      True,  None),
-                    ("Availability %",             "availability_pct",     fmt_pct,      True,  None),
-                    ("Prep Time Ratio",            "prep_time_ratio",      _fmt_prep_90, False, None),
-                    ("Auto-Attendance Sessions",   "autoattendance_sessions", lambda v: fmt_num(v,0), False, None),
-                    ("Avg NPS Score",              "avg_nps",              lambda v: fmt_num(v,2), True, None),
-                    ("# NPS Responses",            "number_of_nps",        lambda v: fmt_num(v,0), True, None),
-                    ("Weeks at Target",            "weeks_at_target",      lambda v: fmt_num(v,0), True, None),
+                    ("Sessions Launched on Time", "sessions_on_time_pct", fmt_pct_90,      True,  0.90),
+                    ("Parent Updates on Time",     "parent_update_pct",    fmt_pct_90,      True,  0.90),
+                    ("Delivery %",                 "delivery_pct",         fmt_pct_90,      True,  None),
+                    ("Availability %",             "availability_pct",     fmt_pct_90,      True,  None),
+                    ("Prep Time Ratio",            "prep_time_ratio",      _fmt_prep_90,    False, None),
+                    ("Auto-Attendance Sessions",   "autoattendance_sessions", lambda v: fmt_num_90(v,0), False, None),
+                    ("Avg NPS Score",              "avg_nps",              lambda v: fmt_num_90(v,2), True, None),
+                    ("# NPS Responses",            "number_of_nps",        lambda v: fmt_num_90(v,0), True, None),
+                    ("Weeks at Target",            "weeks_at_target",      lambda v: fmt_num_90(v,0), True, None),
                 ]
 
                 for _lbl, _col, _fmt, _hib, _tgt in _metrics_90:
@@ -7583,13 +7591,13 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                                 color = "normal" if (diff > 0) == hib else "inverse"
                                 return f"{arrow} {abs(diff)*100:.1f}pp vs {tgt*100:.0f}%", color
                             d1,dc1 = _delt(v1); d6,dc6 = _delt(v6); d8,dc8 = _delt(v8)
-                            _c1.metric("Last Month",   _fmt(v1) if v1 is not None else "\u2014", delta=d1, delta_color=dc1)
-                            _c2.metric("Last 6 Weeks", _fmt(v6) if v6 is not None else "\u2014", delta=d6, delta_color=dc6)
-                            _c3.metric("Last 8 Weeks", _fmt(v8) if v8 is not None else "\u2014", delta=d8, delta_color=dc8)
+                            _c1.metric("Last Month",   _fmt(v1) if v1 is not None else "—", delta=d1, delta_color=dc1)
+                            _c2.metric("Last 6 Weeks", _fmt(v6) if v6 is not None else "—", delta=d6, delta_color=dc6)
+                            _c3.metric("Last 8 Weeks", _fmt(v8) if v8 is not None else "—", delta=d8, delta_color=dc8)
                         else:
-                            _c1.metric("Last Month",   _fmt(v1) if v1 is not None else "\u2014")
-                            _c2.metric("Last 6 Weeks", _fmt(v6) if v6 is not None else "\u2014")
-                            _c3.metric("Last 8 Weeks", _fmt(v8) if v8 is not None else "\u2014")
+                            _c1.metric("Last Month",   _fmt(v1) if v1 is not None else "—")
+                            _c2.metric("Last 6 Weeks", _fmt(v6) if v6 is not None else "—")
+                            _c3.metric("Last 8 Weeks", _fmt(v8) if v8 is not None else "—")
 
     if page == "📋 Annual Reviews":
         st.markdown('<div class="main-title">📋 Annual Reviews</div>', unsafe_allow_html=True)
