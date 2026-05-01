@@ -7721,8 +7721,8 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
             def fmt_prep(v):
                 if v is None or pd.isna(v): return "—"
                 return f"{float(v)*100:.1f}%"
-            d12, dc12 = ar_delta(v12, p12, higher_is_better=True)
-            d3,  dc3  = ar_delta(v3,  p3,  higher_is_better=True)
+            d12, dc12 = ar_delta(v12, p12, higher_is_better=False)
+            d3,  dc3  = ar_delta(v3,  p3,  higher_is_better=False)
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("12-Month",       fmt_prep(v12), delta=d12, delta_color=dc12)
             c2.metric("3-Month",        fmt_prep(v3),  delta=d3,  delta_color=dc3)
