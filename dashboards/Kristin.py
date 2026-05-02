@@ -7581,6 +7581,96 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                 if v is None or (isinstance(v, float) and pd.isna(v)): return "—"
                 return f"{float(v):.{decimals}f}"
 
+            # ── Subject Groupings & Raise Calculator ──────────────────────────
+            GROUPINGS_90D = [
+                ("AP Chemistry & Chemistry",
+                 ["AP Chemistry", "Chemistry", "Chemistry (Honors)", "General Chemistry (College-Level)"]),
+                ("AP Biology & Biology",
+                 ["AP Biology", "Biology", "Biology (Honors)", "Biology (College-Level)", "Biology E/M (SAT Subject Test)", "Biology Ecological (SAT Subject Test)", "Biology Molecular (SAT Subject Test)"]),
+                ("AP Physics & Physics",
+                 ["AP Physics 1: Algebra-Based", "AP Physics 2: Algebra-Based", "AP Physics C: Electricity and Magnetism", "AP Physics C: Mechanics", "Physics ", "Physics (Honors)", "Physics (College-Level)", "Physics (SAT Subject Test)"]),
+                ("AP Precalculus & Pre-Calculus",
+                 ["AP Precalculus", "Pre-Calculus"]),
+                ("AP US History & US History",
+                 ["AP United States History", "US History", "AP U.S. History"]),
+                ("AP Calculus AB & Calculus",
+                 ["AP Calculus AB", "Calculus", "Calculus (College-Level)", "Multivariable Calculus", "Integrated Math (with Calculus)"]),
+                ("AP Calculus BC & Calculus",
+                 ["AP Calculus BC", "Calculus", "Calculus (College-Level)", "Multivariable Calculus"]),
+                ("AP World History & World History",
+                 ["AP World History: Modern", "World History", "World History (College-Level)", "World History (SAT Subject Test)"]),
+                ("College Essay Writing & High School English",
+                 ["College Essay Writing", "High School English", "10th Grade English", "11th Grade English", "12th Grade English", "9th Grade English", "English Language (Honors)", "English Literature (Honors)"]),
+                ("Spanish",
+                 ["Spanish", "Spanish (Level 2)", "Spanish (Level 3)", "Spanish (College-Level)", "AP Spanish", "AP Spanish Language and Culture", "AP Spanish Literature and Culture", "Elementary Spanish", "Middle School Spanish"]),
+                ("Middle School Math &/or Middle School English",
+                 ["Middle School-Level English", "Middle School-Level Math", "Pre-Algebra", "Algebra I", "Algebra II"]),
+                ("AP Computer Science &/or AP CS Principles",
+                 ["AP Computer Science A", "AP Computer Science Principles"]),
+                ("Elementary School Math &/or Elementary School English",
+                 ["Elementary-Level Math", "Elementary-Level English Language Arts", "1st Grade English Language Arts", "2nd Grade English Language Arts", "3rd Grade English Language Arts", "4th Grade English Language Arts", "5th Grade English Language Arts", "Kindergarten English Language Arts"]),
+                ("Executive Functioning",
+                 ["Executive Functioning", "Executive Function: Foundations (College)", "Executive Function: Foundations (Elementary)", "Executive Function: Foundations (High School)", "Executive Function: Foundations (Middle School)", "Elementary Executive Functioning", "Middle School Executive Functioning"]),
+                ("SSAT (any level)",
+                 ["SSAT", "SSAT: Elementary Level (Grades 3-4)", "SSAT: Middle Level (Grades 5-7)", "SSAT: Upper Level (Grades 8-11)", "SSAT 101"]),
+            ]
+
+            RAISE_TABLE = {
+                # (review_result, grouping_bucket) -> rate
+                ("Meeting Expectations",   "0-3"):  "No raise",
+                ("Meeting Expectations",   "4-6"):  "$26/hr",
+                ("Meeting Expectations",   "7-15"): "$27/hr",
+                ("Exceeding Expectations", "0-3"):  "$27/hr",
+                ("Exceeding Expectations", "4-6"):  "$28/hr",
+                ("Exceeding Expectations", "7-15"): "$29/hr",
+                ("Not Meeting Expectations", "0-3"):  "Not eligible for raise",
+                ("Not Meeting Expectations", "4-6"):  "Not eligible for raise",
+                ("Not Meeting Expectations", "7-15"): "Not eligible for raise",
+            }
+
+            def _grouping_bucket(n):
+                if n <= 3: return "0-3"
+                if n <= 6: return "4-6"
+                return "7-15"
+
+            with st.expander("📊 Subject Groupings & Raise Calculator", expanded=True):
+                tutor_subjects = set(ar_skills_df[ar_skills_df["tutor_name"] == nr90_tutor]["subject"].str.strip().tolist()) if not ar_skills_df.empty else set()
+
+                completed_groups = []
+                missing_groups   = []
+                for grp_name, grp_subjects in GROUPINGS_90D:
+                    if any(s.strip() in tutor_subjects for s in grp_subjects):
+                        completed_groups.append(grp_name)
+                    else:
+                        missing_groups.append(grp_name)
+
+                n_groups = len(completed_groups)
+                bucket   = _grouping_bucket(n_groups)
+
+                cg1, cg2, cg3 = st.columns(3)
+                cg1.metric("Groupings Completed", n_groups)
+                cg2.metric("Grouping Bucket", bucket)
+                cg3.metric("Total Possible", len(GROUPINGS_90D))
+
+                st.markdown("**Review outcome → raise rate:**")
+                rev_result = st.selectbox("Select Review Result",
+                    ["— Select —", "Meeting Expectations", "Exceeding Expectations", "Not Meeting Expectations"],
+                    key="90d_review_result")
+                if rev_result != "— Select —":
+                    rate = RAISE_TABLE.get((rev_result, bucket), "—")
+                    color = "#2e7d32" if "$" in rate else "#c62828"
+                    st.markdown(f"<h3 style='color:{color}'>Raise Rate: {rate}</h3>", unsafe_allow_html=True)
+
+                if completed_groups:
+                    st.markdown("**✅ Completed Groupings:**")
+                    for g in completed_groups:
+                        st.markdown(f"- {g}")
+                if missing_groups:
+                    st.markdown("**❌ Incomplete Groupings:**")
+                    for g in missing_groups:
+                        st.markdown(f"- {g}")
+
+            st.divider()
             with st.spinner("Loading 90-day data..."):
                 try:
                     d_1m_90 = load_ar_kpi(start_1m, end_90d)
