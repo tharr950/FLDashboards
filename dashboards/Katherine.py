@@ -7480,30 +7480,7 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
         st.caption("Performance metrics for tutors in their first 90 days.")
 
         # Load snapshot data needed by cards
-        # Skills: load directly using hire date as start
-        try:
-            _skills_start = hire_date_90d.strftime("%Y-%m-%d") if pd.notna(hire_date_90d) else "2024-01-01"
-            _conn_sk = get_redshift_connection()
-            _skills_q = f"""
-                SELECT dw.employees.id AS emp_id,
-                    dw.users.first_name||' '||dw.users.last_name AS tutor_name,
-                    dw.categories.name AS category,
-                    dw.subjects.name AS subject,
-                    dw.skills.created_at AS created,
-                    dw.subjects.difficulty AS subject_sci
-                FROM dw.skills
-                JOIN dw.employees ON employees.id = skills.tutor_id
-                JOIN dw.users ON dw.employees.user_id = dw.users.id
-                JOIN dw.subjects ON skills.subject_id = subjects.id
-                JOIN dw.categories ON subjects.category_id = categories.id
-                WHERE dw.employees.end_date IS NULL
-                  AND dw.skills.created_at >= '{_skills_start}'
-                ORDER BY tutor_name, created
-            """
-            ar_skills_df = pd.read_sql(_skills_q, _conn_sk)
-            _conn_sk.close()
-        except Exception:
-            ar_skills_df = pd.DataFrame()
+        ar_skills_df = pd.DataFrame()  # loaded after tutor selected
         try:
             ar_video_snap = load_video_snapshots()
         except Exception:
@@ -7560,6 +7537,31 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                 st.caption(f"Hired: **{hire_str_90d}** | Days since hire: **{days_in_90d}**")
             else:
                 st.caption(f"Hired: **{hire_str_90d}**")
+
+            # Load skills using hire date as start
+            try:
+                _skills_start = hire_date_90d.strftime("%Y-%m-%d") if pd.notna(hire_date_90d) else "2024-01-01"
+                _conn_sk = get_redshift_connection()
+                _skills_q = f"""
+                    SELECT dw.employees.id AS emp_id,
+                        dw.users.first_name||' '||dw.users.last_name AS tutor_name,
+                        dw.categories.name AS category,
+                        dw.subjects.name AS subject,
+                        dw.skills.created_at AS created,
+                        dw.subjects.difficulty AS subject_sci
+                    FROM dw.skills
+                    JOIN dw.employees ON employees.id = skills.tutor_id
+                    JOIN dw.users ON dw.employees.user_id = dw.users.id
+                    JOIN dw.subjects ON skills.subject_id = subjects.id
+                    JOIN dw.categories ON subjects.category_id = categories.id
+                    WHERE dw.employees.end_date IS NULL
+                      AND dw.skills.created_at >= '{_skills_start}'
+                    ORDER BY tutor_name, created
+                """
+                ar_skills_df = pd.read_sql(_skills_q, _conn_sk)
+                _conn_sk.close()
+            except Exception:
+                ar_skills_df = pd.DataFrame()
 
             end_90d    = today.strftime("%Y-%m-%d")
             start_1m   = (today - pd.DateOffset(months=1)).strftime("%Y-%m-%d")
