@@ -8468,7 +8468,6 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
             c1.metric("Days Cancelled", tutor_count, delta=d, delta_color=dc)
             c2.metric("All-Tutor Avg", fmt_num(peer_avg, 1))
             st.caption("Count of days with tutor-initiated cancellations during the review period. Lower is better.")
-            st.warning("⚠️ Data is manually updated and may be stale. Verify before using in a review.")
         ar_card(4, "Cancellations by Tutor", _s4)
 
         # ── 5. Exams Data ────────────────────────────────────────────────────
@@ -8572,7 +8571,6 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                     "Does the Rematch Seem Valid?": "Valid?", "FL Thoughts": "FL Thoughts"})
                 st.dataframe(display, use_container_width=True, hide_index=True)
             st.caption("Counts rematches where this tutor was the former tutor during the 12-month review period.")
-            st.warning("⚠️ Data is manually updated and may be stale. Verify before using in a review.")
         ar_card(7, "Rematches", _s7)
 
         # ── 8. Weighted Repurchase ───────────────────────────────────────────
