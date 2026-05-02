@@ -7479,6 +7479,30 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
         st.markdown("## 🔰 90-Day Review")
         st.caption("Performance metrics for tutors in their first 90 days.")
 
+        # Load snapshot data needed by cards
+        try:
+            ar_skills_df = load_ar_skills()
+        except Exception:
+            ar_skills_df = pd.DataFrame()
+        try:
+            ar_video_snap = load_video_snapshots()
+        except Exception:
+            ar_video_snap = pd.DataFrame()
+        try:
+            ar_exam_snap = load_exams_snapshots()
+        except Exception:
+            ar_exam_snap = pd.DataFrame()
+        try:
+            ar_grades_snap = load_grades_snapshots()
+        except Exception:
+            ar_grades_snap = pd.DataFrame()
+        try:
+            ar_arch_snap = gh_read(SNAPSHOT_HISTORY_FILE)
+            if ar_arch_snap is None or ar_arch_snap.empty:
+                ar_arch_snap = load_snapshots()
+        except Exception:
+            ar_arch_snap = pd.DataFrame()
+
         team_tutors_df = master_tutor_df[
             (master_tutor_df["Faculty Leader"] == "Ela Cross") &
             (~master_tutor_df["Full Name"].isin(["Ela Cross"]))
