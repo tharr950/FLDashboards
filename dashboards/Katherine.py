@@ -7538,6 +7538,20 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
             else:
                 st.caption(f"Hired: **{hire_str_90d}**")
 
+            # Check if BUC-only tutor
+            try:
+                _bp_df = load_brand_permissions()
+                if not _bp_df.empty and "tutor_name" in _bp_df.columns:
+                    _tutor_brands = set(_bp_df[_bp_df["tutor_name"] == nr90_tutor]["brand_name"].dropna().unique().tolist())
+                    _is_buc_only = bool(_tutor_brands) and _tutor_brands <= {"Back-Up Care Tutoring"}
+                else:
+                    _is_buc_only = False
+            except Exception:
+                _is_buc_only = False
+
+            if _is_buc_only:
+                st.warning("⚠️ **BUC-Only Tutor** — This tutor is approved for Back-Up Care only and is **not eligible for a raise** at their 90-day review.")
+
             # Load skills using hire date as start
             try:
                 _skills_start = hire_date_90d.strftime("%Y-%m-%d") if pd.notna(hire_date_90d) else "2024-01-01"
