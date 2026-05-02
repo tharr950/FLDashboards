@@ -7549,6 +7549,33 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
             except Exception:
                 _is_buc_only = False
 
+            # Display brands
+            try:
+                _bp_df2 = load_brand_permissions()
+                if not _bp_df2.empty and "tutor_name" in _bp_df2.columns:
+                    _tutor_brands_list = sorted(_bp_df2[_bp_df2["tutor_name"] == nr90_tutor]["brand_name"].dropna().unique().tolist())
+                    if _tutor_brands_list:
+                        _brand_colors = {
+                            "Private Tutoring": "#1f77b4",
+                            "Back-Up Care Tutoring": "#ff7f0e",
+                            "Academics": "#2ca02c",
+                            "Trial": "#9467bd",
+                            "Small Group Course": "#e377c2",
+                            "Group Course": "#8c564b",
+                            "Boot Camp": "#d62728",
+                            "School-Pay Private Tutoring": "#17becf",
+                            "Tutoring": "#ffbb78",
+                        }
+                        pills_html = " ".join([
+                            f"<span style='background:{_brand_colors.get(b,'#888')}22; "
+                            f"color:{_brand_colors.get(b,'#888')}; border:1px solid {_brand_colors.get(b,'#888')}; "
+                            f"border-radius:12px; padding:2px 10px; font-size:0.85em; font-weight:600'>{b}</span>"
+                            for b in _tutor_brands_list
+                        ])
+                        st.markdown(f"**Approved Brands:** {pills_html}", unsafe_allow_html=True)
+            except Exception:
+                pass
+
             if _is_buc_only:
                 st.warning("⚠️ **BUC-Only Tutor** — This tutor is approved for Back-Up Care only and is **not eligible for a raise** at their 90-day review.")
 
