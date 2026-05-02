@@ -7582,37 +7582,57 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                 return f"{float(v):.{decimals}f}"
 
             # ── Subject Groupings & Raise Calculator ──────────────────────────
+            # Each grouping: (display_name, requires_all_groups, is_and_logic)
+            # requires_all_groups = list of lists; for AND logic ALL sublists need a match
+            # for OR logic (&#/or) at least one sublist needs a match
             GROUPINGS_90D = [
-                ("AP Chemistry & Chemistry",
-                 ["AP Chemistry", "Chemistry", "Chemistry (Honors)", "General Chemistry (College-Level)"]),
-                ("AP Biology & Biology",
-                 ["AP Biology", "Biology", "Biology (Honors)", "Biology (College-Level)", "Biology E/M (SAT Subject Test)", "Biology Ecological (SAT Subject Test)", "Biology Molecular (SAT Subject Test)"]),
-                ("AP Physics & Physics",
-                 ["AP Physics 1: Algebra-Based", "AP Physics 2: Algebra-Based", "AP Physics C: Electricity and Magnetism", "AP Physics C: Mechanics", "Physics ", "Physics (Honors)", "Physics (College-Level)", "Physics (SAT Subject Test)"]),
-                ("AP Precalculus & Pre-Calculus",
-                 ["AP Precalculus", "Pre-Calculus"]),
-                ("AP US History & US History",
-                 ["AP United States History", "US History", "AP U.S. History"]),
-                ("AP Calculus AB & Calculus",
-                 ["AP Calculus AB", "Calculus", "Calculus (College-Level)", "Multivariable Calculus", "Integrated Math (with Calculus)"]),
-                ("AP Calculus BC & Calculus",
-                 ["AP Calculus BC", "Calculus", "Calculus (College-Level)", "Multivariable Calculus"]),
-                ("AP World History & World History",
-                 ["AP World History: Modern", "World History", "World History (College-Level)", "World History (SAT Subject Test)"]),
-                ("College Essay Writing & High School English",
-                 ["College Essay Writing", "High School English", "10th Grade English", "11th Grade English", "12th Grade English", "9th Grade English", "English Language (Honors)", "English Literature (Honors)"]),
-                ("Spanish",
-                 ["Spanish", "Spanish (Level 2)", "Spanish (Level 3)", "Spanish (College-Level)", "AP Spanish", "AP Spanish Language and Culture", "AP Spanish Literature and Culture", "Elementary Spanish", "Middle School Spanish"]),
+                ("AP Chemistry AND Chemistry",
+                 [["AP Chemistry"], ["Chemistry", "Chemistry (Honors)", "General Chemistry (College-Level)"]],
+                 True),
+                ("AP Biology AND Biology",
+                 [["AP Biology"], ["Biology", "Biology (Honors)", "Biology (College-Level)"]],
+                 True),
+                ("AP Physics AND Physics",
+                 [["AP Physics 1: Algebra-Based", "AP Physics 2: Algebra-Based", "AP Physics C: Electricity and Magnetism", "AP Physics C: Mechanics"],
+                  ["Physics ", "Physics (Honors)", "Physics (College-Level)"]],
+                 True),
+                ("AP Precalculus AND Pre-Calculus",
+                 [["AP Precalculus"], ["Pre-Calculus"]],
+                 True),
+                ("AP US History AND US History",
+                 [["AP United States History", "AP U.S. History"], ["US History"]],
+                 True),
+                ("AP Calculus AB AND Calculus",
+                 [["AP Calculus AB"], ["Calculus", "Calculus (College-Level)", "Multivariable Calculus", "Integrated Math (with Calculus)"]],
+                 True),
+                ("AP Calculus BC AND Calculus",
+                 [["AP Calculus BC"], ["Calculus", "Calculus (College-Level)", "Multivariable Calculus"]],
+                 True),
+                ("AP World History AND World History",
+                 [["AP World History: Modern"], ["World History", "World History (College-Level)", "World History (SAT Subject Test)"]],
+                 True),
+                ("College Essay Writing AND High School English",
+                 [["College Essay Writing"], ["High School English", "10th Grade English", "11th Grade English", "12th Grade English", "9th Grade English", "English Language (Honors)", "English Literature (Honors)"]],
+                 True),
+                ("Spanish (any)",
+                 [["Spanish", "Spanish (Level 2)", "Spanish (Level 3)", "Spanish (College-Level)", "AP Spanish", "AP Spanish Language and Culture", "AP Spanish Literature and Culture", "Elementary Spanish", "Middle School Spanish"]],
+                 False),
                 ("Middle School Math &/or Middle School English",
-                 ["Middle School-Level English", "Middle School-Level Math", "Pre-Algebra", "Algebra I", "Algebra II"]),
+                 [["Middle School-Level English", "Middle School-Level Math", "Pre-Algebra", "Algebra I", "Algebra II"]],
+                 False),
                 ("AP Computer Science &/or AP CS Principles",
-                 ["AP Computer Science A", "AP Computer Science Principles"]),
+                 [["AP Computer Science A", "AP Computer Science Principles"]],
+                 False),
                 ("Elementary School Math &/or Elementary School English",
-                 ["Elementary-Level Math", "Elementary-Level English Language Arts", "1st Grade English Language Arts", "2nd Grade English Language Arts", "3rd Grade English Language Arts", "4th Grade English Language Arts", "5th Grade English Language Arts", "Kindergarten English Language Arts"]),
-                ("Executive Functioning",
-                 ["Executive Functioning", "Executive Function: Foundations (College)", "Executive Function: Foundations (Elementary)", "Executive Function: Foundations (High School)", "Executive Function: Foundations (Middle School)", "Elementary Executive Functioning", "Middle School Executive Functioning"]),
+                 [["Elementary-Level Math", "Elementary-Level English Language Arts", "1st Grade English Language Arts", "2nd Grade English Language Arts", "3rd Grade English Language Arts", "4th Grade English Language Arts", "5th Grade English Language Arts", "Kindergarten English Language Arts"]],
+                 False),
+                ("At least one Executive Functioning Foundations AND Executive Functioning",
+                 [["Executive Function: Foundations (College)", "Executive Function: Foundations (Elementary)", "Executive Function: Foundations (High School)", "Executive Function: Foundations (Middle School)"],
+                  ["Executive Functioning", "Elementary Executive Functioning", "Middle School Executive Functioning"]],
+                 True),
                 ("SSAT (any level)",
-                 ["SSAT", "SSAT: Elementary Level (Grades 3-4)", "SSAT: Middle Level (Grades 5-7)", "SSAT: Upper Level (Grades 8-11)", "SSAT 101"]),
+                 [["SSAT", "SSAT: Elementary Level (Grades 3-4)", "SSAT: Middle Level (Grades 5-7)", "SSAT: Upper Level (Grades 8-11)", "SSAT 101"]],
+                 False),
             ]
 
             RAISE_TABLE = {
@@ -7638,8 +7658,20 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
 
                 completed_groups = []
                 missing_groups   = []
-                for grp_name, grp_subjects in GROUPINGS_90D:
-                    if any(s.strip() in tutor_subjects for s in grp_subjects):
+                for grp_name, grp_sublists, is_and in GROUPINGS_90D:
+                    if is_and:
+                        # ALL sublists must have at least one match
+                        completed = all(
+                            any(s.strip() in tutor_subjects for s in sublist)
+                            for sublist in grp_sublists
+                        )
+                    else:
+                        # At least one subject from any sublist must match
+                        completed = any(
+                            any(s.strip() in tutor_subjects for s in sublist)
+                            for sublist in grp_sublists
+                        )
+                    if completed:
                         completed_groups.append(grp_name)
                     else:
                         missing_groups.append(grp_name)
