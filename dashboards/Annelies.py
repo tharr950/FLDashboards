@@ -7480,8 +7480,28 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
         st.caption("Performance metrics for tutors in their first 90 days.")
 
         # Load snapshot data needed by cards
+        # Skills: load directly using hire date as start
         try:
-            ar_skills_df = load_ar_skills()
+            _skills_start = hire_date_90d.strftime("%Y-%m-%d") if pd.notna(hire_date_90d) else "2024-01-01"
+            _conn_sk = get_redshift_connection()
+            _skills_q = f"""
+                SELECT dw.employees.id AS emp_id,
+                    dw.users.first_name||' '||dw.users.last_name AS tutor_name,
+                    dw.categories.name AS category,
+                    dw.subjects.name AS subject,
+                    dw.skills.created_at AS created,
+                    dw.subjects.difficulty AS subject_sci
+                FROM dw.skills
+                JOIN dw.employees ON employees.id = skills.tutor_id
+                JOIN dw.users ON dw.employees.user_id = dw.users.id
+                JOIN dw.subjects ON skills.subject_id = subjects.id
+                JOIN dw.categories ON subjects.category_id = categories.id
+                WHERE dw.employees.end_date IS NULL
+                  AND dw.skills.created_at >= '{_skills_start}'
+                ORDER BY tutor_name, created
+            """
+            ar_skills_df = pd.read_sql(_skills_q, _conn_sk)
+            _conn_sk.close()
         except Exception:
             ar_skills_df = pd.DataFrame()
         try:
@@ -7625,17 +7645,20 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                 r6w = _get_row_90(d_6w_90, nr90_tutor)
                 r8w = _get_row_90(d_8w_90, nr90_tutor)
 
-                # Peers: same tier from 1-month data
+                # Peers: tutors hired within 150 days (same new-hire cohort)
                 tutor_tier_90 = r1m.get("tier") if r1m is not None else None
+
+                # Get hire dates from master_tutor_df to find cohort peers
+                new_hire_names = team_tutors_df[team_tutors_df["days_since_hire"] <= 150]["Full Name"].tolist()
                 peers_90 = d_1m_90[
-                    (d_1m_90["tier"] == tutor_tier_90) &
+                    (d_1m_90["tutor_name"].isin(new_hire_names)) &
                     (d_1m_90["tutor_name"] != nr90_tutor)
-                ] if tutor_tier_90 else pd.DataFrame()
+                ] if new_hire_names else pd.DataFrame()
 
                 st.divider()
                 st.caption(f"📅 Last Month: {start_1m} to {end_90d} | Last 6 Wks: {start_6w} to {end_90d} | Last 8 Wks: {start_8w} to {end_90d}")
                 if tutor_tier_90:
-                    st.caption(f"Tier: **{tutor_tier_90}** | Peers (same tier): **{len(peers_90)}**")
+                    st.caption(f"Tier: **{tutor_tier_90}** | New-hire peers (within 150 days): **{len(peers_90)}**")
 
                 # ── 1. Sessions on Time
                 def _90s1():
