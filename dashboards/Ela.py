@@ -7896,6 +7896,7 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                         st.caption("Lower is better.")
                     else:
                         st.info("No cancellation data available.")
+                    st.warning("⚠️ Data is manually updated and may be stale. Verify before using in a review.")
                 _card_90("4. Cancellations", _90s4)
 
                 # ── 5. Exams Data
@@ -7964,6 +7965,7 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                         display["Rematch Date Parsed"] = display["Rematch Date Parsed"].dt.strftime("%m/%d/%Y")
                         display = display.rename(columns={"Rematch Date Parsed":"Date","Student Name":"Student","Reason for Rematch Request":"Reason","Does the Rematch Seem Valid?":"Valid?"})
                         st.dataframe(display, use_container_width=True, hide_index=True)
+                    st.warning("⚠️ Data is manually updated and may be stale. Verify before using in a review.")
                 _card_90("7. Rematches", _90s7)
 
                 # ── 8. Weighted Repurchase
