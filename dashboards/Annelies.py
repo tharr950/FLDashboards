@@ -7556,6 +7556,14 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                     v = r.get(col)
                     return None if pd.isna(v) else float(v)
 
+                def fmt_pct_90(v, decimals=1):
+                    if v is None or (isinstance(v, float) and pd.isna(v)): return "—"
+                    return f"{float(v)*100:.{decimals}f}%"
+
+                def fmt_num_90(v, decimals=1):
+                    if v is None or (isinstance(v, float) and pd.isna(v)): return "—"
+                    return f"{float(v):.{decimals}f}"
+
                 def _fmt_prep_90(v):
                     return f"{v*100:.1f}%" if v is not None else "—"
 
@@ -7563,103 +7571,391 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                     with st.expander(f"**{title}**", expanded=True):
                         content_fn()
 
-                def _three_metrics(lbl1, lbl6, lbl8, v1, v6, v8, fmt_fn,
-                                   higher_is_better=True, target=None):
-                    c1, c2, c3 = st.columns(3)
-                    def _d(v):
-                        if v is None or target is None: return None, "off"
-                        diff = v - target
-                        arrow = "▲" if diff > 0 else "▼"
-                        color = "normal" if (diff > 0) == higher_is_better else "inverse"
-                        return f"{arrow} {abs(diff)*100:.1f}pp vs {target*100:.0f}%", color
-                    if target is not None:
-                        d1,dc1=_d(v1); d6,dc6=_d(v6); d8,dc8=_d(v8)
-                        c1.metric(lbl1, fmt_fn(v1) if v1 is not None else "—", delta=d1, delta_color=dc1)
-                        c2.metric(lbl6, fmt_fn(v6) if v6 is not None else "—", delta=d6, delta_color=dc6)
-                        c3.metric(lbl8, fmt_fn(v8) if v8 is not None else "—", delta=d8, delta_color=dc8)
-                    else:
-                        c1.metric(lbl1, fmt_fn(v1) if v1 is not None else "—")
-                        c2.metric(lbl6, fmt_fn(v6) if v6 is not None else "—")
-                        c3.metric(lbl8, fmt_fn(v8) if v8 is not None else "—")
+                def _delta_90(v, compare, higher_is_better=True, label="vs comparison"):
+                    if v is None or compare is None or pd.isna(v) or pd.isna(compare): return None, "off"
+                    diff = float(v) - float(compare)
+                    color = "normal" if (diff > 0) == higher_is_better else "inverse"
+                    arrow = "▲" if diff > 0 else "▼"
+                    return f"{arrow} {abs(diff)*100:.1f}pp {label}", color
+
+                def _delta_num_90(v, compare, higher_is_better=True, label="vs comparison"):
+                    if v is None or compare is None or pd.isna(v) or pd.isna(compare): return None, "off"
+                    diff = float(v) - float(compare)
+                    color = "normal" if (diff > 0) == higher_is_better else "inverse"
+                    arrow = "▲" if diff > 0 else "▼"
+                    return f"{arrow} {abs(diff):.1f} {label}", color
+
+                def _delta_target_90(v, target, higher_is_better=True):
+                    if v is None or pd.isna(v): return None, "off"
+                    diff = float(v) - target
+                    color = "normal" if (diff > 0) == higher_is_better else "inverse"
+                    arrow = "▲" if diff > 0 else "▼"
+                    return f"{arrow} {abs(diff)*100:.1f}pp vs {target*100:.0f}% target", color
+
+                def _peer_avg_90(df, col):
+                    if df.empty or col not in df.columns: return None
+                    vals = pd.to_numeric(df[col], errors="coerce").dropna()
+                    return vals.mean() if not vals.empty else None
 
                 r1m = _get_row_90(d_1m_90, nr90_tutor)
                 r6w = _get_row_90(d_6w_90, nr90_tutor)
                 r8w = _get_row_90(d_8w_90, nr90_tutor)
 
-                st.divider()
-                st.caption(f"📅 Periods: Last Month ({start_1m} – {end_90d}) | Last 6 Weeks ({start_6w} – {end_90d}) | Last 8 Weeks ({start_8w} – {end_90d})")
+                # Peers: same tier from 1-month data
+                tutor_tier_90 = r1m.get("tier") if r1m is not None else None
+                peers_90 = d_1m_90[
+                    (d_1m_90["tier"] == tutor_tier_90) &
+                    (d_1m_90["tutor_name"] != nr90_tutor)
+                ] if tutor_tier_90 else pd.DataFrame()
 
+                st.divider()
+                st.caption(f"📅 Last Month: {start_1m} to {end_90d} | Last 6 Wks: {start_6w} to {end_90d} | Last 8 Wks: {start_8w} to {end_90d}")
+                if tutor_tier_90:
+                    st.caption(f"Tier: **{tutor_tier_90}** | Peers (same tier): **{len(peers_90)}**")
+
+                # ── 1. Sessions on Time
                 def _90s1():
-                    _three_metrics("Last Month","Last 6 Wks","Last 8 Wks",
-                        _safe_90(r1m,"sessions_on_time_pct"), _safe_90(r6w,"sessions_on_time_pct"), _safe_90(r8w,"sessions_on_time_pct"),
-                        fmt_pct_90, higher_is_better=True, target=0.90)
+                    v1=_safe_90(r1m,"sessions_on_time_pct"); v6=_safe_90(r6w,"sessions_on_time_pct"); v8=_safe_90(r8w,"sessions_on_time_pct")
+                    d1,dc1=_delta_target_90(v1,0.90); d6,dc6=_delta_target_90(v6,0.90); d8,dc8=_delta_target_90(v8,0.90)
+                    c1,c2,c3=st.columns(3)
+                    c1.metric("Last Month",fmt_pct_90(v1),delta=d1,delta_color=dc1)
+                    c2.metric("Last 6 Wks",fmt_pct_90(v6),delta=d6,delta_color=dc6)
+                    c3.metric("Last 8 Wks",fmt_pct_90(v8),delta=d8,delta_color=dc8)
                     st.caption("Target: 90%+")
                 _card_90("1. Sessions Launched on Time", _90s1)
 
+                # ── 2. Parent Updates on Time
                 def _90s2():
-                    _three_metrics("Last Month","Last 6 Wks","Last 8 Wks",
-                        _safe_90(r1m,"parent_update_pct"), _safe_90(r6w,"parent_update_pct"), _safe_90(r8w,"parent_update_pct"),
-                        fmt_pct_90, higher_is_better=True, target=0.90)
+                    v1=_safe_90(r1m,"parent_update_pct"); v6=_safe_90(r6w,"parent_update_pct"); v8=_safe_90(r8w,"parent_update_pct")
+                    d1,dc1=_delta_target_90(v1,0.90); d6,dc6=_delta_target_90(v6,0.90); d8,dc8=_delta_target_90(v8,0.90)
+                    c1,c2,c3=st.columns(3)
+                    c1.metric("Last Month",fmt_pct_90(v1),delta=d1,delta_color=dc1)
+                    c2.metric("Last 6 Wks",fmt_pct_90(v6),delta=d6,delta_color=dc6)
+                    c3.metric("Last 8 Wks",fmt_pct_90(v8),delta=d8,delta_color=dc8)
                     st.caption("Target: 90%+")
                 _card_90("2. Parent Updates Sent on Time", _90s2)
 
+                # ── 3. Prep Time
                 def _90s3():
-                    _three_metrics("Last Month","Last 6 Wks","Last 8 Wks",
-                        _safe_90(r1m,"prep_time_ratio"), _safe_90(r6w,"prep_time_ratio"), _safe_90(r8w,"prep_time_ratio"),
-                        _fmt_prep_90, higher_is_better=False)
-                    st.caption("Prep hours as % of attended hours. Lower is better.")
+                    v1=_safe_90(r1m,"prep_time_ratio"); v6=_safe_90(r6w,"prep_time_ratio"); v8=_safe_90(r8w,"prep_time_ratio")
+                    p1=_peer_avg_90(peers_90,"prep_time_ratio")
+                    d1,dc1=_delta_90(v1,p1,higher_is_better=False,label="vs peer avg")
+                    c1,c2,c3,c4=st.columns(4)
+                    c1.metric("Last Month",_fmt_prep_90(v1),delta=d1,delta_color=dc1)
+                    c2.metric("Last 6 Wks",_fmt_prep_90(v6))
+                    c3.metric("Last 8 Wks",_fmt_prep_90(v8))
+                    c4.metric("Peer Avg (1M)",_fmt_prep_90(p1))
+                    st.caption("Prep hrs as % of attended hrs. Lower is better.")
                 _card_90("3. Prep Time Percentage", _90s3)
 
+                # ── 4. Cancellations
                 def _90s4():
                     cancel_df = load_cancellation_data()
                     if not cancel_df.empty:
                         row = cancel_df[cancel_df["Tutor Name"].str.strip() == nr90_tutor]
                         count = int(row["Count of Days Cancelled"].iloc[0]) if not row.empty else 0
-                        st.metric("Days Cancelled", count)
+                        all_avg = round(cancel_df["Count of Days Cancelled"].mean(), 1)
+                        d,dc = _delta_num_90(count, all_avg, higher_is_better=False, label="vs all-tutor avg")
+                        c1,c2=st.columns(2)
+                        c1.metric("Days Cancelled", count, delta=d, delta_color=dc)
+                        c2.metric("All-Tutor Avg", fmt_num_90(all_avg,1))
                         st.caption("Lower is better.")
                     else:
                         st.info("No cancellation data available.")
                 _card_90("4. Cancellations", _90s4)
 
+                # ── 5. Exams Data
                 def _90s5():
-                    _three_metrics("Last Month","Last 6 Wks","Last 8 Wks",
-                        _safe_90(r1m,"autoattendance_sessions"), _safe_90(r6w,"autoattendance_sessions"), _safe_90(r8w,"autoattendance_sessions"),
-                        lambda v: fmt_num_90(v,0), higher_is_better=False)
-                    st.caption("Lower is better.")
-                _card_90("5. Auto-Attendance Sessions", _90s5)
+                    if ar_exam_snap.empty:
+                        st.info("No exam snapshot data available yet.")
+                        return
+                    tutor_es = ar_exam_snap[ar_exam_snap["tutor_name"] == nr90_tutor].sort_values("week_date")
+                    if tutor_es.empty:
+                        st.info(f"No exam data found for {nr90_tutor}.")
+                        return
+                    all_latest = ar_exam_snap.sort_values("week_date").groupby("tutor_name").last().reset_index()
+                    all_avg_pct = all_latest["pct_eligible_with_exam"].mean() if "pct_eligible_with_exam" in all_latest.columns else None
+                    latest = tutor_es.iloc[-1]
+                    prev = tutor_es.iloc[-2] if len(tutor_es) >= 2 else None
+                    lat_pct = latest["pct_eligible_with_exam"]
+                    prev_pct = prev["pct_eligible_with_exam"] if prev is not None else None
+                    d_prev,dc_prev = _delta_num_90(lat_pct,prev_pct,higher_is_better=True,label="vs prev week") if prev_pct is not None else (None,"off")
+                    c1,c2,c3,c4=st.columns(4)
+                    c1.metric("% With Exam (now)", f"{lat_pct:.1f}%", delta=d_prev, delta_color=dc_prev)
+                    c2.metric("# No Exam (now)", fmt_num_90(latest["students_no_exam"],0))
+                    c3.metric("All-Tutor Avg %", f"{all_avg_pct:.1f}%" if all_avg_pct else "—")
+                    c4.metric("# Stale Exam (now)", fmt_num_90(latest.get("students_stale_exam"),0))
+                _card_90("5. Exams Data", _90s5)
 
+                # ── 6. Grades Data
                 def _90s6():
-                    _three_metrics("Last Month","Last 6 Wks","Last 8 Wks",
-                        _safe_90(r1m,"avg_nps"), _safe_90(r6w,"avg_nps"), _safe_90(r8w,"avg_nps"),
-                        lambda v: fmt_num_90(v,2), higher_is_better=True)
-                    c1,c2,c3 = st.columns(3)
-                    c1.metric("# Responses (1M)", fmt_num_90(_safe_90(r1m,"number_of_nps"),0))
-                    c2.metric("# Responses (6W)", fmt_num_90(_safe_90(r6w,"number_of_nps"),0))
-                    c3.metric("# Responses (8W)", fmt_num_90(_safe_90(r8w,"number_of_nps"),0))
-                _card_90("6. NPS Score", _90s6)
+                    if ar_grades_snap.empty:
+                        st.info("No grades snapshot data available yet.")
+                        return
+                    tutor_gs = ar_grades_snap[ar_grades_snap["tutor_name"] == nr90_tutor].sort_values("week_date")
+                    if tutor_gs.empty:
+                        st.info(f"No grades data found for {nr90_tutor}.")
+                        return
+                    all_latest = ar_grades_snap.sort_values("week_date").groupby("tutor_name").last().reset_index()
+                    all_avg = all_latest["pct_subjects_graded"].mean() if "pct_subjects_graded" in all_latest.columns else None
+                    latest = tutor_gs.iloc[-1]
+                    prev = tutor_gs.iloc[-2] if len(tutor_gs) >= 2 else None
+                    lat_pct = latest["pct_subjects_graded"]
+                    prev_pct = prev["pct_subjects_graded"] if prev is not None else None
+                    d_prev,dc_prev = _delta_num_90(lat_pct,prev_pct,higher_is_better=True,label="vs prev week") if prev_pct is not None else (None,"off")
+                    c1,c2,c3,c4=st.columns(4)
+                    c1.metric("% Graded (now)", f"{lat_pct:.1f}%", delta=d_prev, delta_color=dc_prev)
+                    c2.metric("# No Grades (now)", fmt_num_90(latest["students_no_grades"],0))
+                    c3.metric("All-Tutor Avg %", f"{all_avg:.1f}%" if all_avg else "—")
+                    c4.metric("Stale Grades (now)", fmt_num_90(latest["stale_grade_students"],0))
+                _card_90("6. Grades Data", _90s6)
 
+                # ── 7. Rematches
                 def _90s7():
-                    _three_metrics("Last Month","Last 6 Wks","Last 8 Wks",
-                        _safe_90(r1m,"delivery_pct"), _safe_90(r6w,"delivery_pct"), _safe_90(r8w,"delivery_pct"),
-                        fmt_pct_90, higher_is_better=True)
-                _card_90("7. Delivery Percentage", _90s7)
+                    rematch_df = load_rematch_tracker()
+                    if rematch_df.empty:
+                        st.info("No rematch data available.")
+                        return
+                    cutoff_start = pd.to_datetime(start_8w)
+                    cutoff_end   = pd.to_datetime(end_90d)
+                    tutor_rm = rematch_df[
+                        (rematch_df["Former Tutor"].str.strip() == nr90_tutor) &
+                        (rematch_df["Rematch Date Parsed"] >= cutoff_start) &
+                        (rematch_df["Rematch Date Parsed"] <= cutoff_end)
+                    ].copy()
+                    count = len(tutor_rm)
+                    st.metric("Rematches (last 8 wks)", count)
+                    if count > 0:
+                        display = tutor_rm[["Rematch Date Parsed","Student Name","Reason for Rematch Request","Does the Rematch Seem Valid?"]].copy()
+                        display["Rematch Date Parsed"] = display["Rematch Date Parsed"].dt.strftime("%m/%d/%Y")
+                        display = display.rename(columns={"Rematch Date Parsed":"Date","Student Name":"Student","Reason for Rematch Request":"Reason","Does the Rematch Seem Valid?":"Valid?"})
+                        st.dataframe(display, use_container_width=True, hide_index=True)
+                _card_90("7. Rematches", _90s7)
 
+                # ── 8. Weighted Repurchase
                 def _90s8():
-                    _three_metrics("Last Month","Last 6 Wks","Last 8 Wks",
-                        _safe_90(r1m,"availability_pct"), _safe_90(r6w,"availability_pct"), _safe_90(r8w,"availability_pct"),
-                        fmt_pct_90, higher_is_better=True)
-                _card_90("8. Availability Percentage", _90s8)
+                    wr_col = "Weighted Repurchases"
+                    tutor_mm = monthly_metric_annual_review_df[monthly_metric_annual_review_df["Tutor Name"] == nr90_tutor].copy()
+                    if tutor_mm.empty or wr_col not in tutor_mm.columns:
+                        st.info("No monthly metric data found.")
+                        return
+                    def _pe(s):
+                        if pd.isna(s): return pd.NaT
+                        s2 = str(s).replace("-","to").replace("–","to")
+                        parts = s2.split("to")
+                        end = parts[-1].strip() if len(parts)>1 else parts[0].strip()
+                        return pd.to_datetime(end, errors="coerce", dayfirst=False)
+                    tutor_mm["Date Parsed"] = tutor_mm["Date Range"].apply(_pe)
+                    tutor_mm = tutor_mm.dropna(subset=["Date Parsed"]).sort_values("Date Parsed")
+                    wr_total = pd.to_numeric(tutor_mm[wr_col], errors="coerce").sum()
+                    st.metric("Total Repurchases (all data)", fmt_num_90(wr_total,1))
+                    st.caption("Limited history for new tutors — showing all available data.")
+                _card_90("8. Weighted Repurchase", _90s8)
 
+                # ── 9. Archivable Students
                 def _90s9():
-                    _three_metrics("Last Month","Last 6 Wks","Last 8 Wks",
-                        _safe_90(r1m,"weeks_at_target"), _safe_90(r6w,"weeks_at_target"), _safe_90(r8w,"weeks_at_target"),
-                        lambda v: fmt_num_90(v,0), higher_is_better=True)
-                _card_90("9. Weeks Meeting Delivery Target", _90s9)
+                    if ar_arch_snap.empty:
+                        st.info("No archivable snapshot data available yet.")
+                        return
+                    tutor_as = ar_arch_snap[ar_arch_snap["tutor_name"] == nr90_tutor].sort_values("week_date")
+                    if tutor_as.empty:
+                        st.info(f"No archivable data found for {nr90_tutor}.")
+                        return
+                    all_latest = ar_arch_snap.sort_values("week_date").groupby("tutor_name").last().reset_index()
+                    all_avg = all_latest["pct_archivable"].mean() if "pct_archivable" in all_latest.columns else None
+                    latest = tutor_as.iloc[-1]
+                    prev = tutor_as.iloc[-2] if len(tutor_as) >= 2 else None
+                    lat_pct = latest["pct_archivable"] if "pct_archivable" in latest else None
+                    prev_pct = prev["pct_archivable"] if prev is not None and "pct_archivable" in prev else None
+                    d_prev,dc_prev = _delta_num_90(lat_pct,prev_pct,higher_is_better=False,label="vs prev week") if prev_pct is not None else (None,"off")
+                    c1,c2,c3=st.columns(3)
+                    c1.metric("# Archivable (now)", fmt_num_90(latest["archivable_students"],0))
+                    c2.metric("% Archivable (now)", f"{lat_pct:.1f}%" if lat_pct else "—", delta=d_prev, delta_color=dc_prev)
+                    c3.metric("All-Tutor Avg %", f"{all_avg:.1f}%" if all_avg else "—")
+                    st.caption("Lower is better.")
+                _card_90("9. Archivable Students", _90s9)
 
+                # ── 10. Unscheduled Hours
                 def _90s10():
-                    st.metric("Current SCI", fmt_num_90(_safe_90(r1m,"current_sci"),1))
-                    st.caption("SCI is a point-in-time value.")
-                _card_90("10. Current SCI", _90s10)
+                    if ar_arch_snap.empty:
+                        st.info("No unscheduled hours data available yet.")
+                        return
+                    tutor_as = ar_arch_snap[ar_arch_snap["tutor_name"] == nr90_tutor].sort_values("week_date")
+                    if tutor_as.empty:
+                        st.info(f"No data found for {nr90_tutor}.")
+                        return
+                    all_latest = ar_arch_snap.sort_values("week_date").groupby("tutor_name").last().reset_index()
+                    all_avg = all_latest["unscheduled_hours"].mean()
+                    latest = tutor_as.iloc[-1]
+                    prev = tutor_as.iloc[-2] if len(tutor_as) >= 2 else None
+                    lat_hrs = latest["unscheduled_hours"]
+                    prev_hrs = prev["unscheduled_hours"] if prev is not None else None
+                    d_prev,dc_prev = _delta_num_90(lat_hrs,prev_hrs,higher_is_better=False,label="vs prev week") if prev_hrs is not None else (None,"off")
+                    c1,c2,c3=st.columns(3)
+                    c1.metric("Unscheduled Hrs (now)", fmt_num_90(lat_hrs,1), delta=d_prev, delta_color=dc_prev)
+                    c2.metric("All-Tutor Avg (hrs)", fmt_num_90(all_avg,1))
+                    c3.metric("Total Students", fmt_num_90(latest["total_students"],0))
+                    st.caption("Lower is better.")
+                _card_90("10. Unscheduled Hours", _90s10)
+
+                # ── 11. Auto-Attendance
+                def _90s11():
+                    v1=_safe_90(r1m,"autoattendance_sessions"); v6=_safe_90(r6w,"autoattendance_sessions"); v8=_safe_90(r8w,"autoattendance_sessions")
+                    p1=_peer_avg_90(d_1m_90,"autoattendance_sessions")
+                    d1,dc1=_delta_num_90(v1,p1,higher_is_better=False,label="vs all-tutor avg")
+                    c1,c2,c3,c4=st.columns(4)
+                    c1.metric("Last Month",fmt_num_90(v1,0),delta=d1,delta_color=dc1)
+                    c2.metric("Last 6 Wks",fmt_num_90(v6,0))
+                    c3.metric("Last 8 Wks",fmt_num_90(v8,0))
+                    c4.metric("All-Tutor Avg (1M)",fmt_num_90(p1,1))
+                    st.caption("Lower is better.")
+                _card_90("11. Auto-Attendance", _90s11)
+
+                # ── 12. NPS
+                def _90s12():
+                    v1=_safe_90(r1m,"avg_nps"); v6=_safe_90(r6w,"avg_nps"); v8=_safe_90(r8w,"avg_nps")
+                    c1,c2,c3=st.columns(3)
+                    c1.metric("Avg NPS (1M)",fmt_num_90(v1,2))
+                    c2.metric("Avg NPS (6W)",fmt_num_90(v6,2))
+                    c3.metric("Avg NPS (8W)",fmt_num_90(v8,2))
+                    c1b,c2b,c3b=st.columns(3)
+                    c1b.metric("# Responses (1M)",fmt_num_90(_safe_90(r1m,"number_of_nps"),0))
+                    c2b.metric("# Responses (6W)",fmt_num_90(_safe_90(r6w,"number_of_nps"),0))
+                    c3b.metric("# Responses (8W)",fmt_num_90(_safe_90(r8w,"number_of_nps"),0))
+                _card_90("12. NPS", _90s12)
+
+                # ── 13. Parent Update Video
+                def _90s13():
+                    if ar_video_snap.empty:
+                        st.info("No video snapshot data available yet.")
+                        return
+                    tutor_vs = ar_video_snap[ar_video_snap["tutor_name"] == nr90_tutor].sort_values("week_date")
+                    if tutor_vs.empty:
+                        st.info(f"No video data found for {nr90_tutor}.")
+                        return
+                    all_avg = ar_video_snap.groupby("tutor_name")["pct_with_video"].last().mean()
+                    latest = tutor_vs.iloc[-1]
+                    tutor_avg = tutor_vs["pct_with_video"].mean()
+                    d,dc = _delta_num_90(tutor_avg,all_avg,higher_is_better=True,label="vs all-tutor avg")
+                    c1,c2,c3=st.columns(3)
+                    c1.metric("Most Recent Week %", f"{latest['pct_with_video']:.1f}%")
+                    c2.metric("Avg All Weeks", f"{tutor_avg:.1f}%", delta=d, delta_color=dc)
+                    c3.metric("All-Tutor Avg", f"{all_avg:.1f}%")
+                    if len(tutor_vs) >= 2:
+                        fig_v = px.line(tutor_vs, x="week_date", y="pct_with_video", markers=True,
+                                        title="% With Video", color_discrete_sequence=["#7b2d8b"])
+                        fig_v.add_hline(y=80, line_dash="dash", line_color="#cc0000", annotation_text="80%")
+                        fig_v.update_layout(height=220, margin=dict(l=20,r=20,t=40,b=20), xaxis_title="", yaxis_title="%")
+                        st.plotly_chart(fig_v, use_container_width=True)
+                _card_90("13. Parent Update Video", _90s13)
+
+                # ── 14. Parent Update Homework
+                def _90s14():
+                    if ar_video_snap.empty or "pct_with_homework" not in ar_video_snap.columns:
+                        st.info("No homework data available yet.")
+                        return
+                    tutor_vs = ar_video_snap[ar_video_snap["tutor_name"] == nr90_tutor].sort_values("week_date")
+                    if tutor_vs.empty:
+                        st.info(f"No data found for {nr90_tutor}.")
+                        return
+                    all_avg = ar_video_snap.groupby("tutor_name")["pct_with_homework"].last().mean()
+                    tutor_avg = tutor_vs["pct_with_homework"].mean()
+                    latest = tutor_vs.iloc[-1]
+                    d,dc = _delta_num_90(tutor_avg,all_avg,higher_is_better=True,label="vs all-tutor avg")
+                    c1,c2,c3=st.columns(3)
+                    c1.metric("Most Recent Week %", f"{latest['pct_with_homework']:.1f}%")
+                    c2.metric("Avg All Weeks", f"{tutor_avg:.1f}%", delta=d, delta_color=dc)
+                    c3.metric("All-Tutor Avg", f"{all_avg:.1f}%")
+                    if len(tutor_vs) >= 2:
+                        fig_h = px.line(tutor_vs, x="week_date", y="pct_with_homework", markers=True,
+                                        title="% Mentioning Homework", color_discrete_sequence=["#1565c0"])
+                        fig_h.update_layout(height=220, margin=dict(l=20,r=20,t=40,b=20), xaxis_title="", yaxis_title="%")
+                        st.plotly_chart(fig_h, use_container_width=True)
+                _card_90("14. Parent Update Mentioning Homework", _90s14)
+
+                # ── 15. Progress Updates
+                def _90s15():
+                    pu_col = "% of Active Students with Progress Updates Completed in last 2 months"
+                    tutor_mm = monthly_metric_annual_review_df[monthly_metric_annual_review_df["Tutor Name"] == nr90_tutor].copy()
+                    if tutor_mm.empty or pu_col not in tutor_mm.columns:
+                        st.info("No progress update data found.")
+                        return
+                    def _pe(s):
+                        if pd.isna(s): return pd.NaT
+                        s2 = str(s).replace("-","to").replace("–","to")
+                        parts = s2.split("to")
+                        end = parts[-1].strip() if len(parts)>1 else parts[0].strip()
+                        return pd.to_datetime(end, errors="coerce", dayfirst=False)
+                    tutor_mm["Date Parsed"] = tutor_mm["Date Range"].apply(_pe)
+                    tutor_mm = tutor_mm.dropna(subset=["Date Parsed"]).sort_values("Date Parsed")
+                    tutor_mm[pu_col] = pd.to_numeric(tutor_mm[pu_col], errors="coerce")
+                    pu_avg = tutor_mm[pu_col].mean()
+                    st.metric("Avg % Progress Updates (all data)", fmt_pct_90(pu_avg))
+                    st.caption("Limited history for new tutors — showing all available data.")
+                _card_90("15. Progress Updates", _90s15)
+
+                # ── 16. Current SCI
+                def _90s16():
+                    sci = _safe_90(r1m,"current_sci")
+                    p_sci = _peer_avg_90(peers_90,"current_sci")
+                    d,dc = _delta_num_90(sci,p_sci,higher_is_better=True,label="vs peer avg")
+                    c1,c2=st.columns(2)
+                    c1.metric("Current SCI", fmt_num_90(sci,1), delta=d, delta_color=dc)
+                    c2.metric("Peer Avg (same tier)", fmt_num_90(p_sci,1))
+                    st.caption("Point-in-time value.")
+                _card_90("16. Current SCI", _90s16)
+
+                # ── 17. SCI Growth
+                def _90s17():
+                    tutor_skills = ar_skills_df[ar_skills_df["tutor_name"] == nr90_tutor].copy() if not ar_skills_df.empty else pd.DataFrame()
+                    if tutor_skills.empty:
+                        st.info("No new subjects added during review period.")
+                        return
+                    tutor_skills["created"] = pd.to_datetime(tutor_skills["created"], errors="coerce")
+                    tutor_skills = tutor_skills.sort_values("created")
+                    sci_gained = tutor_skills["subject_sci"].sum() if "subject_sci" in tutor_skills.columns else None
+                    c1,c2,c3=st.columns(3)
+                    c1.metric("Subjects Added", len(tutor_skills))
+                    c2.metric("SCI Points Gained", fmt_num_90(sci_gained,1) if sci_gained else "—")
+                    c3.metric("Current SCI", fmt_num_90(_safe_90(r1m,"current_sci"),1))
+                    display_skills = tutor_skills[["created","category","subject","subject_sci"]].copy()
+                    display_skills["created"] = display_skills["created"].dt.strftime("%Y-%m-%d")
+                    display_skills = display_skills.rename(columns={"created":"Date Added","category":"Category","subject":"Subject","subject_sci":"SCI Value"})
+                    st.dataframe(display_skills, use_container_width=True, hide_index=True)
+                _card_90("17. SCI Growth", _90s17)
+
+                # ── 18. Availability %
+                def _90s18():
+                    v1=_safe_90(r1m,"availability_pct"); v6=_safe_90(r6w,"availability_pct"); v8=_safe_90(r8w,"availability_pct")
+                    c1,c2,c3=st.columns(3)
+                    c1.metric("Last Month",fmt_pct_90(v1))
+                    c2.metric("Last 6 Wks",fmt_pct_90(v6))
+                    c3.metric("Last 8 Wks",fmt_pct_90(v8))
+                _card_90("18. Availability Percentage", _90s18)
+
+                # ── 19. Delivery %
+                def _90s19():
+                    v1=_safe_90(r1m,"delivery_pct"); v6=_safe_90(r6w,"delivery_pct"); v8=_safe_90(r8w,"delivery_pct")
+                    p1=_peer_avg_90(peers_90,"delivery_pct")
+                    d1,dc1=_delta_90(v1,p1,higher_is_better=True,label="vs peer avg")
+                    c1,c2,c3,c4=st.columns(4)
+                    c1.metric("Last Month",fmt_pct_90(v1),delta=d1,delta_color=dc1)
+                    c2.metric("Last 6 Wks",fmt_pct_90(v6))
+                    c3.metric("Last 8 Wks",fmt_pct_90(v8))
+                    c4.metric("Peer Avg (1M)",fmt_pct_90(p1))
+                _card_90("19. Delivery Percentage", _90s19)
+
+                # ── 20. Weeks at Target
+                def _90s20():
+                    v1=_safe_90(r1m,"weeks_at_target"); v6=_safe_90(r6w,"weeks_at_target"); v8=_safe_90(r8w,"weeks_at_target")
+                    p1=_peer_avg_90(peers_90,"weeks_at_target")
+                    d1,dc1=_delta_num_90(v1,p1,higher_is_better=True,label="vs peer avg")
+                    c1,c2,c3,c4=st.columns(4)
+                    c1.metric("Last Month",fmt_num_90(v1,0),delta=d1,delta_color=dc1)
+                    c2.metric("Last 6 Wks",fmt_num_90(v6,0))
+                    c3.metric("Last 8 Wks",fmt_num_90(v8,0))
+                    c4.metric("Peer Avg (1M)",fmt_num_90(p1,1))
+                _card_90("20. Weeks Meeting Delivery Target", _90s20)
 
     if page == "📋 Annual Reviews":
         st.markdown('<div class="main-title">📋 Annual Reviews</div>', unsafe_allow_html=True)
