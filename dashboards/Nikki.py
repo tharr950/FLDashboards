@@ -2353,7 +2353,7 @@ def render_app(config):
         try:
             _low_del_df = load_low_delivery_not_accepting("Nikki Pencak")
             if not _low_del_df.empty:
-                with st.expander(f"🚨 {len(_low_del_df)} tutor(s) — Accepting OFF + Low Delivery (next 3 wks)", expanded=True):
+                with st.expander(f"🚨 {len(_low_del_df)} tutor(s) — Accepting OFF + Low Delivery (next 3 wks)", expanded=False):
                     st.caption("These tutors have accepting new students turned off AND are projected below 80% of their delivery target over the next 3 weeks.")
                     _ld_display = _low_del_df.rename(columns={
                         "tutor": "Tutor",
@@ -3848,6 +3848,18 @@ def render_app(config):
                     "<div style='background:#ffd700; color:#5a4000; border-radius:8px; "
                     "padding:10px 16px; font-size:1rem; font-weight:700; margin-bottom:10px;'>"
                     "⭐ This tutor is currently <u>Featured</u></div>",
+                    unsafe_allow_html=True)
+        except Exception:
+            pass
+
+        # Low delivery + not accepting flag
+        try:
+            _ld_flag_df = load_low_delivery_not_accepting("Nikki Pencak")
+            if not _ld_flag_df.empty and profile_tutor in _ld_flag_df["tutor"].values:
+                st.markdown(
+                    "<div style='background:#ff000018; color:#c62828; border:1px solid #c62828; "
+                    "border-radius:8px; padding:10px 16px; font-size:0.95rem; font-weight:600; margin-bottom:10px;'>"
+                    "🚨 This tutor has <b>accepting new students turned OFF</b> and is projected <b>below 80% of their delivery target</b> over the next 3 weeks.</div>",
                     unsafe_allow_html=True)
         except Exception:
             pass
