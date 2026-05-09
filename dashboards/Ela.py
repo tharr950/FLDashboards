@@ -2445,6 +2445,32 @@ def render_app(config):
                         if pd.notna(_latest_e) and (_now_s2 - _latest_e).days > 90:
                             _snap2_se += 1
 
+        # ── Featured Tutors ──────────────────────────────────────────────
+        try:
+            _featured_df = load_featured_tutors()
+            if not _featured_df.empty:
+                _my_featured = _featured_df[_featured_df["faculty_leader"] == "Ela Cross"].copy()
+                _all_featured = _featured_df.copy()
+                with st.expander(f"⭐ Featured Tutors — Your Team: {len(_my_featured)} | All Teams: {len(_all_featured)}", expanded=False):
+                    if _my_featured.empty:
+                        st.info("No tutors on your team are currently featured.")
+                    else:
+                        _tier_counts = _my_featured.groupby("tutor_tier").size().reset_index(name="Your Team")
+                        _all_tier_counts = _all_featured.groupby("tutor_tier").size().reset_index(name="All Teams")
+                        _tier_summary = _tier_counts.merge(_all_tier_counts, on="tutor_tier", how="outer").fillna(0)
+                        _tier_summary[["Your Team","All Teams"]] = _tier_summary[["Your Team","All Teams"]].astype(int)
+                        _tier_summary = _tier_summary.rename(columns={"tutor_tier":"Tier"})
+                        c1, c2 = st.columns([1, 2])
+                        with c1:
+                            st.markdown("**By Tier**")
+                            st.dataframe(_tier_summary, use_container_width=True, hide_index=True)
+                        with c2:
+                            st.markdown("**Featured Tutors on Your Team**")
+                            _display_feat = _my_featured[["tutor","tutor_tier"]].rename(columns={"tutor":"Tutor","tutor_tier":"Tier"})
+                            st.dataframe(_display_feat, use_container_width=True, hide_index=True)
+        except Exception:
+            pass
+
         health_cols = st.columns(7)
         health_cols[0].metric("📦 Archivable",   _snap2_arch)
         health_cols[1].metric("⏳ Unsched Hrs",   f"{_snap2_unsched:.0f}")
@@ -2454,35 +2480,6 @@ def render_app(config):
         health_cols[5].metric("🕐 Stale Exams",   _snap2_se)
         health_cols[6].metric("📹 Video Rate",
                                f"{cur_video_pct:.0f}%" if cur_video_pct is not None else "—")
-
-        # ── Featured Tutors ──────────────────────────────────────────────
-        try:
-            _featured_df = load_featured_tutors()
-            if not _featured_df.empty:
-                _my_featured = _featured_df[_featured_df["faculty_leader"] == "Ela Cross"].copy()
-                _all_featured = _featured_df.copy()
-
-                with st.expander(f"⭐ Featured Tutors — Your Team: {len(_my_featured)} | All Teams: {len(_all_featured)}", expanded=True):
-                    if _my_featured.empty:
-                        st.info("No tutors on your team are currently featured.")
-                    else:
-                        # By tier summary
-                        _tier_counts = _my_featured.groupby("tutor_tier").size().reset_index(name="Your Team")
-                        _all_tier_counts = _all_featured.groupby("tutor_tier").size().reset_index(name="All Teams")
-                        _tier_summary = _tier_counts.merge(_all_tier_counts, on="tutor_tier", how="outer").fillna(0)
-                        _tier_summary[["Your Team","All Teams"]] = _tier_summary[["Your Team","All Teams"]].astype(int)
-                        _tier_summary = _tier_summary.rename(columns={"tutor_tier":"Tier"})
-
-                        c1, c2 = st.columns([1, 2])
-                        with c1:
-                            st.markdown("**By Tier**")
-                            st.dataframe(_tier_summary, use_container_width=True, hide_index=True)
-                        with c2:
-                            st.markdown("**Featured Tutors on Your Team**")
-                            _display_feat = _my_featured[["tutor","tutor_tier"]].rename(columns={"tutor":"Tutor","tutor_tier":"Tier"})
-                            st.dataframe(_display_feat, use_container_width=True, hide_index=True)
-        except Exception as _fe:
-            pass
 
         st.divider()
 
