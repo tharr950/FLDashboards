@@ -640,6 +640,39 @@ def load_ar_kpi(start, end):
     return df
 
 @st.cache_data(ttl=3600)
+def load_low_delivery_not_accepting(faculty_leader: str):
+    """Tutors with accepting off and low delivery in next 3 weeks."""
+    conn = get_redshift_connection()
+    query = f"""
+        SELECT u.first_name||' '||u.last_name AS tutor,
+            e.delivery_target,
+            ROUND(AVG(tc.instruction_actual)::numeric, 1) AS avg_delivery_next_3wks,
+            ROUND(AVG(tc.instruction_actual)::numeric / NULLIF(e.delivery_target,0) * 100, 1) AS delivery_pct
+        FROM dw.employees e
+        JOIN dw.users u ON e.user_id = u.id
+        JOIN dw.team_members ON e.id = team_members.member_id
+        JOIN dw.teams ON team_members.team_id = teams.id
+        JOIN dw.employees managers ON teams.manager_id = managers.id
+        JOIN dw.users fl_users ON managers.user_id = fl_users.id
+        JOIN rp_bi.tutor_capacity tc ON tc.employee_id = e.id
+        WHERE e.end_date IS NULL
+          AND e.type = 'Tutor'
+          AND u.title = 'Tutor'
+          AND e.accept_new_students = FALSE
+          AND fl_users.first_name||' '||fl_users.last_name = '{faculty_leader}'
+          AND tc.first_day_of_week_sunday_start >= CURRENT_DATE
+          AND tc.first_day_of_week_sunday_start <= CURRENT_DATE + 21
+        GROUP BY u.first_name, u.last_name, e.delivery_target
+        HAVING AVG(tc.instruction_actual) < e.delivery_target * 0.80
+        ORDER BY delivery_pct
+    """
+    try:
+        df = pd.read_sql(query, conn)
+    finally:
+        conn.close()
+    return df
+
+@st.cache_data(ttl=3600)
 def load_featured_tutors():
     """Load currently featured tutors from Redshift."""
     conn = get_redshift_connection()
@@ -2316,6 +2349,23 @@ def render_app(config):
                 </div>""", unsafe_allow_html=True)
 
         # ── TEAM SNAPSHOT ──
+        # ── Low Delivery + Not Accepting Alert ───────────────────────────
+        try:
+            _low_del_df = load_low_delivery_not_accepting("Katherine Marino")
+            if not _low_del_df.empty:
+                with st.expander(f"🚨 {len(_low_del_df)} tutor(s) — Accepting OFF + Low Delivery (next 3 wks)", expanded=True):
+                    st.caption("These tutors have accepting new students turned off AND are projected below 80% of their delivery target over the next 3 weeks.")
+                    _ld_display = _low_del_df.rename(columns={
+                        "tutor": "Tutor",
+                        "delivery_target": "Target (hrs)",
+                        "avg_delivery_next_3wks": "Avg Delivery (next 3 wks)",
+                        "delivery_pct": "% of Target"
+                    })
+                    _ld_display["% of Target"] = _ld_display["% of Target"].apply(lambda x: f"{x:.1f}%")
+                    st.dataframe(_ld_display, use_container_width=True, hide_index=True)
+        except Exception:
+            pass
+
         # ── Featured Tutors ──────────────────────────────────────────────
         try:
             _featured_df = load_featured_tutors()
