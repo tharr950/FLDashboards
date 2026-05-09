@@ -640,6 +640,35 @@ def load_ar_kpi(start, end):
     return df
 
 @st.cache_data(ttl=3600)
+def load_featured_tutors():
+    """Load currently featured tutors from Redshift."""
+    conn = get_redshift_connection()
+    query = """
+        SELECT tutors.first_name||' '||tutors.last_name AS tutor,
+            manager_users.first_name||' '||manager_users.last_name AS faculty_leader,
+            tiers.name AS tutor_tier,
+            e.delivery_target
+        FROM dw.employees e
+        JOIN dw.users tutors ON e.user_id = tutors.id
+        JOIN dw.team_members ON e.id = team_members.member_id
+        JOIN dw.teams ON team_members.team_id = teams.id
+        JOIN dw.employees managers ON teams.manager_id = managers.id
+        JOIN dw.users manager_users ON managers.user_id = manager_users.id
+        JOIN dw.tiers ON e.tier_id = tiers.id
+        WHERE e.end_date IS NULL
+          AND e.delivery_target > 0
+          AND e.type = 'Tutor'
+          AND tutors.title = 'Tutor'
+          AND e.featured IS TRUE
+        ORDER BY faculty_leader, tutor_tier, tutor
+    """
+    try:
+        df = pd.read_sql(query, conn)
+    finally:
+        conn.close()
+    return df
+
+@st.cache_data(ttl=3600)
 def load_rematch_tracker():
     """Load rematch tracker from Excel file."""
     file = "rematch trcker.xlsx"
@@ -2426,6 +2455,35 @@ def render_app(config):
         health_cols[6].metric("📹 Video Rate",
                                f"{cur_video_pct:.0f}%" if cur_video_pct is not None else "—")
 
+        # ── Featured Tutors ──────────────────────────────────────────────
+        try:
+            _featured_df = load_featured_tutors()
+            if not _featured_df.empty:
+                _my_featured = _featured_df[_featured_df["faculty_leader"] == "Katherine Marino"].copy()
+                _all_featured = _featured_df.copy()
+
+                with st.expander(f"⭐ Featured Tutors — Your Team: {len(_my_featured)} | All Teams: {len(_all_featured)}", expanded=True):
+                    if _my_featured.empty:
+                        st.info("No tutors on your team are currently featured.")
+                    else:
+                        # By tier summary
+                        _tier_counts = _my_featured.groupby("tutor_tier").size().reset_index(name="Your Team")
+                        _all_tier_counts = _all_featured.groupby("tutor_tier").size().reset_index(name="All Teams")
+                        _tier_summary = _tier_counts.merge(_all_tier_counts, on="tutor_tier", how="outer").fillna(0)
+                        _tier_summary[["Your Team","All Teams"]] = _tier_summary[["Your Team","All Teams"]].astype(int)
+                        _tier_summary = _tier_summary.rename(columns={"tutor_tier":"Tier"})
+
+                        c1, c2 = st.columns([1, 2])
+                        with c1:
+                            st.markdown("**By Tier**")
+                            st.dataframe(_tier_summary, use_container_width=True, hide_index=True)
+                        with c2:
+                            st.markdown("**Featured Tutors on Your Team**")
+                            _display_feat = _my_featured[["tutor","tutor_tier"]].rename(columns={"tutor":"Tutor","tutor_tier":"Tier"})
+                            st.dataframe(_display_feat, use_container_width=True, hide_index=True)
+        except Exception as _fe:
+            pass
+
         st.divider()
 
         # ── Week-over-week movement ──
@@ -3767,6 +3825,18 @@ def render_app(config):
                     ])
                     st.markdown(f"<div style='margin-bottom:8px;'>{pills_html}</div>",
                                 unsafe_allow_html=True)
+        except Exception:
+            pass
+
+        # Featured badge
+        try:
+            _feat_df = load_featured_tutors()
+            if not _feat_df.empty and profile_tutor in _feat_df["tutor"].values:
+                st.markdown(
+                    "<span style='background:#ffd70033; color:#b8860b; border:1px solid #b8860b; "
+                    "border-radius:12px; padding:3px 12px; font-size:0.85rem; font-weight:700;'>"
+                    "⭐ Currently Featured</span>",
+                    unsafe_allow_html=True)
         except Exception:
             pass
 
