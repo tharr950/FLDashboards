@@ -3793,6 +3793,18 @@ def render_app(config):
 
         st.markdown(f"## {profile_tutor}")
 
+        # Featured badge
+        try:
+            _feat_df = load_featured_tutors()
+            if not _feat_df.empty and profile_tutor in _feat_df["tutor"].values:
+                st.markdown(
+                    "<div style='background:#ffd700; color:#5a4000; border-radius:8px; "
+                    "padding:10px 16px; font-size:1rem; font-weight:700; margin-bottom:10px;'>"
+                    "⭐ This tutor is currently <u>Featured</u></div>",
+                    unsafe_allow_html=True)
+        except Exception:
+            pass
+
         # Brand permissions pills
         try:
             bp_df = load_brand_permissions()
@@ -3825,18 +3837,6 @@ def render_app(config):
                     ])
                     st.markdown(f"<div style='margin-bottom:8px;'>{pills_html}</div>",
                                 unsafe_allow_html=True)
-        except Exception:
-            pass
-
-        # Featured badge
-        try:
-            _feat_df = load_featured_tutors()
-            if not _feat_df.empty and profile_tutor in _feat_df["tutor"].values:
-                st.markdown(
-                    "<span style='background:#ffd70033; color:#b8860b; border:1px solid #b8860b; "
-                    "border-radius:12px; padding:3px 12px; font-size:0.85rem; font-weight:700;'>"
-                    "⭐ Currently Featured</span>",
-                    unsafe_allow_html=True)
         except Exception:
             pass
 
