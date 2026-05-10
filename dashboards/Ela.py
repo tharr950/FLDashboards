@@ -673,6 +673,32 @@ def load_low_delivery_not_accepting(faculty_leader: str):
     return df
 
 @st.cache_data(ttl=3600)
+def load_study_areas():
+    """Load goal scores and starting scores from orbit_stitch.study_areas."""
+    conn = get_redshift_connection()
+    query = """
+        SELECT
+            sa.student_id,
+            sa.subject_id,
+            sa.goal_score,
+            sa.starting_score,
+            s.name AS subject_name
+        FROM orbit_stitch.study_areas sa
+        LEFT JOIN dw.subjects s ON sa.subject_id = s.id
+        WHERE sa._sdc_deleted_at IS NULL
+          AND (sa.goal_score IS NOT NULL OR sa.starting_score IS NOT NULL)
+    """
+    try:
+        df = pd.read_sql(query, conn)
+        df["goal_score"]     = pd.to_numeric(df["goal_score"],     errors="coerce")
+        df["starting_score"] = pd.to_numeric(df["starting_score"], errors="coerce")
+        return df
+    except Exception as e:
+        return pd.DataFrame()
+    finally:
+        conn.close()
+
+@st.cache_data(ttl=3600)
 def load_featured_tutors():
     """Load currently featured tutors from Redshift."""
     conn = get_redshift_connection()
@@ -5885,6 +5911,35 @@ def render_app(config):
                 st.info("No records match the current filters.")
             else:
                 detail_e = view_exam_df.copy()
+
+                # Join goal/starting scores from study_areas
+                try:
+                    _sa_df = load_study_areas()
+                    if not _sa_df.empty and "student_id" in detail_e.columns:
+                        # For each student, get the most relevant study area
+                        # (SAT subject_id=51, Digital SAT=315, ACT=43, PSAT=316)
+                        TEST_SUBJECT_IDS = {43, 51, 315, 316, 342, 195, 50, 356}
+                        _sa_relevant = _sa_df[_sa_df["subject_id"].isin(TEST_SUBJECT_IDS)].copy()
+                        # Take one row per student (prefer non-null goal_score)
+                        _sa_best = (_sa_relevant
+                            .sort_values("goal_score", ascending=False, na_position="last")
+                            .groupby("student_id").first().reset_index()
+                            [["student_id","goal_score","starting_score"]])
+                        detail_e = detail_e.merge(_sa_best, on="student_id", how="left")
+                        # Flag if student has scored at or above goal
+                        def _goal_met(row):
+                            if pd.isna(row.get("goal_score")) or pd.isna(row.get("score")):
+                                return None
+                            return "✅ At/Above Goal" if float(row["score"]) >= float(row["goal_score"]) else "❌ Below Goal"
+                        detail_e["goal_status"] = detail_e.apply(_goal_met, axis=1)
+                    else:
+                        detail_e["goal_score"] = None
+                        detail_e["starting_score"] = None
+                        detail_e["goal_status"] = None
+                except Exception:
+                    detail_e["goal_score"] = None
+                    detail_e["starting_score"] = None
+                    detail_e["goal_status"] = None
                 for dc in ["first_session_day","most_recent_session","exam_date"]:
                     if dc in detail_e.columns:
                         detail_e[dc] = detail_e[dc].dt.strftime("%Y-%m-%d")
@@ -5904,6 +5959,7 @@ def render_app(config):
                     "attended_velocity","hours_remaining",
                     "first_session_day","most_recent_session","exam_date",
                     "subject","exam_code","exam_status","score",
+                    "starting_score","goal_score","goal_status",
                     "act_english","act_math","act_reading","act_science",
                     "sat_math","sat_rw","invalidity_reason"
                 ]
@@ -5928,6 +5984,9 @@ def render_app(config):
                     "act_science":              "ACT Science",
                     "sat_math":                 "SAT Math",
                     "sat_rw":                   "SAT R&W",
+                    "starting_score":           "Starting Score",
+                    "goal_score":               "Goal Score",
+                    "goal_status":              "Goal Status",
                     "invalidity_reason":        "Why Invalid",
                 }).drop_duplicates().sort_values(["Tutor","Student","Exam Date"])
 
