@@ -4334,6 +4334,17 @@ def render_app(config):
                        delta_color="inverse" if stale_exam_count > 0 else "off")
             ec4.metric("Avg Hrs / Exam", f"{hrs_per_exam:.1f}" if hrs_per_exam else "N/A")
             ex_rows = []
+            # Load study areas for goal/starting scores
+            try:
+                _sa_p = load_study_areas()
+                _TP_IDS = {43, 51, 315, 316, 342, 195, 50, 356}
+                if not _sa_p.empty:
+                    _sa_p = (_sa_p[_sa_p["subject_id"].isin(_TP_IDS)]
+                        .sort_values("goal_score", ascending=False, na_position="last")
+                        .groupby("student_id").first().reset_index()
+                        [["student_id","goal_score","starting_score"]])
+            except Exception:
+                _sa_p = pd.DataFrame()
             for sid, sdf in p_exam.groupby("student_id"):
                 sname       = sdf["student_name"].iloc[0] if "student_name" in sdf.columns else str(sid)
                 hrs         = sdf["attended_test_prep_hours"].iloc[0]
@@ -4347,11 +4358,20 @@ def render_app(config):
                 status      = "✅ Current" if days_ago is not None and days_ago <= 90 \
                               else ("⚠️ Stale" if days_ago is not None else
                               ("❌ None (6+ hrs)" if (pd.notna(hrs) and hrs >= 6) else "—"))
+                _sa_r        = _sa_p[_sa_p["student_id"] == sid].iloc[0] \
+                               if not _sa_p.empty and sid in _sa_p["student_id"].values else None
+                goal_s       = float(_sa_r["goal_score"])     if _sa_r is not None and pd.notna(_sa_r["goal_score"])     else None
+                start_s      = float(_sa_r["starting_score"]) if _sa_r is not None and pd.notna(_sa_r["starting_score"]) else None
+                goal_st      = ("✅ At/Above Goal" if pd.notna(best_score) and goal_s is not None and float(best_score) >= goal_s
+                                else ("❌ Below Goal" if goal_s is not None and pd.notna(best_score) else "—"))
                 ex_rows.append({
                     "Student":         sname,
                     "Hours Delivered": round(float(hrs), 1) if pd.notna(hrs) else "—",
                     "Valid Exams":     n_valid,
+                    "Starting Score":  int(start_s) if start_s is not None else "—",
+                    "Goal Score":      int(goal_s)  if goal_s  is not None else "—",
                     "Best Score":      int(best_score) if pd.notna(best_score) else "—",
+                    "Goal Status":     goal_st,
                     "Days Since Exam": days_ago if days_ago is not None else "—",
                     "Status":          status,
                 })
