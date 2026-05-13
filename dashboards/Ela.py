@@ -1358,12 +1358,10 @@ def load_repurchases():
         return pd.read_excel(file, sheet_name="Sheet 1")
     return pd.DataFrame()
 
-@st.cache_data(ttl=60)
-
 # Set FORCE_CACHE_MODE = True to test GitHub fallback without Redshift failing
 FORCE_CACHE_MODE = False
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=60)
 def _gh_read_cache(path):
     """Load a cached CSV from GitHub data/cache/."""
     try:
