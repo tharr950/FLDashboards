@@ -1401,8 +1401,18 @@ def load_master_tutor():
         ORDER BY tutor_name
     """
     if FORCE_CACHE_MODE:
-        conn.close()
-        raise Exception("FORCE_CACHE_MODE enabled")
+        try: conn.close()
+        except: pass
+        df = _gh_read_cache("data/cache/master_tutor.csv")
+        if not df.empty:
+            df["Full Name"]      = df["tutor_name"]
+            df["Faculty Leader"] = df["faculty_leader"]
+            df["Tier"]           = df["tier"]
+            cached_at = df["_cached_at"].iloc[0] if "_cached_at" in df.columns else "unknown"
+            st.warning(f"⚠️ Cache mode ON — using cached tutor roster from {cached_at}.")
+            return df
+        st.error("Cache mode ON but no cached tutor roster found.")
+        return pd.DataFrame()
     try:
         df = pd.read_sql(query, conn)
         df["Full Name"]       = df["tutor_name"]
@@ -1410,7 +1420,6 @@ def load_master_tutor():
         df["Tier"]            = df["tier"]
         return df
     except Exception as e:
-        # Fallback to GitHub cache
         df = _gh_read_cache("data/cache/master_tutor.csv")
         if not df.empty:
             df["Full Name"]      = df["tutor_name"]
@@ -1422,7 +1431,8 @@ def load_master_tutor():
         st.error(f"Error loading tutor roster and no cache available: {e}")
         return pd.DataFrame()
     finally:
-        conn.close()
+        try: conn.close()
+        except: pass
     st.error(f"{file} not found")
     return pd.DataFrame()
 
