@@ -181,6 +181,12 @@ def load_archivable_unscheduled():
         AND dw.team_members.member_type = 'Employee'
         group by 1,2,3,4,5,6,7,11,12 order by unscheduled_hours
     """
+    if FORCE_CACHE_MODE:
+        try: conn.close()
+        except: pass
+        df = _gh_read_cache("data/cache/archivable_unscheduled.csv")
+        cached_at = df["_cached_at"].iloc[0] if not df.empty and "_cached_at" in df.columns else "unknown"
+        return df, cached_at
     try:
         df = pd.read_sql(query, conn)
         conn.close()
@@ -309,6 +315,12 @@ def load_grades_data():
         HAVING lds1.session_count > 1
         ORDER BY 1,4
     """
+    if FORCE_CACHE_MODE:
+        try: conn.close()
+        except: pass
+        df = _gh_read_cache("data/cache/grades_data.csv")
+        cached_at = df["_cached_at"].iloc[0] if not df.empty and "_cached_at" in df.columns else "unknown"
+        return df, cached_at
     try:
         df = pd.read_sql(query, conn)
         conn.close()
@@ -1348,6 +1360,9 @@ def load_repurchases():
 
 @st.cache_data(ttl=60)
 @st.cache_data(ttl=3600)
+# Set FORCE_CACHE_MODE = True to test GitHub fallback without Redshift failing
+FORCE_CACHE_MODE = False
+
 def _gh_read_cache(path):
     """Load a cached CSV from GitHub data/cache/."""
     try:
@@ -1386,6 +1401,9 @@ def load_master_tutor():
         AND tutor_users.title = 'Tutor'
         ORDER BY tutor_name
     """
+    if FORCE_CACHE_MODE:
+        conn.close()
+        raise Exception("FORCE_CACHE_MODE enabled")
     try:
         df = pd.read_sql(query, conn)
         df["Full Name"]       = df["tutor_name"]

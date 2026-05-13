@@ -288,23 +288,46 @@ QUERIES = {
 
 def main():
     log("sync_redshift_cache.py — starting")
-    try:
-        conn = get_conn()
-        log("Connected to Redshift ✅")
-    except Exception as e:
-        log(f"❌ Could not connect to Redshift: {e}")
-        sys.exit(1)
 
-    for name, (path, query) in QUERIES.items():
+    MAX_ATTEMPTS = 3
+    for attempt in range(1, MAX_ATTEMPTS + 1):
         try:
-            log(f"Fetching {name}...")
-            df = pd.read_sql(query, conn)
-            push_to_github(df, path, name)
+            conn = get_conn()
+            log(f"Connected to Redshift ✅ (attempt {attempt})")
+            break
         except Exception as e:
-            log(f"❌ Error on {name}: {e}")
+            log(f"❌ Connection attempt {attempt}/{MAX_ATTEMPTS} failed: {e}")
+            if attempt < MAX_ATTEMPTS:
+                import time; time.sleep(60 * attempt)
+            else:
+                log("❌ All connection attempts failed — aborting.")
+                sys.exit(1)
+
+    failed = []
+    for name, (cache_path, query) in QUERIES.items():
+        success = False
+        for attempt in range(1, MAX_ATTEMPTS + 1):
+            try:
+                log(f"Fetching {name} (attempt {attempt})...")
+                df = pd.read_sql(query, conn)
+                push_to_github(df, cache_path, name)
+                success = True
+                break
+            except Exception as e:
+                log(f"❌ {name} attempt {attempt}/{MAX_ATTEMPTS} failed: {e}")
+                if attempt < MAX_ATTEMPTS:
+                    import time; time.sleep(30 * attempt)
+        if not success:
+            failed.append(name)
 
     conn.close()
-    log("Done ✅")
+
+    if failed:
+        log(f"⚠️ The following tables failed to cache: {', '.join(failed)}")
+        log("⚠️ Manual run required: python3 dashboards/sync_redshift_cache.py")
+        sys.exit(1)
+    else:
+        log("Done ✅ All tables cached successfully.")
 
 if __name__ == "__main__":
     main()
