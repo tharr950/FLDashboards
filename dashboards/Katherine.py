@@ -185,8 +185,12 @@ def load_archivable_unscheduled():
         try: conn.close()
         except: pass
         df = _gh_read_cache("data/cache/archivable_unscheduled.csv")
-        cached_at = df["_cached_at"].iloc[0] if not df.empty and "_cached_at" in df.columns else "unknown"
-        return df, cached_at
+        if not df.empty:
+            cached_at = df["_cached_at"].iloc[0] if "_cached_at" in df.columns else "unknown"
+            st.warning(f"⚠️ Cache mode ON — using cached archivable data from {cached_at}.")
+            return df, cached_at
+        st.error("Cache mode ON but no cached archivable data found.")
+        return pd.DataFrame(), "unavailable"
     try:
         df = pd.read_sql(query, conn)
         conn.close()
@@ -319,8 +323,12 @@ def load_grades_data():
         try: conn.close()
         except: pass
         df = _gh_read_cache("data/cache/grades_data.csv")
-        cached_at = df["_cached_at"].iloc[0] if not df.empty and "_cached_at" in df.columns else "unknown"
-        return df, cached_at
+        if not df.empty:
+            cached_at = df["_cached_at"].iloc[0] if "_cached_at" in df.columns else "unknown"
+            st.warning(f"⚠️ Cache mode ON — using cached grades data from {cached_at}.")
+            return df, cached_at
+        st.error("Cache mode ON but no cached grades data found.")
+        return pd.DataFrame(), "unavailable"
     try:
         df = pd.read_sql(query, conn)
         conn.close()
@@ -376,6 +384,16 @@ def load_availability_compliance():
         HAVING COUNT(DISTINCT ttz.tutor_starts_at::DATE) > 6
         ORDER BY ttz.team, ttz.tutor
     """.format(this_sunday=this_sunday)
+    if FORCE_CACHE_MODE:
+        try: conn.close()
+        except: pass
+        df = _gh_read_cache("data/cache/availability_compliance.csv")
+        if not df.empty:
+            cached_at = df["_cached_at"].iloc[0] if "_cached_at" in df.columns else "unknown"
+            st.warning(f"⚠️ Cache mode ON — using cached availability data from {cached_at}.")
+            return df
+        st.error("Cache mode ON but no cached availability data found.")
+        return pd.DataFrame()
     try:
         df = pd.read_sql(query, conn)
         conn.close()
@@ -759,12 +777,15 @@ def load_featured_tutors():
           AND e.featured IS TRUE
         ORDER BY faculty_leader, tutor_tier, tutor
     """
+    if FORCE_CACHE_MODE:
+        try: conn.close()
+        except: pass
+        return _gh_read_cache("data/cache/featured_tutors.csv")
     try:
         df = pd.read_sql(query, conn)
         return df
     except Exception:
-        df = _gh_read_cache("data/cache/featured_tutors.csv")
-        return df
+        return _gh_read_cache("data/cache/featured_tutors.csv")
     finally:
         try: conn.close()
         except: pass
