@@ -1358,8 +1358,8 @@ def load_repurchases():
         return pd.read_excel(file, sheet_name="Sheet 1")
     return pd.DataFrame()
 
-# Set FORCE_CACHE_MODE = True to test GitHub fallback without Redshift failing
-FORCE_CACHE_MODE = False
+# FORCE_CACHE_MODE is set via sidebar toggle at runtime
+FORCE_CACHE_MODE = False  # overridden below after sidebar renders
 
 @st.cache_data(ttl=60)
 def _gh_read_cache(path):
@@ -2158,6 +2158,15 @@ def render_app(config):
         "⭐ NPS Scores (Tableau)",
     ]
     _default_index = _page_options.index(_goto) if _goto in _page_options else 0
+    with st.sidebar.expander("⚙️ Admin", expanded=False):
+        import sys as _sys
+        _mod = _sys.modules[__name__]
+        _force = st.checkbox("🔴 Use cached data (fallback mode)", value=False,
+                             help="Forces dashboard to load from GitHub cache instead of live Redshift. Use when DB is down.")
+        _mod.FORCE_CACHE_MODE = _force
+        if _force:
+            st.warning("⚠️ Fallback mode ON — using cached data.")
+
     page = st.sidebar.radio("\U0001f4c2 Navigation", _page_options, index=_default_index)
 
     faculty_leader_name = "Annelies de Groot"
