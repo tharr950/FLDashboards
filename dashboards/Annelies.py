@@ -183,10 +183,19 @@ def load_archivable_unscheduled():
     """
     try:
         df = pd.read_sql(query, conn)
-    finally:
         conn.close()
-    fetched_at = pd.Timestamp.now().strftime("%B %d, %Y at %I:%M %p")
-    return df, fetched_at
+        fetched_at = pd.Timestamp.now().strftime("%B %d, %Y at %I:%M %p")
+        return df, fetched_at
+    except Exception as e:
+        try: conn.close()
+        except: pass
+        df = _gh_read_cache("data/cache/archivable_unscheduled.csv")
+        if not df.empty:
+            cached_at = df["_cached_at"].iloc[0] if "_cached_at" in df.columns else "unknown"
+            st.warning(f"⚠️ Redshift unavailable — using cached archivable/unscheduled data from {cached_at}.")
+            return df, cached_at
+        st.error(f"Archivable data unavailable: {e}")
+        return pd.DataFrame(), "unavailable"
 
 
 @st.cache_data(ttl=3600)
@@ -302,10 +311,19 @@ def load_grades_data():
     """
     try:
         df = pd.read_sql(query, conn)
-    finally:
         conn.close()
-    fetched_at = pd.Timestamp.now().strftime("%B %d, %Y at %I:%M %p")
-    return df, fetched_at
+        fetched_at = pd.Timestamp.now().strftime("%B %d, %Y at %I:%M %p")
+        return df, fetched_at
+    except Exception as e:
+        try: conn.close()
+        except: pass
+        df = _gh_read_cache("data/cache/grades_data.csv")
+        if not df.empty:
+            cached_at = df["_cached_at"].iloc[0] if "_cached_at" in df.columns else "unknown"
+            st.warning(f"⚠️ Redshift unavailable — using cached grades data from {cached_at}.")
+            return df, cached_at
+        st.error(f"Grades data unavailable: {e}")
+        return pd.DataFrame(), "unavailable"
 
 
 @st.cache_data(ttl=3600)
@@ -348,9 +366,17 @@ def load_availability_compliance():
     """.format(this_sunday=this_sunday)
     try:
         df = pd.read_sql(query, conn)
-    finally:
         conn.close()
-    return df
+        return df
+    except Exception as e:
+        try: conn.close()
+        except: pass
+        df = _gh_read_cache("data/cache/availability_compliance.csv")
+        if not df.empty:
+            cached_at = df["_cached_at"].iloc[0] if "_cached_at" in df.columns else "unknown"
+            st.warning(f"⚠️ Redshift unavailable — using cached availability data from {cached_at}.")
+            return df
+        return pd.DataFrame()
 
 
 def load_nps_scores(start_date: str, end_date: str, team_name: str):
@@ -723,9 +749,13 @@ def load_featured_tutors():
     """
     try:
         df = pd.read_sql(query, conn)
+        return df
+    except Exception:
+        df = _gh_read_cache("data/cache/featured_tutors.csv")
+        return df
     finally:
-        conn.close()
-    return df
+        try: conn.close()
+        except: pass
 
 @st.cache_data(ttl=3600)
 def load_rematch_tracker():
@@ -1318,6 +1348,20 @@ def load_repurchases():
 
 @st.cache_data(ttl=60)
 @st.cache_data(ttl=3600)
+def _gh_read_cache(path):
+    """Load a cached CSV from GitHub data/cache/."""
+    try:
+        github_repo  = st.secrets["github"]["repo"]
+        github_token = st.secrets["github"]["token"]
+        ts   = int(pd.Timestamp.now().timestamp())
+        url  = f"https://raw.githubusercontent.com/{github_repo}/main/{path}?cb={ts}"
+        resp = _requests.get(url, headers={"Authorization": f"token {github_token}"}, timeout=15)
+        if resp.status_code == 200 and resp.text.strip():
+            return pd.read_csv(io.StringIO(resp.text))
+    except Exception:
+        pass
+    return pd.DataFrame()
+
 def load_master_tutor():
     """Load tutor roster live from Redshift."""
     conn = get_redshift_connection()
@@ -1344,13 +1388,21 @@ def load_master_tutor():
     """
     try:
         df = pd.read_sql(query, conn)
-        # Alias columns to match existing dashboard references
         df["Full Name"]       = df["tutor_name"]
         df["Faculty Leader"]  = df["faculty_leader"]
         df["Tier"]            = df["tier"]
         return df
     except Exception as e:
-        st.error(f"Error loading tutor roster: {e}")
+        # Fallback to GitHub cache
+        df = _gh_read_cache("data/cache/master_tutor.csv")
+        if not df.empty:
+            df["Full Name"]      = df["tutor_name"]
+            df["Faculty Leader"] = df["faculty_leader"]
+            df["Tier"]           = df["tier"]
+            cached_at = df["_cached_at"].iloc[0] if "_cached_at" in df.columns else "unknown"
+            st.warning(f"⚠️ Redshift unavailable — using cached tutor roster from {cached_at}.")
+            return df
+        st.error(f"Error loading tutor roster and no cache available: {e}")
         return pd.DataFrame()
     finally:
         conn.close()
