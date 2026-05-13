@@ -2192,11 +2192,17 @@ def render_app(config):
     with st.sidebar.expander("⚙️ Admin", expanded=False):
         import sys as _sys
         _mod = _sys.modules[__name__]
-        _force = st.checkbox("🔴 Use cached data (fallback mode)", value=False,
+        _prev_force = st.session_state.get("_cache_mode_prev", False)
+        _force = st.checkbox("🔴 Use cached data (fallback mode)", value=_prev_force,
                              help="Forces dashboard to load from GitHub cache instead of live Redshift. Use when DB is down.")
+        # If toggle changed, clear all cached data so functions re-run with new mode
+        if _force != _prev_force:
+            st.cache_data.clear()
+            st.session_state["_cache_mode_prev"] = _force
+            st.rerun()
         _mod.FORCE_CACHE_MODE = _force
         if _force:
-            st.warning("⚠️ Fallback mode ON — using cached data.")
+            st.warning("⚠️ Fallback mode ON — ALL data loading from GitHub cache.")
 
     page = st.sidebar.radio("\U0001f4c2 Navigation", _page_options, index=_default_index)
 
