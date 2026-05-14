@@ -8700,7 +8700,9 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
         try:
             ar_skills_df = load_ar_skills()
         except Exception as e:
-            ar_skills_df = pd.DataFrame()
+            ar_skills_df = _gh_read_cache("data/cache/ar_skills.csv")
+            if not ar_skills_df.empty:
+                st.warning("⚠️ Redshift unavailable — using cached skills data.")
 
         # Load video snapshots for AR cards 13 & 14
         try:

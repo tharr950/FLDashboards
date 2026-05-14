@@ -420,6 +420,26 @@ QUERIES = {
         ORDER BY faculty_leader, delivery_pct
         """
     ),
+    "ar_skills": (
+        "data/cache/ar_skills.csv",
+        """
+        SELECT dw.employees.id AS emp_id,
+            dw.users.first_name||' '||dw.users.last_name AS tutor_name,
+            dw.categories.name AS category,
+            dw.subjects.name AS subject,
+            dw.skills.created_at AS created,
+            dw.subjects.difficulty AS subject_sci
+        FROM dw.skills
+        JOIN dw.employees ON employees.id = skills.tutor_id
+        JOIN dw.users ON dw.employees.user_id = dw.users.id
+        JOIN dw.subjects ON skills.subject_id = subjects.id
+        JOIN dw.categories ON subjects.category_id = categories.id
+        WHERE dw.employees.end_date IS NULL
+          AND dw.employees.delivery_target > 0
+          AND dw.skills.created_at >= '2025-01-01'
+        ORDER BY tutor_name, created
+        """
+    ),
     "featured_tutors": (
         "data/cache/featured_tutors.csv",
         """
