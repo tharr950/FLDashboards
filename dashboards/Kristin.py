@@ -445,10 +445,32 @@ def load_nps_scores(start_date: str, end_date: str, team_name: str):
           AND teams.name = '{team_name}'
         ORDER BY nps_histories.responded_at DESC
     """
+    if FORCE_CACHE_MODE:
+        try: conn.close()
+        except: pass
+        df = _gh_read_cache("data/cache/ar_kpi.csv")
+        if not df.empty:
+            # Filter by date range using hire_date or just return all
+            cached_at = df["_cached_at"].iloc[0] if "_cached_at" in df.columns else "unknown"
+            st.warning(f"⚠️ Cache mode ON — using cached KPI data from {cached_at}.")
+            return df
+        st.error("Cache mode ON but no cached AR KPI data found.")
+        return pd.DataFrame()
     try:
         df = pd.read_sql(query, conn)
+        return df
+    except Exception as e:
+        try: conn.close()
+        except: pass
+        df = _gh_read_cache("data/cache/ar_kpi.csv")
+        if not df.empty:
+            cached_at = df["_cached_at"].iloc[0] if "_cached_at" in df.columns else "unknown"
+            st.warning(f"⚠️ Redshift unavailable — using cached KPI data from {cached_at}.")
+            return df
+        raise
     finally:
-        conn.close()
+        try: conn.close()
+        except: pass
     return df
 
 def load_progress_updates(as_of_date: str, last_session_from: str, team_name: str):
@@ -488,10 +510,32 @@ def load_progress_updates(as_of_date: str, last_session_from: str, team_name: st
         HAVING SUM(sessions.duration)/60.0 >= 6
            AND MAX(sessions.starts_at) >= '{last_session_from}'
     """
+    if FORCE_CACHE_MODE:
+        try: conn.close()
+        except: pass
+        df = _gh_read_cache("data/cache/ar_kpi.csv")
+        if not df.empty:
+            # Filter by date range using hire_date or just return all
+            cached_at = df["_cached_at"].iloc[0] if "_cached_at" in df.columns else "unknown"
+            st.warning(f"⚠️ Cache mode ON — using cached KPI data from {cached_at}.")
+            return df
+        st.error("Cache mode ON but no cached AR KPI data found.")
+        return pd.DataFrame()
     try:
         df = pd.read_sql(query, conn)
+        return df
+    except Exception as e:
+        try: conn.close()
+        except: pass
+        df = _gh_read_cache("data/cache/ar_kpi.csv")
+        if not df.empty:
+            cached_at = df["_cached_at"].iloc[0] if "_cached_at" in df.columns else "unknown"
+            st.warning(f"⚠️ Redshift unavailable — using cached KPI data from {cached_at}.")
+            return df
+        raise
     finally:
-        conn.close()
+        try: conn.close()
+        except: pass
     return df
 
 @st.cache_data(ttl=3600)
@@ -689,10 +733,32 @@ def load_ar_kpi(start, end):
             cte_sessiondelivery.launched_sessions, cte_nps.number_of_nps, cte_nps.avg_nps_score,
             employees.availability_target, cte_parent_updates.percent_parent_updates
     """
+    if FORCE_CACHE_MODE:
+        try: conn.close()
+        except: pass
+        df = _gh_read_cache("data/cache/ar_kpi.csv")
+        if not df.empty:
+            # Filter by date range using hire_date or just return all
+            cached_at = df["_cached_at"].iloc[0] if "_cached_at" in df.columns else "unknown"
+            st.warning(f"⚠️ Cache mode ON — using cached KPI data from {cached_at}.")
+            return df
+        st.error("Cache mode ON but no cached AR KPI data found.")
+        return pd.DataFrame()
     try:
         df = pd.read_sql(query, conn)
+        return df
+    except Exception as e:
+        try: conn.close()
+        except: pass
+        df = _gh_read_cache("data/cache/ar_kpi.csv")
+        if not df.empty:
+            cached_at = df["_cached_at"].iloc[0] if "_cached_at" in df.columns else "unknown"
+            st.warning(f"⚠️ Redshift unavailable — using cached KPI data from {cached_at}.")
+            return df
+        raise
     finally:
-        conn.close()
+        try: conn.close()
+        except: pass
     return df
 
 @st.cache_data(ttl=3600)
@@ -722,12 +788,26 @@ def load_low_delivery_not_accepting(faculty_leader: str):
         HAVING AVG(tc.instruction_actual) < e.delivery_target * 0.80
         ORDER BY delivery_pct
     """
+    if FORCE_CACHE_MODE:
+        try: conn.close()
+        except: pass
+        df = _gh_read_cache("data/cache/low_delivery.csv")
+        if not df.empty:
+            keep = [c for c in df.columns if c not in ["faculty_leader","_cached_at"]]
+            return df[df["faculty_leader"] == faculty_leader][keep] if "faculty_leader" in df.columns else df[keep]
+        return pd.DataFrame()
     try:
         df = pd.read_sql(query, conn)
+        return df
+    except Exception:
+        df = _gh_read_cache("data/cache/low_delivery.csv")
+        if not df.empty:
+            keep = [c for c in df.columns if c not in ["faculty_leader","_cached_at"]]
+            return df[df["faculty_leader"] == faculty_leader][keep] if "faculty_leader" in df.columns else df[keep]
+        return pd.DataFrame()
     finally:
-        conn.close()
-    return df
-
+        try: conn.close()
+        except: pass
 @st.cache_data(ttl=3600)
 def load_study_areas():
     """Load goal scores and starting scores from orbit_stitch.study_areas."""
@@ -780,12 +860,18 @@ def load_featured_tutors():
     if FORCE_CACHE_MODE:
         try: conn.close()
         except: pass
-        return _gh_read_cache("data/cache/featured_tutors.csv")
+        df = _gh_read_cache("data/cache/featured_tutors.csv")
+        if not df.empty and "_cached_at" in df.columns:
+            df = df.drop(columns=["_cached_at"])
+        return df
     try:
         df = pd.read_sql(query, conn)
         return df
     except Exception:
-        return _gh_read_cache("data/cache/featured_tutors.csv")
+        df = _gh_read_cache("data/cache/featured_tutors.csv")
+        if not df.empty and "_cached_at" in df.columns:
+            df = df.drop(columns=["_cached_at"])
+        return df
     finally:
         try: conn.close()
         except: pass

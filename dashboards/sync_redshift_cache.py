@@ -262,6 +262,164 @@ QUERIES = {
         ORDER BY a.team, a.tutor
         """
     ),
+    "ar_kpi": (
+        "data/cache/ar_kpi.csv",
+        """
+        WITH time_period AS (
+            SELECT '2025-01-01'::date AS day_start, GETDATE()::date AS day_end
+        ),
+        cte_sessions AS (
+            SELECT id as session_id, starts_at, launched_at, supervisor_id, duration, course_id,
+                DATEDIFF(minute, starts_at, launched_at) minutes_launched_late,
+                attendances_attended_count,
+                CASE WHEN automatic_attendance IS TRUE THEN 1 ELSE 0 END AS automatic_attendance
+            FROM dw.sessions
+            WHERE sessions.starts_at >= (SELECT day_start FROM time_period)
+              AND sessions.starts_at < (SELECT day_end FROM time_period)
+        ),
+        cte_deliveries AS (
+            SELECT employee_id, first_day_of_week_sunday_start AS first_day_of_week,
+                instruction_actual AS delivery, instruction_target AS delivery_target,
+                CASE WHEN instruction_actual >= instruction_target THEN 1 ELSE 0 END AS meeting_target,
+                availability_target
+            FROM rp_bi.tutor_capacity
+            WHERE first_day_of_week_sunday_start >= (SELECT day_start FROM time_period)
+              AND first_day_of_week_sunday_start < (SELECT day_end FROM time_period)
+        ),
+        cte_availabilities AS (
+            SELECT tc.employee_id,
+                AVG(tc.availability_actual) AS availability,
+                AVG(tc.availability_target) AS availability_target
+            FROM rp_bi.tutor_capacity tc
+            WHERE tc.first_day_of_week_sunday_start >= (SELECT day_start FROM time_period)
+              AND tc.first_day_of_week_sunday_start < (SELECT day_end FROM time_period)
+            GROUP BY tc.employee_id
+        ),
+        cte_ontime AS (
+            SELECT supervisor_id AS employee_id,
+                SUM(CASE WHEN minutes_launched_late <= 5 THEN 1 ELSE 0 END) AS ontime_sessions
+            FROM cte_sessions GROUP BY supervisor_id
+        ),
+        cte_sessiondelivery AS (
+            SELECT supervisor_id AS employee_id,
+                COUNT(CASE WHEN attendances_attended_count > 0 THEN session_id END) AS launched_sessions
+            FROM cte_sessions GROUP BY supervisor_id
+        ),
+        cte_parent_updates AS (
+            SELECT DISTINCT th.tutor_id AS supervisor_id,
+                COUNT(DISTINCT CASE WHEN th.progress_update_last_sent_at IS NOT NULL
+                    AND DATEDIFF(day, s.starts_at, th.progress_update_last_sent_at) BETWEEN -1 AND 60
+                    THEN e.enrollee_id END)::FLOAT /
+                NULLIF(COUNT(DISTINCT e.enrollee_id), 0) AS percent_parent_updates
+            FROM dw.tutoring_histories th
+            JOIN dw.enrollments e ON th.enrollment_id = e.id
+            JOIN dw.sessions s ON s.course_id = e.course_id AND s.supervisor_id = th.tutor_id
+            WHERE s.starts_at >= (SELECT day_start FROM time_period)
+              AND s.starts_at < (SELECT day_end FROM time_period)
+              AND s.attendances_attended_count > 0
+            GROUP BY th.tutor_id
+        ),
+        cte_NPS AS (
+            SELECT tutor_id,
+                COUNT(id) AS number_of_nps,
+                AVG(score::FLOAT) AS avg_nps_score
+            FROM dw.nps_histories
+            WHERE responded_at >= (SELECT day_start FROM time_period)
+              AND responded_at < (SELECT day_end FROM time_period)
+            GROUP BY tutor_id
+        ),
+        cte_prep1 AS (
+            SELECT events.attendee_id AS tutor_id,
+                CASE WHEN events.type = 'Event::PrepTime' THEN 'PrepTime'
+                     WHEN events.type = 'Event::Session' THEN 'Attended Session' END AS type,
+                REPLACE(events.type,'Event::','') AS event_type, events.duration/60.0 AS duration_hours,
+                dates.first_day_of_week_sunday_start
+            FROM dw.events
+            JOIN rp_bi.dates ON (datepart(year,events.starts_at)=dates.year
+                AND datepart(month,events.starts_at)=dates.month
+                AND datepart(day,events.starts_at)=dates.day)
+            WHERE events.starts_at >= (SELECT day_start FROM time_period)
+              AND events.starts_at < (SELECT day_end FROM time_period)
+              AND events.category IN ('Session Preparation','Email or Slack Communication')
+        ),
+        cte_prep2 AS (
+            SELECT tutor_id,
+                CASE WHEN type='PrepTime' THEN SUM(duration_hours) ELSE NULL END AS Total_Prep,
+                CASE WHEN type='Attended Session' THEN SUM(duration_hours) ELSE NULL END AS Attended_Sessions
+            FROM cte_prep1 GROUP BY tutor_id, type
+        )
+        SELECT DISTINCT
+            dw.employees.id,
+            tutor_users.first_name||' '||tutor_users.last_name AS tutor_name,
+            dw.tiers.name AS tier,
+            dw.employees.skill_score AS current_sci,
+            manager_users.first_name||' '||manager_users.last_name AS fl_name,
+            DATE(dw.employees.hire_date) AS hire_date,
+            dw.employees.delivery_target,
+            ROUND(AVG(cte_deliveries.delivery),2) AS avg_delivery,
+            ROUND(AVG(cte_deliveries.delivery)/dw.employees.delivery_target,4) AS delivery_pct,
+            COUNT(DISTINCT CASE WHEN cte_deliveries.meeting_target=1 THEN cte_deliveries.first_day_of_week END) AS weeks_at_target,
+            ROUND(AVG(cte_availabilities.availability),2) AS avg_availability,
+            ROUND(AVG(cte_availabilities.availability)/dw.employees.availability_target,4) AS availability_pct,
+            (cte_ontime.ontime_sessions/cte_sessiondelivery.launched_sessions)*1.00 AS sessions_on_time_pct,
+            cte_parent_updates.percent_parent_updates AS parent_update_pct,
+            cte_NPS.number_of_nps,
+            CASE WHEN cte_NPS.number_of_nps>0 THEN cte_NPS.avg_nps_score END AS avg_nps,
+            COUNT(DISTINCT CASE WHEN cte_sessions.automatic_attendance=1 THEN cte_sessions.session_id END) AS autoattendance_sessions,
+            CASE WHEN MAX(cte_prep2.Attended_Sessions)>0
+                THEN MAX(cte_prep2.Total_Prep)/MAX(cte_prep2.Attended_Sessions) END AS prep_time_ratio
+        FROM dw.employees
+        JOIN dw.users tutor_users ON employees.user_id = tutor_users.id
+        JOIN dw.tiers ON employees.tier_id = tiers.id
+        JOIN dw.team_members ON employees.id = team_members.member_id
+        JOIN dw.teams ON team_members.team_id = teams.id
+        JOIN dw.employees managers ON teams.manager_id = managers.id
+        JOIN dw.users manager_users ON managers.user_id = manager_users.id
+        LEFT JOIN cte_sessions ON employees.id = cte_sessions.supervisor_id
+        LEFT JOIN cte_ontime ON employees.id = cte_ontime.employee_id
+        LEFT JOIN cte_sessiondelivery ON employees.id = cte_sessiondelivery.employee_id
+        LEFT JOIN cte_parent_updates ON employees.id = cte_parent_updates.supervisor_id
+        LEFT JOIN cte_deliveries ON employees.id = cte_deliveries.employee_id
+        LEFT JOIN cte_availabilities ON employees.id = cte_availabilities.employee_id
+        LEFT JOIN cte_NPS ON cte_NPS.tutor_id = employees.id
+        LEFT JOIN cte_prep2 ON employees.id = cte_prep2.tutor_id
+        WHERE employees.end_date IS NULL
+          AND employees.delivery_target > 0
+          AND employees.type = 'Tutor'
+          AND tutor_users.title = 'Tutor'
+        GROUP BY employees.id, tutor_users.first_name, tutor_users.last_name,
+            dw.tiers.name, employees.skill_score, manager_users.first_name, manager_users.last_name,
+            employees.hire_date, employees.delivery_target, cte_ontime.ontime_sessions,
+            cte_sessiondelivery.launched_sessions, cte_nps.number_of_nps, cte_nps.avg_nps_score,
+            employees.availability_target, cte_parent_updates.percent_parent_updates
+        """
+    ),
+    "low_delivery": (
+        "data/cache/low_delivery.csv",
+        """
+        SELECT u.first_name||' '||u.last_name AS tutor,
+            flu.first_name||' '||flu.last_name AS faculty_leader,
+            e.delivery_target,
+            ROUND(AVG(tc.instruction_actual)::numeric, 1) AS avg_delivery_next_3wks,
+            ROUND(AVG(tc.instruction_actual)::numeric / NULLIF(e.delivery_target,0) * 100, 1) AS delivery_pct
+        FROM dw.employees e
+        JOIN dw.users u ON e.user_id = u.id
+        JOIN dw.team_members ON e.id = team_members.member_id
+        JOIN dw.teams ON team_members.team_id = teams.id
+        JOIN dw.employees managers ON teams.manager_id = managers.id
+        JOIN dw.users flu ON managers.user_id = flu.id
+        JOIN rp_bi.tutor_capacity tc ON tc.employee_id = e.id
+        WHERE e.end_date IS NULL
+          AND e.type = 'Tutor'
+          AND u.title = 'Tutor'
+          AND e.accept_new_students = FALSE
+          AND tc.first_day_of_week_sunday_start >= CURRENT_DATE
+          AND tc.first_day_of_week_sunday_start <= CURRENT_DATE + 21
+        GROUP BY u.first_name, u.last_name, flu.first_name, flu.last_name, e.delivery_target
+        HAVING AVG(tc.instruction_actual) < e.delivery_target * 0.80
+        ORDER BY faculty_leader, delivery_pct
+        """
+    ),
     "featured_tutors": (
         "data/cache/featured_tutors.csv",
         """
