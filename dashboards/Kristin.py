@@ -8672,6 +8672,13 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
 
         @st.cache_data(ttl=3600)
         def load_ar_skills():
+            import sys as _sys
+            _force = getattr(_sys.modules[__name__], 'FORCE_CACHE_MODE', False)
+            if _force:
+                df = _gh_read_cache("data/cache/ar_skills.csv")
+                if not df.empty and "_cached_at" in df.columns:
+                    df = df.drop(columns=["_cached_at"])
+                return df
             conn = get_redshift_connection()
             query = """
                 SELECT
