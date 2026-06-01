@@ -4553,45 +4553,50 @@ def render_app(config):
                     _sa_p = pd.DataFrame()
             except Exception:
                 _sa_p = pd.DataFrame()
+
             for sid, sdf in p_exam.groupby("student_id"):
-                sname       = sdf["student_name"].iloc[0] if "student_name" in sdf.columns else str(sid)
-                hrs         = sdf["attended_test_prep_hours"].iloc[0]
-                valid       = sdf[sdf["exam_valid_composite"] == True]
-                n_valid     = len(valid)
-                latest_date = pd.to_datetime(valid["exam_date"], utc=True).max() \
-                              if not valid.empty else None
-                days_ago    = int((p_now - latest_date).days) \
-                              if latest_date is not None and pd.notna(latest_date) else None
-                best_score  = valid["score"].max() if not valid.empty else None
-                status      = "✅ Current" if days_ago is not None and days_ago <= 90 \
-                              else ("⚠️ Stale" if days_ago is not None else
-                              ("❌ None (6+ hrs)" if (pd.notna(hrs) and hrs >= 6) else "—"))
-                # Match goal/starting score to exam family of best score
-                _valid = sdf[sdf["exam_valid_composite"] == True]
-                _best_fam = None
-                if not _valid.empty and pd.notna(best_score):
-                    _best_row = _valid.loc[_valid["score"].idxmax()] if "score" in _valid.columns else None
-                    _best_fam = _best_row["exam_family"] if _best_row is not None and "exam_family" in _best_row.index else None
-                _sa_r = None
-                if not _sa_p.empty and sid in _sa_p["student_id"].values and _best_fam:
-                    _sa_match = _sa_p[(_sa_p["student_id"] == sid) & (_sa_p["exam_family"] == _best_fam)]
-                    if not _sa_match.empty:
-                        _sa_r = _sa_match.sort_values("goal_score", ascending=False, na_position="last").iloc[0]
-                goal_s  = float(_sa_r["goal_score"])     if _sa_r is not None and pd.notna(_sa_r["goal_score"])     else None
-                start_s = float(_sa_r["starting_score"]) if _sa_r is not None and pd.notna(_sa_r["starting_score"]) else None
-                goal_st      = ("✅ At/Above Goal" if pd.notna(best_score) and goal_s is not None and float(best_score) >= goal_s
-                                else ("❌ Below Goal" if goal_s is not None and pd.notna(best_score) else "—"))
-                ex_rows.append({
-                    "Student":         sname,
-                    "Hours Delivered": round(float(hrs), 1) if pd.notna(hrs) else "—",
-                    "Valid Exams":     n_valid,
-                    "Starting Score":  int(start_s) if start_s is not None else "—",
-                    "Goal Score":      int(goal_s)  if goal_s  is not None else "—",
-                    "Best Score":      int(best_score) if pd.notna(best_score) else "—",
-                    "Goal Status":     goal_st,
-                    "Days Since Exam": days_ago if days_ago is not None else "—",
-                    "Status":          status,
-                })
+                sname = sdf["student_name"].iloc[0] if "student_name" in sdf.columns else str(sid)
+                hrs   = sdf["attended_test_prep_hours"].iloc[0]
+                valid = sdf[sdf["exam_valid_composite"] == True]
+
+                # One row per exam family
+                families = valid["exam_family"].dropna().unique() if not valid.empty else []
+                if len(families) == 0:
+                    families = ["—"]
+
+                for fam in families:
+                    fam_valid = valid[valid["exam_family"] == fam] if fam != "—" else valid
+                    n_valid     = len(fam_valid)
+                    latest_date = pd.to_datetime(fam_valid["exam_date"], utc=True).max() if not fam_valid.empty else None
+                    days_ago    = int((p_now - latest_date).days) if latest_date is not None and pd.notna(latest_date) else None
+                    best_score  = fam_valid["score"].max() if not fam_valid.empty else None
+                    status      = "✅ Current" if days_ago is not None and days_ago <= 90 \
+                                  else ("⚠️ Stale" if days_ago is not None else
+                                  ("❌ None (6+ hrs)" if (pd.notna(hrs) and hrs >= 6) else "—"))
+
+                    # Match goal/starting score to this exam family
+                    _sa_r = None
+                    if not _sa_p.empty and sid in _sa_p["student_id"].values and fam != "—":
+                        _sa_match = _sa_p[(_sa_p["student_id"] == sid) & (_sa_p["exam_family"] == fam)]
+                        if not _sa_match.empty:
+                            _sa_r = _sa_match.sort_values("goal_score", ascending=False, na_position="last").iloc[0]
+                    goal_s  = float(_sa_r["goal_score"])     if _sa_r is not None and pd.notna(_sa_r["goal_score"])     else None
+                    start_s = float(_sa_r["starting_score"]) if _sa_r is not None and pd.notna(_sa_r["starting_score"]) else None
+                    goal_st = ("✅ At/Above Goal" if pd.notna(best_score) and goal_s is not None and float(best_score) >= goal_s
+                               else ("❌ Below Goal" if goal_s is not None and pd.notna(best_score) else "—"))
+
+                    ex_rows.append({
+                        "Student":         sname,
+                        "Exam Type":       fam,
+                        "Hours Delivered": round(float(hrs), 1) if pd.notna(hrs) else "—",
+                        "Valid Exams":     n_valid,
+                        "Starting Score":  int(start_s) if start_s is not None else "—",
+                        "Goal Score":      int(goal_s)  if goal_s  is not None else "—",
+                        "Best Score":      int(best_score) if pd.notna(best_score) else "—",
+                        "Goal Status":     goal_st,
+                        "Days Since Exam": days_ago if days_ago is not None else "—",
+                        "Status":          status,
+                    })
             ex_df = pd.DataFrame(ex_rows)
             _ex_status_order = {"❌ None (6+ hrs)": 0, "⚠️ Stale": 1, "✅ Current": 2, "—": 3}
             ex_df["_sort_status"] = ex_df["Status"].map(_ex_status_order).fillna(3)
