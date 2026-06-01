@@ -818,7 +818,13 @@ def load_study_areas():
             sa.subject_id,
             sa.goal_score,
             sa.starting_score,
-            s.name AS subject_name
+            s.name AS subject_name,
+            CASE
+                WHEN sa.subject_id IN (43, 356, 239)      THEN 'ACT'
+                WHEN sa.subject_id IN (51, 315, 147)      THEN 'SAT'
+                WHEN sa.subject_id IN (316, 50, 342, 195, 240, 344) THEN 'PSAT'
+                ELSE 'Other'
+            END AS exam_family
         FROM orbit_stitch.study_areas sa
         LEFT JOIN dw.subjects s ON sa.subject_id = s.id
         WHERE sa._sdc_deleted_at IS NULL
@@ -4535,15 +4541,17 @@ def render_app(config):
                        delta_color="inverse" if stale_exam_count > 0 else "off")
             ec4.metric("Avg Hrs / Exam", f"{hrs_per_exam:.1f}" if hrs_per_exam else "N/A")
             ex_rows = []
-            # Load study areas for goal/starting scores
+            # Load study areas for goal/starting scores — matched by exam family
             try:
                 _sa_p = load_study_areas()
                 _TP_IDS = {43, 51, 315, 316, 342, 195, 50, 356}
-                if not _sa_p.empty:
+                if not _sa_p.empty and "exam_family" in _sa_p.columns:
                     _sa_p = (_sa_p[_sa_p["subject_id"].isin(_TP_IDS)]
                         .sort_values("goal_score", ascending=False, na_position="last")
-                        .groupby("student_id").first().reset_index()
-                        [["student_id","goal_score","starting_score"]])
+                        .groupby(["student_id","exam_family"]).first().reset_index()
+                        [["student_id","exam_family","goal_score","starting_score"]])
+                else:
+                    _sa_p = pd.DataFrame()
             except Exception:
                 _sa_p = pd.DataFrame()
             for sid, sdf in p_exam.groupby("student_id"):
@@ -4559,8 +4567,16 @@ def render_app(config):
                 status      = "✅ Current" if days_ago is not None and days_ago <= 90 \
                               else ("⚠️ Stale" if days_ago is not None else
                               ("❌ None (6+ hrs)" if (pd.notna(hrs) and hrs >= 6) else "—"))
-                _sa_r        = _sa_p[_sa_p["student_id"] == sid].iloc[0] \
-                               if not _sa_p.empty and sid in _sa_p["student_id"].values else None
+                # Get best exam family for this student
+                _fams = sdf[sdf["exam_valid_composite"] == True]["exam_family"].value_counts()
+                _best_fam = _fams.index[0] if not _fams.empty else None
+                _sa_r = None
+                if not _sa_p.empty and sid in _sa_p["student_id"].values and _best_fam:
+                    _sa_match = _sa_p[(_sa_p["student_id"] == sid) & (_sa_p["exam_family"] == _best_fam)]
+                    if _sa_match.empty and _best_fam == "SAT/PSAT":
+                        _sa_match = _sa_p[(_sa_p["student_id"] == sid) & (_sa_p["exam_family"].isin(["SAT","PSAT"]))]
+                    if not _sa_match.empty:
+                        _sa_r = _sa_match.iloc[0]
                 goal_s       = float(_sa_r["goal_score"])     if _sa_r is not None and pd.notna(_sa_r["goal_score"])     else None
                 start_s      = float(_sa_r["starting_score"]) if _sa_r is not None and pd.notna(_sa_r["starting_score"]) else None
                 goal_st      = ("✅ At/Above Goal" if pd.notna(best_score) and goal_s is not None and float(best_score) >= goal_s
@@ -6142,12 +6158,15 @@ def render_app(config):
                         TEST_SUBJECT_IDS = {43, 51, 315, 316, 342, 195, 50, 356}
                         _sa_relevant = _sa_df[_sa_df["subject_id"].isin(TEST_SUBJECT_IDS)].copy()
                         # Take one row per student (prefer non-null goal_score)
+                        # Match goal/starting score by exam family
+                        _sa_relevant["exam_family"] = _sa_relevant["exam_family"] if "exam_family" in _sa_relevant.columns else "Other"
                         _sa_best = (_sa_relevant
                             .sort_values("goal_score", ascending=False, na_position="last")
-                            .groupby("student_id").first().reset_index()
-                            [["student_id","goal_score","starting_score"]])
-                        detail_e = detail_e.merge(_sa_best, on="student_id", how="left")
-                        # Flag if student has scored at or above goal
+                            .groupby(["student_id","exam_family"]).first().reset_index()
+                            [["student_id","exam_family","goal_score","starting_score"]])
+                        # detail_e already has exam_family column
+                        detail_e = detail_e.merge(_sa_best, on=["student_id","exam_family"], how="left")
+                        # Flag if student has scored at or above goal — only when exam families match
                         def _goal_met(row):
                             if pd.isna(row.get("goal_score")) or pd.isna(row.get("score")):
                                 return None

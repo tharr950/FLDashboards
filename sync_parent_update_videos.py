@@ -635,12 +635,91 @@ def push_to_github(csv_content: str) -> None:
     r.raise_for_status()
     log.info(f"Pushed to GitHub: {GITHUB_REPO}/{GITHUB_PATH}")
 
+
+def push_history_to_github(df: pd.DataFrame) -> None:
+    """Append this week's rows to the cumulative history file on GitHub."""
+    if not GITHUB_TOKEN or not GITHUB_REPO:
+        log.warning("GITHUB_TOKEN or GITHUB_REPO not set — skipping history push.")
+        return
+
+    hist_path = "data/parent_update_videos_history.csv"
+    api_url   = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{hist_path}"
+    headers   = {"Authorization": f"token {GITHUB_TOKEN}",
+                 "Accept": "application/vnd.github.v3+json"}
+
+    # Fetch existing history
+    existing_df = pd.DataFrame()
+    existing_sha = None
+    r = requests.get(api_url, headers=headers, timeout=15)
+    if r.status_code == 200:
+        existing_sha = r.json().get("sha")
+        import base64, io
+        csv_bytes = base64.b64decode(r.json()["content"])
+        if not csv_bytes.strip():
+            # File exists but is empty — this means history was wiped, abort to prevent data loss
+            log.error("History file on GitHub is empty (0 bytes) — ABORTING history push to prevent data loss. Manual restore required.")
+            return
+        else:
+            try:
+                existing_df = pd.read_csv(io.StringIO(csv_bytes.decode("utf-8")))
+                if existing_df.empty:
+                    log.warning("History file parsed but has no rows — starting fresh")
+            except Exception as _e:
+                log.error(f"Failed to parse existing history CSV: {_e} — aborting history push to avoid data loss")
+                return
+
+    # Get this week's date to dedup
+    week_of = df["week of"].iloc[0] if "week of" in df.columns and not df.empty else None
+
+    # Remove existing rows for this week (dedup)
+    if not existing_df.empty and week_of and "week of" in existing_df.columns:
+        existing_df = existing_df[existing_df["week of"].astype(str) != str(week_of)]
+
+    # Append
+    updated_df  = pd.concat([existing_df, df], ignore_index=True) if not existing_df.empty else df
+    csv_content = updated_df.to_csv(index=False)
+
+    import base64
+    encoded = base64.b64encode(csv_content.encode("utf-8")).decode("utf-8")
+    payload = {
+        "message": f"history: parent update videos {week_of}",
+        "content": encoded,
+    }
+    if existing_sha:
+        payload["sha"] = existing_sha
+
+    # Final safety check — never push empty content
+    if not csv_content.strip() or len(updated_df) == 0:
+        log.error("ABORTING history push — updated_df is empty, refusing to push.")
+        return
+
+    for _attempt in range(3):
+        # Re-fetch SHA immediately before PUT to avoid 409 conflicts
+        _r2 = requests.get(api_url, headers=headers, timeout=15)
+        if _r2.status_code == 200:
+            _refetch_content = base64.b64decode(_r2.json().get("content", ""))
+            if _refetch_content.strip() and len(_refetch_content) > len(csv_content.encode("utf-8")):
+                log.error(f"Re-fetched history is larger than what we are about to push — aborting to prevent data loss.")
+                return
+            payload["sha"] = _r2.json().get("sha")
+        r = requests.put(api_url, headers=headers, json=payload, timeout=30)
+        if r.status_code in (200, 201):
+            break
+        if r.status_code == 409 and _attempt < 2:
+            log.warning(f"409 conflict on history push — retrying ({_attempt+1}/3)")
+            time.sleep(3)
+            continue
+        r.raise_for_status()
+    log.info(f"History pushed → {GITHUB_REPO}/{hist_path} ({len(updated_df)} total rows)")
+
+
 def save_results(df: pd.DataFrame) -> None:
     csv_content = df.to_csv(index=False)
     with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
         f.write(csv_content)
     log.info(f"Saved locally -> {OUTPUT_FILE}")
     push_to_github(csv_content)
+    push_history_to_github(df)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # STREAMLIT LOADER — paste into your data_loaders.py
