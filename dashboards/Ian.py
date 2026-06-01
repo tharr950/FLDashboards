@@ -820,9 +820,8 @@ def load_study_areas():
             sa.starting_score,
             s.name AS subject_name,
             CASE
-                WHEN sa.subject_id IN (43, 356, 239)      THEN 'ACT'
-                WHEN sa.subject_id IN (51, 315, 147)      THEN 'SAT'
-                WHEN sa.subject_id IN (316, 50, 342, 195, 240, 344) THEN 'PSAT'
+                WHEN sa.subject_id IN (43, 356, 239)                     THEN 'ACT'
+                WHEN sa.subject_id IN (51, 315, 147, 316, 50, 342, 195, 240, 344) THEN 'SAT/PSAT'
                 ELSE 'Other'
             END AS exam_family
         FROM orbit_stitch.study_areas sa
