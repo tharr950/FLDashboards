@@ -4566,18 +4566,19 @@ def render_app(config):
                 status      = "✅ Current" if days_ago is not None and days_ago <= 90 \
                               else ("⚠️ Stale" if days_ago is not None else
                               ("❌ None (6+ hrs)" if (pd.notna(hrs) and hrs >= 6) else "—"))
-                # Get best exam family for this student
-                _fams = sdf[sdf["exam_valid_composite"] == True]["exam_family"].value_counts()
-                _best_fam = _fams.index[0] if not _fams.empty else None
+                # Match goal/starting score to exam family of best score
+                _valid = sdf[sdf["exam_valid_composite"] == True]
+                _best_fam = None
+                if not _valid.empty and pd.notna(best_score):
+                    _best_row = _valid.loc[_valid["score"].idxmax()] if "score" in _valid.columns else None
+                    _best_fam = _best_row["exam_family"] if _best_row is not None and "exam_family" in _best_row.index else None
                 _sa_r = None
                 if not _sa_p.empty and sid in _sa_p["student_id"].values and _best_fam:
                     _sa_match = _sa_p[(_sa_p["student_id"] == sid) & (_sa_p["exam_family"] == _best_fam)]
-                    if _sa_match.empty and _best_fam == "SAT/PSAT":
-                        _sa_match = _sa_p[(_sa_p["student_id"] == sid) & (_sa_p["exam_family"].isin(["SAT","PSAT"]))]
                     if not _sa_match.empty:
-                        _sa_r = _sa_match.iloc[0]
-                goal_s       = float(_sa_r["goal_score"])     if _sa_r is not None and pd.notna(_sa_r["goal_score"])     else None
-                start_s      = float(_sa_r["starting_score"]) if _sa_r is not None and pd.notna(_sa_r["starting_score"]) else None
+                        _sa_r = _sa_match.sort_values("goal_score", ascending=False, na_position="last").iloc[0]
+                goal_s  = float(_sa_r["goal_score"])     if _sa_r is not None and pd.notna(_sa_r["goal_score"])     else None
+                start_s = float(_sa_r["starting_score"]) if _sa_r is not None and pd.notna(_sa_r["starting_score"]) else None
                 goal_st      = ("✅ At/Above Goal" if pd.notna(best_score) and goal_s is not None and float(best_score) >= goal_s
                                 else ("❌ Below Goal" if goal_s is not None and pd.notna(best_score) else "—"))
                 ex_rows.append({
