@@ -4631,7 +4631,27 @@ def render_app(config):
             ex_df["_sort_name"]   = ex_df["Student"].str.lower()
             ex_df = ex_df.sort_values(["_sort_status","_sort_name"]).drop(
                 columns=["_sort_status","_sort_name"])
-            st.dataframe(ex_df, use_container_width=True, hide_index=True)
+
+            # Color-shade SAT/PSAT/ACT column groups
+            SAT_COLS  = [c for c in ["SAT Exams","SAT Best","SAT Start","SAT Goal","SAT Goal Status"] if c in ex_df.columns]
+            PSAT_COLS = [c for c in ["PSAT Exams","PSAT Best","PSAT Start","PSAT Goal","PSAT Goal Status"] if c in ex_df.columns]
+            ACT_COLS  = [c for c in ["ACT Exams","ACT Best","ACT Start","ACT Goal","ACT Goal Status"] if c in ex_df.columns]
+
+            def _shade_cols(df):
+                styles = pd.DataFrame("", index=df.index, columns=df.columns)
+                for col in SAT_COLS:
+                    if col in styles.columns:
+                        styles[col] = "background-color: #e8f4fd"
+                for col in PSAT_COLS:
+                    if col in styles.columns:
+                        styles[col] = "background-color: #fef9e7"
+                for col in ACT_COLS:
+                    if col in styles.columns:
+                        styles[col] = "background-color: #eafaf1"
+                return styles
+
+            st.dataframe(ex_df.style.apply(_shade_cols, axis=None),
+                         use_container_width=True, hide_index=True)
 
         st.markdown("---")
 
