@@ -820,8 +820,9 @@ def load_study_areas():
             sa.starting_score,
             s.name AS subject_name,
             CASE
-                WHEN sa.subject_id IN (43, 356, 239)                     THEN 'ACT'
-                WHEN sa.subject_id IN (51, 315, 147, 316, 50, 342, 195, 240, 344) THEN 'SAT/PSAT'
+                WHEN sa.subject_id IN (43, 356, 239)          THEN 'ACT'
+                WHEN sa.subject_id IN (51, 315, 147)          THEN 'SAT'
+                WHEN sa.subject_id IN (316, 50, 342, 195, 240, 344) THEN 'PSAT'
                 ELSE 'Other'
             END AS exam_family
         FROM orbit_stitch.study_areas sa
@@ -4554,49 +4555,76 @@ def render_app(config):
             except Exception:
                 _sa_p = pd.DataFrame()
 
+            # Map exam_family in p_exam to SAT/PSAT/ACT
+            SAT_SUBJ  = {51, 315, 147}
+            PSAT_SUBJ = {316, 50, 342, 195, 240, 344}
+            ACT_SUBJ  = {43, 356, 239}
+            def _map_fam(row):
+                subj = row.get("subject","")
+                fam  = row.get("exam_family","")
+                if fam == "ACT": return "ACT"
+                if fam in ("SAT/PSAT","SAT"): 
+                    psat_names = {"PSAT/NMSQT","Digital PSAT","Digital PSAT/NMSQT","PSAT","PSAT 8/9","Paper PSAT/NMSQT","Paper PSAT 8/9"}
+                    return "PSAT" if subj in psat_names else "SAT"
+                return fam
+
             for sid, sdf in p_exam.groupby("student_id"):
                 sname = sdf["student_name"].iloc[0] if "student_name" in sdf.columns else str(sid)
                 hrs   = sdf["attended_test_prep_hours"].iloc[0]
-                valid = sdf[sdf["exam_valid_composite"] == True]
+                valid = sdf[sdf["exam_valid_composite"] == True].copy()
+                if not valid.empty:
+                    valid["exam_family_split"] = valid.apply(_map_fam, axis=1)
+                else:
+                    valid["exam_family_split"] = []
 
-                # One row per exam family
-                families = valid["exam_family"].dropna().unique() if not valid.empty else []
-                if len(families) == 0:
-                    families = ["—"]
+                def _get_fam_data(fam_name):
+                    fv = valid[valid["exam_family_split"] == fam_name] if not valid.empty else pd.DataFrame()
+                    best  = fv["score"].max() if not fv.empty else None
+                    n     = len(fv)
+                    lat   = pd.to_datetime(fv["exam_date"], utc=True).max() if not fv.empty else None
+                    days  = int((p_now - lat).days) if lat is not None and pd.notna(lat) else None
+                    _sar  = None
+                    if not _sa_p.empty and sid in _sa_p["student_id"].values:
+                        _sm = _sa_p[(_sa_p["student_id"]==sid) & (_sa_p["exam_family"]==fam_name)]
+                        if not _sm.empty:
+                            _sar = _sm.sort_values("goal_score", ascending=False, na_position="last").iloc[0]
+                    gs  = float(_sar["goal_score"])     if _sar is not None and pd.notna(_sar["goal_score"])     else None
+                    ss  = float(_sar["starting_score"]) if _sar is not None and pd.notna(_sar["starting_score"]) else None
+                    gst = ("✅ Met" if best is not None and gs is not None and float(best) >= gs
+                           else ("❌ Not Met" if gs is not None and best is not None else "—"))
+                    st  = ("✅ Current" if days is not None and days <= 90
+                           else ("⚠️ Stale" if days is not None else "—"))
+                    return n, best, gs, ss, gst, days, st
 
-                for fam in families:
-                    fam_valid = valid[valid["exam_family"] == fam] if fam != "—" else valid
-                    n_valid     = len(fam_valid)
-                    latest_date = pd.to_datetime(fam_valid["exam_date"], utc=True).max() if not fam_valid.empty else None
-                    days_ago    = int((p_now - latest_date).days) if latest_date is not None and pd.notna(latest_date) else None
-                    best_score  = fam_valid["score"].max() if not fam_valid.empty else None
-                    status      = "✅ Current" if days_ago is not None and days_ago <= 90 \
-                                  else ("⚠️ Stale" if days_ago is not None else
-                                  ("❌ None (6+ hrs)" if (pd.notna(hrs) and hrs >= 6) else "—"))
+                sat_n,  sat_best,  sat_goal,  sat_start,  sat_gst,  sat_days,  sat_st  = _get_fam_data("SAT")
+                psat_n, psat_best, psat_goal, psat_start, psat_gst, psat_days, psat_st = _get_fam_data("PSAT")
+                act_n,  act_best,  act_goal,  act_start,  act_gst,  act_days,  act_st  = _get_fam_data("ACT")
 
-                    # Match goal/starting score to this exam family
-                    _sa_r = None
-                    if not _sa_p.empty and sid in _sa_p["student_id"].values and fam != "—":
-                        _sa_match = _sa_p[(_sa_p["student_id"] == sid) & (_sa_p["exam_family"] == fam)]
-                        if not _sa_match.empty:
-                            _sa_r = _sa_match.sort_values("goal_score", ascending=False, na_position="last").iloc[0]
-                    goal_s  = float(_sa_r["goal_score"])     if _sa_r is not None and pd.notna(_sa_r["goal_score"])     else None
-                    start_s = float(_sa_r["starting_score"]) if _sa_r is not None and pd.notna(_sa_r["starting_score"]) else None
-                    goal_st = ("✅ At/Above Goal" if pd.notna(best_score) and goal_s is not None and float(best_score) >= goal_s
-                               else ("❌ Below Goal" if goal_s is not None and pd.notna(best_score) else "—"))
+                overall_days = min([d for d in [sat_days, psat_days, act_days] if d is not None], default=None)
+                overall_status = ("✅ Current" if overall_days is not None and overall_days <= 90
+                                  else ("⚠️ Stale" if overall_days is not None else
+                                  ("❌ None (6+ hrs)" if (pd.notna(hrs) and hrs >= 6) else "—")))
 
-                    ex_rows.append({
-                        "Student":         sname,
-                        "Exam Type":       fam,
-                        "Hours Delivered": round(float(hrs), 1) if pd.notna(hrs) else "—",
-                        "Valid Exams":     n_valid,
-                        "Starting Score":  int(start_s) if start_s is not None else "—",
-                        "Goal Score":      int(goal_s)  if goal_s  is not None else "—",
-                        "Best Score":      int(best_score) if pd.notna(best_score) else "—",
-                        "Goal Status":     goal_st,
-                        "Days Since Exam": days_ago if days_ago is not None else "—",
-                        "Status":          status,
-                    })
+                ex_rows.append({
+                    "Student":          sname,
+                    "Hours Delivered":  round(float(hrs), 1) if pd.notna(hrs) else "—",
+                    "SAT Exams":        sat_n  if sat_n  > 0 else "—",
+                    "SAT Best":         int(sat_best)  if sat_best  is not None and pd.notna(sat_best)  else "—",
+                    "SAT Start":        int(sat_start) if sat_start is not None else "—",
+                    "SAT Goal":         int(sat_goal)  if sat_goal  is not None else "—",
+                    "SAT Goal Status":  sat_gst  if sat_n  > 0 else "—",
+                    "PSAT Exams":       psat_n if psat_n > 0 else "—",
+                    "PSAT Best":        int(psat_best)  if psat_best  is not None and pd.notna(psat_best)  else "—",
+                    "PSAT Start":       int(psat_start) if psat_start is not None else "—",
+                    "PSAT Goal":        int(psat_goal)  if psat_goal  is not None else "—",
+                    "PSAT Goal Status": psat_gst if psat_n > 0 else "—",
+                    "ACT Exams":        act_n  if act_n  > 0 else "—",
+                    "ACT Best":         int(act_best)  if act_best  is not None and pd.notna(act_best)  else "—",
+                    "ACT Start":        int(act_start) if act_start is not None else "—",
+                    "ACT Goal":         int(act_goal)  if act_goal  is not None else "—",
+                    "ACT Goal Status":  act_gst  if act_n  > 0 else "—",
+                    "Status":           overall_status,
+                })
             ex_df = pd.DataFrame(ex_rows)
             _ex_status_order = {"❌ None (6+ hrs)": 0, "⚠️ Stale": 1, "✅ Current": 2, "—": 3}
             ex_df["_sort_status"] = ex_df["Status"].map(_ex_status_order).fillna(3)
