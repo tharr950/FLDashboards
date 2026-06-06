@@ -4352,6 +4352,63 @@ def render_app(config):
 
         st.markdown("---")
 
+        # ── Subject & Student Breakdown ───────────────────────────────────
+        st.markdown("### 📚 Subjects by Student")
+        with st.expander("View subject breakdown", expanded=False):
+            _subj_rows = []
+
+            # Academic subjects from grades data
+            if p_grades is not None and not p_grades.empty:
+                for _, row in p_grades[["student_name","subject"]].dropna().drop_duplicates().iterrows():
+                    _subj_rows.append({
+                        "Student": row["student_name"],
+                        "Subject": row["subject"],
+                        "Type": "Academic"
+                    })
+
+            # Test prep from exam data
+            if p_exam is not None and not p_exam.empty:
+                _tp_map = {
+                    "SAT": "SAT", "Digital SAT": "SAT", "Paper SAT": "SAT",
+                    "ACT": "ACT", "Digital ACT": "ACT",
+                    "PSAT/NMSQT": "PSAT", "Digital PSAT": "PSAT",
+                    "Digital PSAT/NMSQT": "PSAT", "PSAT": "PSAT", "PSAT 8/9": "PSAT",
+                    "Paper PSAT/NMSQT": "PSAT", "Paper PSAT 8/9": "PSAT",
+                }
+                for _, row in p_exam[["student_name","subject"]].dropna().drop_duplicates().iterrows():
+                    mapped = _tp_map.get(str(row["subject"]), str(row["subject"]))
+                    _subj_rows.append({
+                        "Student": row["student_name"],
+                        "Subject": mapped,
+                        "Type": "Test Prep"
+                    })
+
+            if _subj_rows:
+                _subj_df = pd.DataFrame(_subj_rows).drop_duplicates()
+
+                # Summary: subject → # students
+                _summary = (_subj_df.groupby(["Subject","Type"])["Student"]
+                            .nunique().reset_index()
+                            .rename(columns={"Student":"# Students"})
+                            .sort_values(["Type","# Students"], ascending=[True, False]))
+
+                col1, col2 = st.columns([1, 2])
+                with col1:
+                    st.markdown("**Subject Summary**")
+                    st.dataframe(_summary, use_container_width=True, hide_index=True)
+                with col2:
+                    st.markdown("**Student → Subjects**")
+                    _detail = (_subj_df.groupby("Student")["Subject"]
+                               .apply(lambda x: ", ".join(sorted(x.unique())))
+                               .reset_index()
+                               .rename(columns={"Subject":"Subjects"})
+                               .sort_values("Student"))
+                    st.dataframe(_detail, use_container_width=True, hide_index=True)
+            else:
+                st.info("No subject data available for this tutor.")
+
+        st.markdown("---")
+
         # Archivable
         st.markdown("### 📦 Archivable Students & Unscheduled Hours")
         if p_arch.empty:
@@ -4652,63 +4709,6 @@ def render_app(config):
 
             st.dataframe(ex_df.style.apply(_shade_cols, axis=None),
                          use_container_width=True, hide_index=True)
-
-        st.markdown("---")
-
-        # ── Subject & Student Breakdown ───────────────────────────────────
-        st.markdown("### 📚 Subjects by Student")
-        with st.expander("View subject breakdown", expanded=False):
-            _subj_rows = []
-
-            # Academic subjects from grades data
-            if p_grades is not None and not p_grades.empty:
-                for _, row in p_grades[["student_name","subject"]].dropna().drop_duplicates().iterrows():
-                    _subj_rows.append({
-                        "Student": row["student_name"],
-                        "Subject": row["subject"],
-                        "Type": "Academic"
-                    })
-
-            # Test prep from exam data
-            if p_exam is not None and not p_exam.empty:
-                _tp_map = {
-                    "SAT": "SAT", "Digital SAT": "SAT", "Paper SAT": "SAT",
-                    "ACT": "ACT", "Digital ACT": "ACT",
-                    "PSAT/NMSQT": "PSAT", "Digital PSAT": "PSAT",
-                    "Digital PSAT/NMSQT": "PSAT", "PSAT": "PSAT", "PSAT 8/9": "PSAT",
-                    "Paper PSAT/NMSQT": "PSAT", "Paper PSAT 8/9": "PSAT",
-                }
-                for _, row in p_exam[["student_name","subject"]].dropna().drop_duplicates().iterrows():
-                    mapped = _tp_map.get(str(row["subject"]), str(row["subject"]))
-                    _subj_rows.append({
-                        "Student": row["student_name"],
-                        "Subject": mapped,
-                        "Type": "Test Prep"
-                    })
-
-            if _subj_rows:
-                _subj_df = pd.DataFrame(_subj_rows).drop_duplicates()
-
-                # Summary: subject → # students
-                _summary = (_subj_df.groupby(["Subject","Type"])["Student"]
-                            .nunique().reset_index()
-                            .rename(columns={"Student":"# Students"})
-                            .sort_values(["Type","# Students"], ascending=[True, False]))
-
-                col1, col2 = st.columns([1, 2])
-                with col1:
-                    st.markdown("**Subject Summary**")
-                    st.dataframe(_summary, use_container_width=True, hide_index=True)
-                with col2:
-                    st.markdown("**Student → Subjects**")
-                    _detail = (_subj_df.groupby("Student")["Subject"]
-                               .apply(lambda x: ", ".join(sorted(x.unique())))
-                               .reset_index()
-                               .rename(columns={"Subject":"Subjects"})
-                               .sort_values("Student"))
-                    st.dataframe(_detail, use_container_width=True, hide_index=True)
-            else:
-                st.info("No subject data available for this tutor.")
 
         st.markdown("---")
 
