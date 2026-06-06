@@ -4358,52 +4358,32 @@ def render_app(config):
         with st.expander("View subject breakdown", expanded=False):
             _subj_rows = []
 
-            # Academic subjects — query study areas using student_id for accuracy
+            # Query subjects from session allotments — tutor-specific, last 45 days
             try:
-                _active_sids = []
-                if p_arch is not None and not p_arch.empty and "student_id" in p_arch.columns:
-                    # Only non-archivable students
-                    _active_sids = p_arch[p_arch["should_archive"] != True]["student_id"].dropna().unique().tolist()
+                _subj_conn = get_redshift_connection()
+                _subj_q = f"""
+                    SELECT DISTINCT
+                        su.first_name||' '||su.last_name AS student_name,
+                        sub.name AS subject,
+                        COUNT(DISTINCT s.id) AS sessions
+                    FROM dw.sessions s
+                    JOIN dw.courses c ON s.course_id = c.id
+                    JOIN dw.enrollments en ON en.course_id = c.id
+                    JOIN dw.students st ON en.enrollee_id = st.id
+                    JOIN dw.users su ON st.user_id = su.id
+                    JOIN dw.session_allotments sa ON sa.session_id = s.id
+                    JOIN dw.subjects sub ON sa.subject_id = sub.id
+                    JOIN dw.employees e ON s.supervisor_id = e.id
+                    JOIN dw.users tu ON e.user_id = tu.id
+                    WHERE tu.first_name||' '||tu.last_name = '{profile_tutor}'
+                      AND s.starts_at >= GETDATE() - 45
+                      AND s.attendances_attended_count > 0
+                    GROUP BY student_name, subject
+                    ORDER BY student_name, sessions DESC
+                """
+                _subj_session_df = pd.read_sql(_subj_q, _subj_conn)
+                _subj_conn.close()
 
-                if _active_sids:
-                    _sa_conn = get_redshift_connection()
-                    _sid_list = ",".join(str(int(s)) for s in _active_sids)
-                    _sa_q = f"""
-                        SELECT DISTINCT
-                            su.first_name||' '||su.last_name AS student_name,
-                            sub.name AS subject
-                        FROM orbit_stitch.study_areas sa
-                        JOIN dw.subjects sub ON sa.subject_id = sub.id
-                        JOIN dw.students st ON sa.student_id = st.id
-                        JOIN dw.users su ON st.user_id = su.id
-                        WHERE sa.student_id IN ({_sid_list})
-                          AND sa.archived_at IS NULL
-                          AND sa._sdc_deleted_at IS NULL
-                          AND sub.category_id IN (1,2,3,4,5,8,9,10,11)
-                          AND CAST(sub.high_grade AS INT) > 8
-                    """
-                    _sa_df = pd.read_sql(_sa_q, _sa_conn)
-                    _sa_conn.close()
-                    for _, row in _sa_df.iterrows():
-                        _subj_rows.append({
-                            "Student": row["student_name"],
-                            "Subject": row["subject"],
-                            "Type": "Academic"
-                        })
-            except Exception:
-                if p_grades is not None and not p_grades.empty:
-                    for _, row in p_grades[["student_name","subject"]].dropna().drop_duplicates().iterrows():
-                        _subj_rows.append({
-                            "Student": row["student_name"],
-                            "Subject": row["subject"],
-                            "Type": "Academic"
-                        })
-
-            # Test prep from exam data — only active (non-archivable) students
-            _active_student_names = set(
-                p_arch[p_arch["should_archive"] != True]["student_name"].dropna().unique().tolist()
-            ) if p_arch is not None and not p_arch.empty and "should_archive" in p_arch.columns else set()
-            if p_exam is not None and not p_exam.empty:
                 _tp_map = {
                     "SAT": "SAT", "Digital SAT": "SAT", "Paper SAT": "SAT",
                     "ACT": "ACT", "Digital ACT": "ACT",
@@ -4411,15 +4391,21 @@ def render_app(config):
                     "Digital PSAT/NMSQT": "PSAT", "PSAT": "PSAT", "PSAT 8/9": "PSAT",
                     "Paper PSAT/NMSQT": "PSAT", "Paper PSAT 8/9": "PSAT",
                 }
-                for _, row in p_exam[["student_name","subject"]].dropna().drop_duplicates().iterrows():
-                    if _active_student_names and row["student_name"] not in _active_student_names:
-                        continue
-                    mapped = _tp_map.get(str(row["subject"]), str(row["subject"]))
+                _test_prep_subjects = set(_tp_map.keys())
+
+                for _, row in _subj_session_df.iterrows():
+                    subj = row["subject"]
+                    is_tp = subj in _test_prep_subjects
                     _subj_rows.append({
                         "Student": row["student_name"],
-                        "Subject": mapped,
-                        "Type": "Test Prep"
+                        "Subject": _tp_map.get(subj, subj),
+                        "Type": "Test Prep" if is_tp else "Academic"
                     })
+            except Exception:
+                # Fallback to grades + exam data
+                if p_grades is not None and not p_grades.empty:
+                    for _, row in p_grades[["student_name","subject"]].dropna().drop_duplicates().iterrows():
+                        _subj_rows.append({"Student": row["student_name"], "Subject": row["subject"], "Type": "Academic"})
 
             # Build complete student list from active (non-archivable) students
             _all_active_names = sorted(
