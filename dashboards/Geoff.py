@@ -4363,7 +4363,7 @@ def render_app(config):
                 _active_sids = []
                 if p_arch is not None and not p_arch.empty and "student_id" in p_arch.columns:
                     # Only non-archivable students
-                    _active_sids = p_arch[p_arch["should_archive"] == False]["student_id"].dropna().unique().tolist()
+                    _active_sids = p_arch[p_arch["should_archive"] != True]["student_id"].dropna().unique().tolist()
 
                 if _active_sids:
                     _sa_conn = get_redshift_connection()
@@ -4401,7 +4401,7 @@ def render_app(config):
 
             # Test prep from exam data — only active (non-archivable) students
             _active_student_names = set(
-                p_arch[p_arch["should_archive"] == False]["student_name"].dropna().unique().tolist()
+                p_arch[p_arch["should_archive"] != True]["student_name"].dropna().unique().tolist()
             ) if p_arch is not None and not p_arch.empty and "should_archive" in p_arch.columns else set()
             if p_exam is not None and not p_exam.empty:
                 _tp_map = {
