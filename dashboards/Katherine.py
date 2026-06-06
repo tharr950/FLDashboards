@@ -4421,29 +4421,41 @@ def render_app(config):
                         "Type": "Test Prep"
                     })
 
-            if _subj_rows:
-                _subj_df = pd.DataFrame(_subj_rows).drop_duplicates()
+            # Build complete student list from active (non-archivable) students
+            _all_active_names = sorted(
+                p_arch[p_arch["should_archive"] != True]["student_name"].dropna().unique().tolist()
+            ) if p_arch is not None and not p_arch.empty else []
 
-                # Summary: subject → # students
-                _summary = (_subj_df.groupby(["Subject","Type"])["Student"]
-                            .nunique().reset_index()
-                            .rename(columns={"Student":"# Students"})
-                            .sort_values(["Type","# Students"], ascending=[True, False]))
+            _subj_df = pd.DataFrame(_subj_rows).drop_duplicates() if _subj_rows else pd.DataFrame(columns=["Student","Subject","Type"])
 
-                col1, col2 = st.columns([1, 2])
-                with col1:
-                    st.markdown("**Subject Summary**")
-                    st.dataframe(_summary, use_container_width=True, hide_index=True)
-                with col2:
-                    st.markdown("**Student → Subjects**")
-                    _detail = (_subj_df.groupby("Student")["Subject"]
-                               .apply(lambda x: ", ".join(sorted(x.unique())))
-                               .reset_index()
-                               .rename(columns={"Subject":"Subjects"})
-                               .sort_values("Student"))
-                    st.dataframe(_detail, use_container_width=True, hide_index=True)
+            # Build detail — all active students, blank if no subjects
+            if _subj_df.empty:
+                _detail = pd.DataFrame({"Student": _all_active_names, "Subjects": ["—"] * len(_all_active_names)})
             else:
-                st.info("No subject data available for this tutor.")
+                _grouped = (_subj_df.groupby("Student")["Subject"]
+                            .apply(lambda x: ", ".join(sorted(x.unique())))
+                            .reset_index()
+                            .rename(columns={"Subject": "Subjects"}))
+                _missing = pd.DataFrame({
+                    "Student": [n for n in _all_active_names if n not in _grouped["Student"].values],
+                    "Subjects": "—"
+                })
+                _detail = pd.concat([_grouped, _missing], ignore_index=True).sort_values("Student")
+
+            col1, col2 = st.columns([1, 2])
+            with col1:
+                st.markdown("**Subject Summary**")
+                if not _subj_df.empty:
+                    _summary = (_subj_df.groupby(["Subject","Type"])["Student"]
+                                .nunique().reset_index()
+                                .rename(columns={"Student":"# Students"})
+                                .sort_values(["Type","# Students"], ascending=[True, False]))
+                    st.dataframe(_summary, use_container_width=True, hide_index=True)
+                else:
+                    st.info("No subjects entered for active students.")
+            with col2:
+                st.markdown("**Student → Subjects**")
+                st.dataframe(_detail, use_container_width=True, hide_index=True)
 
         st.markdown("---")
 
