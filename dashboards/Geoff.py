@@ -4357,23 +4357,26 @@ def render_app(config):
         with st.expander("View subject breakdown", expanded=False):
             _subj_rows = []
 
-            # Academic subjects — use all active students' study areas directly
+            # Academic subjects — query study areas for all active students by name
             try:
-                _active_sids = p_arch["student_id"].dropna().unique().tolist() if p_arch is not None and not p_arch.empty else []
-                if _active_sids:
+                _active_names = []
+                if p_arch is not None and not p_arch.empty and "student_name" in p_arch.columns:
+                    _active_names = p_arch["student_name"].dropna().unique().tolist()
+                elif p_grades is not None and not p_grades.empty and "student_name" in p_grades.columns:
+                    _active_names = p_grades["student_name"].dropna().unique().tolist()
+
+                if _active_names:
                     _sa_conn = get_redshift_connection()
-                    _sid_list = ",".join(str(int(s)) for s in _active_sids)
+                    _name_list = ",".join(f"'{n.replace(chr(39), chr(39)+chr(39))}'" for n in _active_names)
                     _sa_q = f"""
                         SELECT DISTINCT
                             su.first_name||' '||su.last_name AS student_name,
-                            sub.name AS subject,
-                            cat.name AS category
+                            sub.name AS subject
                         FROM orbit_stitch.study_areas sa
                         JOIN dw.subjects sub ON sa.subject_id = sub.id
-                        JOIN dw.categories cat ON sub.category_id = cat.id
                         JOIN dw.students st ON sa.student_id = st.id
                         JOIN dw.users su ON st.user_id = su.id
-                        WHERE sa.student_id IN ({_sid_list})
+                        WHERE su.first_name||' '||su.last_name IN ({_name_list})
                           AND sa.archived_at IS NULL
                           AND sa._sdc_deleted_at IS NULL
                           AND sub.category_id IN (1,2,3,4,5,8,9,10,11)
@@ -4387,15 +4390,7 @@ def render_app(config):
                             "Subject": row["subject"],
                             "Type": "Academic"
                         })
-                elif p_grades is not None and not p_grades.empty:
-                    for _, row in p_grades[["student_name","subject"]].dropna().drop_duplicates().iterrows():
-                        _subj_rows.append({
-                            "Student": row["student_name"],
-                            "Subject": row["subject"],
-                            "Type": "Academic"
-                        })
             except Exception:
-                # Fallback to grades data
                 if p_grades is not None and not p_grades.empty:
                     for _, row in p_grades[["student_name","subject"]].dropna().drop_duplicates().iterrows():
                         _subj_rows.append({
