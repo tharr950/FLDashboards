@@ -142,6 +142,7 @@ def load_archivable_unscheduled():
     query = """
         with cte_courses as (
         select dw.courses.id as course_id,
+        dw.students.id as student_id,
         student_users.first_name|| ' '|| student_users.last_name AS student_name,
         dw.brands.name as brand,
         round(dw.courses.provisioned_duration/60.00,2) as provisioned_hours,
@@ -154,12 +155,12 @@ def load_archivable_unscheduled():
         join dw.brands on dw.courses.brand_id = dw.brands.id
         left join dw.sessions on dw.courses.id = dw.sessions.course_id
         where 1=1 and dw.courses.brand_id in (2,41,42,43)
-        group by 1,2,3,4,5,6)
+        group by 1,2,3,4,5,6,7)
         select dw.tutoring_histories.tutor_id as tutor_id,
         tutor_users.first_name||' '||tutor_users.last_name AS tutor_name,
         dw.tiers.name as tier, dw.teams.name as team_name,
-        cte_courses.course_id as course_id, cte_courses.brand,
-        cte_courses.student_name,
+        cte_courses.course_id as course_id, cte_courses.student_id,
+        cte_courses.brand, cte_courses.student_name,
         min(dw.sessions.starts_at) as first_session_day,
         max(dw.sessions.starts_at) as last_session_day,
         max(dw.sessions.starts_at) < (getdate() -30) as should_archive,
@@ -179,7 +180,7 @@ def load_archivable_unscheduled():
         where 1=1 and dw.tutoring_histories.active = true
         AND dw.employees.end_date IS NULL AND dw.enrollments.unenrolled_at IS NULL
         AND dw.team_members.member_type = 'Employee'
-        group by 1,2,3,4,5,6,7,11,12 order by unscheduled_hours
+        group by 1,2,3,4,5,6,7,8,12,13 order by unscheduled_hours
     """
     if FORCE_CACHE_MODE:
         try: conn.close()
@@ -4357,17 +4358,16 @@ def render_app(config):
         with st.expander("View subject breakdown", expanded=False):
             _subj_rows = []
 
-            # Academic subjects — query study areas for all active students by name
+            # Academic subjects — query study areas using student_id for accuracy
             try:
-                _active_names = []
-                if p_arch is not None and not p_arch.empty and "student_name" in p_arch.columns:
-                    _active_names = p_arch["student_name"].dropna().unique().tolist()
-                elif p_grades is not None and not p_grades.empty and "student_name" in p_grades.columns:
-                    _active_names = p_grades["student_name"].dropna().unique().tolist()
+                _active_sids = []
+                if p_arch is not None and not p_arch.empty and "student_id" in p_arch.columns:
+                    # Only non-archivable students
+                    _active_sids = p_arch[p_arch["should_archive"] == False]["student_id"].dropna().unique().tolist()
 
-                if _active_names:
+                if _active_sids:
                     _sa_conn = get_redshift_connection()
-                    _name_list = ",".join(f"'{n.replace(chr(39), chr(39)+chr(39))}'" for n in _active_names)
+                    _sid_list = ",".join(str(int(s)) for s in _active_sids)
                     _sa_q = f"""
                         SELECT DISTINCT
                             su.first_name||' '||su.last_name AS student_name,
@@ -4376,7 +4376,7 @@ def render_app(config):
                         JOIN dw.subjects sub ON sa.subject_id = sub.id
                         JOIN dw.students st ON sa.student_id = st.id
                         JOIN dw.users su ON st.user_id = su.id
-                        WHERE su.first_name||' '||su.last_name IN ({_name_list})
+                        WHERE sa.student_id IN ({_sid_list})
                           AND sa.archived_at IS NULL
                           AND sa._sdc_deleted_at IS NULL
                           AND sub.category_id IN (1,2,3,4,5,8,9,10,11)
@@ -4399,7 +4399,10 @@ def render_app(config):
                             "Type": "Academic"
                         })
 
-            # Test prep from exam data
+            # Test prep from exam data — only active (non-archivable) students
+            _active_student_names = set(
+                p_arch[p_arch["should_archive"] == False]["student_name"].dropna().unique().tolist()
+            ) if p_arch is not None and not p_arch.empty and "should_archive" in p_arch.columns else set()
             if p_exam is not None and not p_exam.empty:
                 _tp_map = {
                     "SAT": "SAT", "Digital SAT": "SAT", "Paper SAT": "SAT",
@@ -4409,6 +4412,8 @@ def render_app(config):
                     "Paper PSAT/NMSQT": "PSAT", "Paper PSAT 8/9": "PSAT",
                 }
                 for _, row in p_exam[["student_name","subject"]].dropna().drop_duplicates().iterrows():
+                    if _active_student_names and row["student_name"] not in _active_student_names:
+                        continue
                     mapped = _tp_map.get(str(row["subject"]), str(row["subject"]))
                     _subj_rows.append({
                         "Student": row["student_name"],

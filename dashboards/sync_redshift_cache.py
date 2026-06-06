@@ -82,6 +82,7 @@ QUERIES = {
         """
         WITH cte_courses AS (
             SELECT dw.courses.id AS course_id,
+                dw.students.id AS student_id,
                 student_users.first_name||' '||student_users.last_name AS student_name,
                 dw.brands.name AS brand,
                 ROUND(dw.courses.provisioned_duration/60.00,2) AS provisioned_hours,
@@ -94,7 +95,7 @@ QUERIES = {
             JOIN dw.brands ON dw.courses.brand_id = dw.brands.id
             LEFT JOIN dw.sessions ON dw.courses.id = dw.sessions.course_id
             WHERE dw.courses.brand_id IN (2,41,42,43)
-            GROUP BY 1,2,3,4,5,6
+            GROUP BY 1,2,3,4,5,6,7
         )
         SELECT dw.tutoring_histories.tutor_id AS tutor_id,
             tutor_users.first_name||' '||tutor_users.last_name AS tutor_name,
@@ -102,6 +103,7 @@ QUERIES = {
             dw.tiers.name AS tier,
             dw.teams.name AS team_name,
             cte_courses.course_id,
+            cte_courses.student_id,
             cte_courses.brand,
             cte_courses.student_name,
             MIN(dw.sessions.starts_at) AS first_session_day,
@@ -129,7 +131,7 @@ QUERIES = {
           AND dw.employees.end_date IS NULL
           AND dw.enrollments.unenrolled_at IS NULL
           AND dw.team_members.member_type = 'Employee'
-        GROUP BY 1,2,3,4,5,6,7,8,12,13
+        GROUP BY 1,2,3,4,5,6,7,8,9,13,14
         ORDER BY unscheduled_hours
         """
     ),
