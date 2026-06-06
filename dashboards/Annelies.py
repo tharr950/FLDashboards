@@ -4356,6 +4356,10 @@ def render_app(config):
         # ── Subject & Student Breakdown ───────────────────────────────────
         st.markdown("### 📚 Subjects by Student")
         with st.expander("View subject breakdown", expanded=False):
+            # Build active student list FIRST before any filtering
+            _active_arch = p_arch[p_arch["should_archive"] != True] if p_arch is not None and not p_arch.empty else pd.DataFrame()
+            _all_active_names = sorted(_active_arch["student_name"].dropna().unique().tolist()) if not _active_arch.empty else []
+
             _subj_rows = []
 
             # Query subjects from session allotments — tutor-specific, last 45 days
@@ -4409,10 +4413,7 @@ def render_app(config):
                     for _, row in p_grades[["student_name","subject"]].dropna().drop_duplicates().iterrows():
                         _subj_rows.append({"Student": row["student_name"], "Subject": row["subject"], "Type": "Academic"})
 
-            # Build complete student list from active (non-archivable) students — same as Active by Brand
-            _active_arch = p_arch[p_arch["should_archive"] != True] if p_arch is not None and not p_arch.empty else pd.DataFrame()
-            _all_active_names = sorted(_active_arch["student_name"].dropna().unique().tolist()) if not _active_arch.empty else []
-            _all_active_sids  = set(_active_arch["student_id"].dropna().unique().tolist()) if not _active_arch.empty and "student_id" in _active_arch.columns else set()
+            # _all_active_names already defined above
 
             _subj_df = pd.DataFrame(_subj_rows).drop_duplicates() if _subj_rows else pd.DataFrame(columns=["Student","Subject","Type"])
 
