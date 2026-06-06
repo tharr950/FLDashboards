@@ -5100,21 +5100,23 @@ def render_app(config):
         else:
             trend_metric_v = st.selectbox(
                 "Trend metric",
-                ["pct_with_video","videos_found","updates_sent","median_secs"],
+                ["parent_update_pct","pct_with_video","videos_found","updates_sent","median_secs"],
                 format_func=lambda x: {
-                    "pct_with_video": "% With Video",
-                    "videos_found":   "Videos Found",
-                    "updates_sent":   "Updates Sent",
-                    "median_secs":    "Median Duration (secs)",
+                    "parent_update_pct": "% Parent Updates Sent on Time",
+                    "pct_with_video":    "% With Video",
+                    "videos_found":      "Videos Found",
+                    "updates_sent":      "Updates Sent",
+                    "median_secs":       "Median Duration (secs)",
                 }[x], key="video_trend_metric"
             )
+            _tutor_opts_trend = sorted(video_snap["tutor_name"].dropna().unique().tolist())
             trend_tutor_v = st.selectbox(
-                "Filter by tutor (optional)",
-                ["All Tutors"] + sorted(video_snap["tutor_name"].dropna().unique().tolist()),
+                "Filter by tutor",
+                ["All Tutors"] + _tutor_opts_trend,
+                index=1 if _tutor_opts_trend else 0,
                 key="video_trend_tutor"
             )
-            tutors_to_plot = [trend_tutor_v] if trend_tutor_v != "All Tutors" else \
-                              sorted(video_snap["tutor_name"].dropna().unique().tolist())
+            tutors_to_plot = [trend_tutor_v] if trend_tutor_v != "All Tutors" else _tutor_opts_trend
             for tutor in tutors_to_plot:
                 tsnap_v = video_snap[video_snap["tutor_name"] == tutor].sort_values("week_date")
                 if len(tsnap_v) < 2:
@@ -5125,7 +5127,7 @@ def render_app(config):
                                  markers=True,
                                  title=f"{tutor} — {trend_metric_v.replace('_',' ').title()} Week over Week",
                                  color_discrete_sequence=["#7b2d8b"])
-                if trend_metric_v == "pct_with_video":
+                if trend_metric_v in ("pct_with_video", "parent_update_pct"):
                     fig_vt.add_hline(y=80, line_dash="dash", line_color="#cc0000",
                                      annotation_text="80% threshold")
                 fig_vt.update_layout(
@@ -5139,9 +5141,23 @@ def render_app(config):
 
         # Row-level detail
         st.markdown("### 🔍 Row-Level Detail")
-        tutor_opts_v = ["All Tutors"] + sorted(annelies_tutors)
-        sel_tutor_v  = st.selectbox("Filter by Tutor", tutor_opts_v, key="video_tutor_filter")
-        view_video_df = team_video_df.copy()
+        st.caption("Use the filters below to quickly browse by tutor and week without reloading the full page.")
+        _det_col1, _det_col2 = st.columns(2)
+        with _det_col1:
+            tutor_opts_v = ["All Tutors"] + sorted(annelies_tutors)
+            sel_tutor_v  = st.selectbox("Filter by Tutor", tutor_opts_v, key="video_tutor_filter")
+        with _det_col2:
+            _det_week_opts = sorted(_all_video_df["week of"].dropna().unique(), reverse=True)
+            _det_week_labels = {w: f"Week of {w.strftime('%b %d, %Y')}" for w in _det_week_opts}
+            sel_det_week_v = st.selectbox(
+                "Filter by Week",
+                options=_det_week_opts,
+                format_func=lambda w: _det_week_labels[w],
+                index=list(_det_week_opts).index(_selected_week_v) if _selected_week_v in _det_week_opts else 0,
+                key="video_detail_week"
+            )
+        view_video_df = _all_video_df[_all_video_df["week of"] == sel_det_week_v].copy()
+        view_video_df["duration_secs"] = view_video_df["video duration"].apply(duration_to_secs)
         if sel_tutor_v != "All Tutors":
             view_video_df = view_video_df[view_video_df["tutor"] == sel_tutor_v]
 
