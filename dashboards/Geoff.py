@@ -7369,33 +7369,59 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                 else:
                     ppw_df["_attended"] = True
 
+                # Flag late uploads: has attachment_created_at but attachment_uploaded=0
+                if "attachment_created_at" in ppw_df.columns:
+                    ppw_df["_uploaded_late"] = (
+                        (ppw_df["attachment_uploaded"] == 0) &
+                        ppw_df["attachment_created_at"].notna()
+                    ).astype(int)
+                else:
+                    ppw_df["_uploaded_late"] = 0
+
                 tutor_summary = ppw_df.groupby("tutor_name").agg(
                     First_Sessions=("student_name", "count"),
                     Attended=("_attended", "sum"),
-                    PPWs_Uploaded=("attachment_uploaded", "sum"),
+                    PPWs_On_Time=("attachment_uploaded", "sum"),
+                    PPWs_Late=("_uploaded_late", "sum"),
                 ).reset_index()
-                tutor_summary["% Uploaded (All)"] = (tutor_summary["PPWs_Uploaded"] / tutor_summary["First_Sessions"] * 100).round(1)
+                tutor_summary["PPWs_Any"] = tutor_summary["PPWs_On_Time"] + tutor_summary["PPWs_Late"]
+                tutor_summary["% On Time (All)"] = (tutor_summary["PPWs_On_Time"] / tutor_summary["First_Sessions"] * 100).round(1)
 
-                # % uploaded where session was attended
-                def _pct_attended(tutor):
+                def _pct_on_time_attended(tutor):
                     tdf = ppw_df[ppw_df["tutor_name"] == tutor]
                     attended = tdf[tdf["_attended"] == True]
                     if len(attended) == 0: return None
                     return round(attended["attachment_uploaded"].sum() / len(attended) * 100, 1)
 
-                tutor_summary["% Uploaded (Attended)"] = tutor_summary["tutor_name"].apply(_pct_attended)
+                def _pct_any_attended(tutor):
+                    tdf = ppw_df[ppw_df["tutor_name"] == tutor]
+                    attended = tdf[tdf["_attended"] == True]
+                    if len(attended) == 0: return None
+                    any_upload = attended["attachment_uploaded"].sum() + attended["_uploaded_late"].sum()
+                    return round(any_upload / len(attended) * 100, 1)
+
+                tutor_summary["% On Time (Attended)"] = tutor_summary["tutor_name"].apply(_pct_on_time_attended)
+                tutor_summary["% Any Upload (Attended)"] = tutor_summary["tutor_name"].apply(_pct_any_attended)
                 tutor_summary = tutor_summary.rename(columns={
-                    "tutor_name": "Tutor", "First_Sessions": "First Sessions",
-                    "Attended": "Sessions Attended", "PPWs_Uploaded": "PPWs Uploaded"})
+                    "tutor_name": "Tutor",
+                    "First_Sessions": "First Sessions",
+                    "Attended": "Sessions Attended",
+                    "PPWs_On_Time": "PPWs On Time",
+                    "PPWs_Late": "PPWs Late",
+                    "PPWs_Any": "PPWs Any Upload",
+                })
 
                 def _color_pct(val):
-                    if pd.isna(val): return ""
-                    if val >= 80: color = "#2e7d32"
-                    elif val >= 60: color = "#f57f17"
+                    if pd.isna(val) or val == "None": return ""
+                    try:
+                        v = float(val)
+                    except: return ""
+                    if v >= 80: color = "#2e7d32"
+                    elif v >= 60: color = "#f57f17"
                     else: color = "#c62828"
                     return f"color: {color}; font-weight: bold"
 
-                pct_cols = [c for c in ["% Uploaded (All)","% Uploaded (Attended)"] if c in tutor_summary.columns]
+                pct_cols = [c for c in ["% On Time (All)","% On Time (Attended)","% Any Upload (Attended)"] if c in tutor_summary.columns]
                 st.dataframe(tutor_summary.style.map(_color_pct, subset=pct_cols),
                              use_container_width=True, hide_index=True)
                 st.divider()
@@ -7409,7 +7435,17 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                                               "attachment_created_at"] if c in detail_df.columns]
                 display = detail_df[_disp_cols].sort_values(["tutor_name","student_name"]).copy()
                 display["starts_at"] = pd.to_datetime(display["starts_at"]).dt.strftime("%m/%d/%Y")
-                display["attachment_uploaded"] = display["attachment_uploaded"].map({1: "✅", 0: "❌"})
+                if "attachment_created_at" in display.columns:
+                    def _ppw_status(row):
+                        if row.get("PPW Uploaded") == 1 or row.get("attachment_uploaded") == 1:
+                            return "✅ On Time"
+                        elif pd.notna(row.get("PPW Uploaded At")) and str(row.get("PPW Uploaded At","")) not in ("","nan","NaT"):
+                            return "⚠️ Late"
+                        return "❌ Not Uploaded"
+                    display["PPW Status"] = display.apply(_ppw_status, axis=1)
+                    display = display.drop(columns=["attachment_uploaded"], errors="ignore")
+                else:
+                    display["attachment_uploaded"] = display["attachment_uploaded"].map({1: "✅ On Time", 0: "❌ Not Uploaded"})
                 if "attachment_created_at" in display.columns:
                     display["attachment_created_at"] = pd.to_datetime(display["attachment_created_at"], errors="coerce").dt.strftime("%m/%d/%Y %H:%M")
                 display = display.rename(columns={
