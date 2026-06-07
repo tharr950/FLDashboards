@@ -7363,21 +7363,40 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                 st.divider()
 
                 st.subheader("By Tutor")
+                # attended = attendances_attended_count > 0
+                if "attendances_attended_count" in ppw_df.columns:
+                    ppw_df["_attended"] = ppw_df["attendances_attended_count"].fillna(0).astype(int) > 0
+                else:
+                    ppw_df["_attended"] = True
+
                 tutor_summary = ppw_df.groupby("tutor_name").agg(
                     First_Sessions=("student_name", "count"),
+                    Attended=("_attended", "sum"),
                     PPWs_Uploaded=("attachment_uploaded", "sum"),
                 ).reset_index()
-                tutor_summary["% Uploaded"] = (tutor_summary["PPWs_Uploaded"] / tutor_summary["First_Sessions"] * 100).round(1)
+                tutor_summary["% Uploaded (All)"] = (tutor_summary["PPWs_Uploaded"] / tutor_summary["First_Sessions"] * 100).round(1)
+
+                # % uploaded where session was attended
+                def _pct_attended(tutor):
+                    tdf = ppw_df[ppw_df["tutor_name"] == tutor]
+                    attended = tdf[tdf["_attended"] == True]
+                    if len(attended) == 0: return None
+                    return round(attended["attachment_uploaded"].sum() / len(attended) * 100, 1)
+
+                tutor_summary["% Uploaded (Attended)"] = tutor_summary["tutor_name"].apply(_pct_attended)
                 tutor_summary = tutor_summary.rename(columns={
-                    "tutor_name": "Tutor", "First_Sessions": "First Sessions", "PPWs_Uploaded": "PPWs Uploaded"})
+                    "tutor_name": "Tutor", "First_Sessions": "First Sessions",
+                    "Attended": "Sessions Attended", "PPWs_Uploaded": "PPWs Uploaded"})
 
                 def _color_pct(val):
+                    if pd.isna(val): return ""
                     if val >= 80: color = "#2e7d32"
                     elif val >= 60: color = "#f57f17"
                     else: color = "#c62828"
                     return f"color: {color}; font-weight: bold"
 
-                st.dataframe(tutor_summary.style.map(_color_pct, subset=["% Uploaded"]),
+                pct_cols = [c for c in ["% Uploaded (All)","% Uploaded (Attended)"] if c in tutor_summary.columns]
+                st.dataframe(tutor_summary.style.map(_color_pct, subset=pct_cols),
                              use_container_width=True, hide_index=True)
                 st.divider()
 
