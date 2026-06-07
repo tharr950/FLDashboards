@@ -922,12 +922,14 @@ def load_ppw_data(start_date: str, end_date: str, team_name: str):
             employees.id AS tutor_id,
             tutor_users.first_name||' '||tutor_users.last_name AS tutor_name,
             student_users.first_name||' '||student_users.last_name AS student_name,
+            sessions.attendances_attended_count,
             CASE
                 WHEN orbit_stitch.attachments.updated_at IS NOT NULL
                 AND (EXTRACT(DAY FROM (orbit_stitch.attachments.created_at - courses.starts_at))*24
                      + EXTRACT(HOUR FROM (orbit_stitch.attachments.created_at - courses.starts_at)) < 72)
                 THEN 1 ELSE 0
-            END AS attachment_uploaded
+            END AS attachment_uploaded,
+            orbit_stitch.attachments.created_at AS attachment_created_at
         FROM first_course
         JOIN dw.students ON first_course.student_id = students.id
         JOIN dw.users student_users ON students.user_id = student_users.id
@@ -7383,12 +7385,20 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                 tutor_list = ["All Tutors"] + sorted(ppw_df["tutor_name"].unique().tolist())
                 selected_tutor = st.selectbox("Filter by Tutor", tutor_list)
                 detail_df = ppw_df if selected_tutor == "All Tutors" else ppw_df[ppw_df["tutor_name"] == selected_tutor]
-                display = detail_df[["tutor_name","student_name","brand","starts_at","attachment_uploaded"]].sort_values(["tutor_name","student_name"]).copy()
+                _disp_cols = [c for c in ["tutor_name","student_name","brand","starts_at",
+                                              "attendances_attended_count","attachment_uploaded",
+                                              "attachment_created_at"] if c in detail_df.columns]
+                display = detail_df[_disp_cols].sort_values(["tutor_name","student_name"]).copy()
                 display["starts_at"] = pd.to_datetime(display["starts_at"]).dt.strftime("%m/%d/%Y")
                 display["attachment_uploaded"] = display["attachment_uploaded"].map({1: "✅", 0: "❌"})
+                if "attachment_created_at" in display.columns:
+                    display["attachment_created_at"] = pd.to_datetime(display["attachment_created_at"], errors="coerce").dt.strftime("%m/%d/%Y %H:%M")
                 display = display.rename(columns={
                     "tutor_name": "Tutor", "student_name": "Student",
-                    "brand": "Brand", "starts_at": "Course Start", "attachment_uploaded": "PPW Uploaded"})
+                    "brand": "Brand", "starts_at": "Course Start",
+                    "attendances_attended_count": "Attended",
+                    "attachment_uploaded": "PPW Uploaded",
+                    "attachment_created_at": "PPW Uploaded At"})
                 st.dataframe(display, use_container_width=True, hide_index=True)
 
     # ─────────────────────────────────────────────
