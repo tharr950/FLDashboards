@@ -7435,17 +7435,19 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                                               "attachment_created_at"] if c in detail_df.columns]
                 display = detail_df[_disp_cols].sort_values(["tutor_name","student_name"]).copy()
                 display["starts_at"] = pd.to_datetime(display["starts_at"]).dt.strftime("%m/%d/%Y")
-                if "attachment_created_at" in display.columns:
-                    def _ppw_status(row):
-                        if row.get("PPW Uploaded") == 1 or row.get("attachment_uploaded") == 1:
-                            return "✅ On Time"
-                        elif pd.notna(row.get("PPW Uploaded At")) and str(row.get("PPW Uploaded At","")) not in ("","nan","NaT"):
-                            return "⚠️ Late"
-                        return "❌ Not Uploaded"
-                    display["PPW Status"] = display.apply(_ppw_status, axis=1)
-                    display = display.drop(columns=["attachment_uploaded"], errors="ignore")
-                else:
-                    display["attachment_uploaded"] = display["attachment_uploaded"].map({1: "✅ On Time", 0: "❌ Not Uploaded"})
+                # Compute PPW status before renaming columns
+                _au_col = "attachment_uploaded" if "attachment_uploaded" in display.columns else None
+                _ac_col = "attachment_created_at" if "attachment_created_at" in display.columns else None
+                def _ppw_status(row):
+                    on_time = row.get("attachment_uploaded", 0) == 1
+                    has_upload_date = _ac_col and pd.notna(row.get("attachment_created_at")) and str(row.get("attachment_created_at","")) not in ("","nan","NaT","None")
+                    if on_time:
+                        return "✅ On Time"
+                    elif has_upload_date:
+                        return "⚠️ Late"
+                    return "❌ Not Uploaded"
+                display["PPW Status"] = display.apply(_ppw_status, axis=1)
+                display = display.drop(columns=["attachment_uploaded"], errors="ignore")
                 if "attachment_created_at" in display.columns:
                     display["attachment_created_at"] = pd.to_datetime(display["attachment_created_at"], errors="coerce").dt.strftime("%m/%d/%Y %H:%M")
                 display = display.rename(columns={
