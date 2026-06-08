@@ -637,80 +637,74 @@ def push_to_github(csv_content: str) -> None:
 
 
 def push_history_to_github(df: pd.DataFrame) -> None:
-    """Append this week's rows to the cumulative history file on GitHub."""
+    """Append this week's rows to the cumulative history file using git clone/push."""
     if not GITHUB_TOKEN or not GITHUB_REPO:
         log.warning("GITHUB_TOKEN or GITHUB_REPO not set — skipping history push.")
         return
 
-    hist_path = "data/parent_update_videos_history.csv"
-    api_url   = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{hist_path}"
-    headers   = {"Authorization": f"token {GITHUB_TOKEN}",
-                 "Accept": "application/vnd.github.v3+json"}
+    import subprocess, tempfile, shutil
 
-    # Fetch existing history
-    existing_df = pd.DataFrame()
-    existing_sha = None
-    r = requests.get(api_url, headers=headers, timeout=15)
-    if r.status_code == 200:
-        existing_sha = r.json().get("sha")
-        import base64, io
-        csv_bytes = base64.b64decode(r.json()["content"])
-        if not csv_bytes.strip():
-            # File exists but is empty — this means history was wiped, abort to prevent data loss
-            log.error("History file on GitHub is empty (0 bytes) — ABORTING history push to prevent data loss. Manual restore required.")
+    week_of = df["week of"].iloc[0] if "week of" in df.columns and not df.empty else "unknown"
+    clone_dir = tempfile.mkdtemp(prefix="fl_history_")
+
+    try:
+        # Clone the repo
+        clone_url = f"https://{GITHUB_TOKEN}@github.com/{GITHUB_REPO}.git"
+        r = subprocess.run(["git", "clone", "--depth=1", clone_url, clone_dir],
+                           capture_output=True, text=True, timeout=60)
+        if r.returncode != 0:
+            log.error(f"Git clone failed: {r.stderr}")
             return
-        else:
+
+        hist_file = os.path.join(clone_dir, "data", "parent_update_videos_history.csv")
+
+        # Read existing history
+        existing_df = pd.DataFrame()
+        if os.path.exists(hist_file):
             try:
-                existing_df = pd.read_csv(io.StringIO(csv_bytes.decode("utf-8")))
+                existing_df = pd.read_csv(hist_file)
                 if existing_df.empty:
-                    log.warning("History file parsed but has no rows — starting fresh")
-            except Exception as _e:
-                log.error(f"Failed to parse existing history CSV: {_e} — aborting history push to avoid data loss")
-                return
+                    log.warning("History file exists but is empty — will write current week only.")
+                else:
+                    log.info(f"Read {len(existing_df)} existing history rows.")
+            except Exception as e:
+                log.warning(f"Could not parse history file: {e} — starting fresh.")
 
-    # Get this week's date to dedup
-    week_of = df["week of"].iloc[0] if "week of" in df.columns and not df.empty else None
+        # Dedup and append
+        if not existing_df.empty and "week of" in existing_df.columns:
+            existing_df = existing_df[existing_df["week of"].astype(str) != str(week_of)]
+        updated_df = pd.concat([existing_df, df], ignore_index=True) if not existing_df.empty else df
 
-    # Remove existing rows for this week (dedup)
-    if not existing_df.empty and week_of and "week of" in existing_df.columns:
-        existing_df = existing_df[existing_df["week of"].astype(str) != str(week_of)]
+        if len(updated_df) == 0:
+            log.error("ABORTING — updated_df is empty, refusing to push.")
+            return
 
-    # Append
-    updated_df  = pd.concat([existing_df, df], ignore_index=True) if not existing_df.empty else df
-    csv_content = updated_df.to_csv(index=False)
+        # Write file
+        updated_df.to_csv(hist_file, index=False)
+        log.info(f"Wrote {len(updated_df)} rows to history file.")
 
-    import base64
-    encoded = base64.b64encode(csv_content.encode("utf-8")).decode("utf-8")
-    payload = {
-        "message": f"history: parent update videos {week_of}",
-        "content": encoded,
-    }
-    if existing_sha:
-        payload["sha"] = existing_sha
+        # Commit and push
+        subprocess.run(["git", "-C", clone_dir, "config", "user.email", "sync@revolutionprep.com"], capture_output=True)
+        subprocess.run(["git", "-C", clone_dir, "config", "user.name", "sync"], capture_output=True)
+        subprocess.run(["git", "-C", clone_dir, "add", "data/parent_update_videos_history.csv"], capture_output=True)
+        
+        r2 = subprocess.run(["git", "-C", clone_dir, "commit", "-m", f"history: parent update videos {week_of}"],
+                            capture_output=True, text=True)
+        if "nothing to commit" in r2.stdout:
+            log.info("No changes to history file — already up to date.")
+            return
 
-    # Final safety check — never push empty content
-    if not csv_content.strip() or len(updated_df) == 0:
-        log.error("ABORTING history push — updated_df is empty, refusing to push.")
-        return
+        r3 = subprocess.run(["git", "-C", clone_dir, "push"], capture_output=True, text=True, timeout=60)
+        if r3.returncode != 0:
+            log.error(f"Git push failed: {r3.stderr}")
+            return
 
-    for _attempt in range(3):
-        # Re-fetch SHA immediately before PUT to avoid 409 conflicts
-        _r2 = requests.get(api_url, headers=headers, timeout=15)
-        if _r2.status_code == 200:
-            _refetch_content = base64.b64decode(_r2.json().get("content", ""))
-            if _refetch_content.strip() and len(_refetch_content) > len(csv_content.encode("utf-8")):
-                log.error(f"Re-fetched history is larger than what we are about to push — aborting to prevent data loss.")
-                return
-            payload["sha"] = _r2.json().get("sha")
-        r = requests.put(api_url, headers=headers, json=payload, timeout=30)
-        if r.status_code in (200, 201):
-            break
-        if r.status_code == 409 and _attempt < 2:
-            log.warning(f"409 conflict on history push — retrying ({_attempt+1}/3)")
-            time.sleep(3)
-            continue
-        r.raise_for_status()
-    log.info(f"History pushed → {GITHUB_REPO}/{hist_path} ({len(updated_df)} total rows)")
+        log.info(f"History pushed → {GITHUB_REPO}/data/parent_update_videos_history.csv ({len(updated_df)} total rows)")
+
+    except Exception as e:
+        log.error(f"push_history_to_github failed: {e}")
+    finally:
+        shutil.rmtree(clone_dir, ignore_errors=True)
 
 
 def save_results(df: pd.DataFrame) -> None:
@@ -719,6 +713,7 @@ def save_results(df: pd.DataFrame) -> None:
         f.write(csv_content)
     log.info(f"Saved locally -> {OUTPUT_FILE}")
     push_to_github(csv_content)
+    time.sleep(5)  # Wait to avoid GitHub race condition between pushes
     push_history_to_github(df)
 
 # ─────────────────────────────────────────────────────────────────────────────
