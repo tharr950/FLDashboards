@@ -2914,9 +2914,9 @@ def render_app(config):
                     return (pd.notna(r["sat_math"]) and r["sat_math"] >= 300 and
                             pd.notna(r["sat_rw"]) and r["sat_rw"] >= 300)
                 def act_composite_ok(r):
-                    return ((pd.isna(r["act_english"]) or r["act_english"] >= 10) and
-                            (pd.isna(r["act_math"]) or r["act_math"] >= 10) and
-                            (pd.isna(r["act_reading"]) or r["act_reading"] >= 10))
+                    return (pd.notna(r["act_english"]) and r["act_english"] >= 10 and
+                            pd.notna(r["act_math"])    and r["act_math"]    >= 10 and
+                            pd.notna(r["act_reading"]) and r["act_reading"] >= 10)
                 home_exam_df["exam_valid_composite"] = home_exam_df.apply(
                     lambda r: (pd.isna(r.get("attempt")) or str(r.get("attempt","")) in ("1","1.0","n/a","nan")) and (
                         sat_composite_ok(r) if r["exam_family"] == "SAT/PSAT"
@@ -3573,9 +3573,9 @@ def render_app(config):
                     return (pd.notna(r["sat_math"]) and r["sat_math"] >= 300 and
                             pd.notna(r["sat_rw"])   and r["sat_rw"]   >= 300)
                 def _act_ok(r):
-                    return ((pd.isna(r["act_english"]) or r["act_english"] >= 10) and
-                            (pd.isna(r["act_math"])    or r["act_math"]    >= 10) and
-                            (pd.isna(r["act_reading"]) or r["act_reading"] >= 10))
+                    return (pd.notna(r["act_english"]) and r["act_english"] >= 10 and
+                            pd.notna(r["act_math"])    and r["act_math"]    >= 10 and
+                            pd.notna(r["act_reading"]) and r["act_reading"] >= 10)
                 wl_exam_df["exam_valid_composite"] = wl_exam_df.apply(
                     lambda r: (pd.isna(r.get("attempt")) or str(r.get("attempt","")) in ("1","1.0","n/a","nan")) and (
                         _sat_ok(r) if r["exam_family"] == "SAT/PSAT"
@@ -5815,22 +5815,26 @@ def render_app(config):
             (team_exam_df["attempt"].astype(str) != "n/a"))
 
         def sat_section_valid(row):
+            has_score = not pd.isna(row.get("score"))
             return {
                 "sat_math_valid": not pd.isna(row["sat_math"]) and row["sat_math"] >= 300,
                 "sat_rw_valid":   not pd.isna(row["sat_rw"])   and row["sat_rw"]   >= 300,
                 "sat_composite_valid": (
+                    has_score and
                     not pd.isna(row["sat_math"]) and row["sat_math"] >= 300 and
                     not pd.isna(row["sat_rw"])   and row["sat_rw"]   >= 300
                 )
             }
 
         def act_section_valid(row):
+            has_score = not pd.isna(row.get("score"))
             return {
                 "act_english_valid": not pd.isna(row["act_english"]) and row["act_english"] >= 10,
                 "act_math_valid":    not pd.isna(row["act_math"])    and row["act_math"]    >= 10,
                 "act_reading_valid": not pd.isna(row["act_reading"]) and row["act_reading"] >= 10,
                 "act_science_valid": pd.isna(row["act_science"])     or row["act_science"]  >= 10,
                 "act_composite_valid": (
+                    has_score and
                     (pd.isna(row["act_english"]) or row["act_english"] >= 10) and
                     (pd.isna(row["act_math"])    or row["act_math"]    >= 10) and
                     (pd.isna(row["act_reading"]) or row["act_reading"] >= 10)
