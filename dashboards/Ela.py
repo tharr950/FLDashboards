@@ -4987,17 +4987,14 @@ def render_app(config):
         st.sidebar.markdown(f"🕐 **Video data last updated**  \n{video_fetched_at}")
 
         # Load from history if available, fall back to current week
+        # Filter by CURRENT team roster (not historical faculty leader value),
+        # so a tutor who has moved teams shows full history under their current team only.
         _vid_history = load_parent_update_history()
-        if not _vid_history.empty and "faculty leader" in _vid_history.columns:
-            _all_video_df = _vid_history[
-                (_vid_history["faculty leader"] == "Team Cross") &
-                (_vid_history["tutor"] != "Ela Cross")
-            ].copy()
+        _current_roster = set(annelies_tutors)
+        if not _vid_history.empty and "tutor" in _vid_history.columns:
+            _all_video_df = _vid_history[_vid_history["tutor"].isin(_current_roster)].copy()
         else:
-            _all_video_df = raw_video_df[
-                (raw_video_df["faculty leader"] == "Team Cross") &
-                (raw_video_df["tutor"] != "Ela Cross")
-            ].copy()
+            _all_video_df = raw_video_df[raw_video_df["tutor"].isin(_current_roster)].copy()
 
         if _all_video_df.empty:
             st.warning("No parent update rows found for Team Cross.")

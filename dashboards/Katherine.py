@@ -4988,16 +4988,11 @@ def render_app(config):
 
         # Load from history if available, fall back to current week
         _vid_history = load_parent_update_history()
-        if not _vid_history.empty and "faculty leader" in _vid_history.columns:
-            _all_video_df = _vid_history[
-                (_vid_history["faculty leader"] == "Team Marino") &
-                (_vid_history["tutor"] != "Katherine Marino")
-            ].copy()
+        _current_roster = set(annelies_tutors)
+        if not _vid_history.empty and "tutor" in _vid_history.columns:
+            _all_video_df = _vid_history[_vid_history["tutor"].isin(_current_roster)].copy()
         else:
-            _all_video_df = raw_video_df[
-                (raw_video_df["faculty leader"] == "Team Marino") &
-                (raw_video_df["tutor"] != "Katherine Marino")
-            ].copy()
+            _all_video_df = raw_video_df[raw_video_df["tutor"].isin(_current_roster)].copy()
 
         if _all_video_df.empty:
             st.warning("No parent update rows found for Team Marino.")
