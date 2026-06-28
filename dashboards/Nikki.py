@@ -5190,12 +5190,21 @@ def render_app(config):
 
         st.divider()
 
-        # Trends over time
+        # Trends over time — computed live from history (same source as table), never from saved snapshots
         st.markdown("### 📅 Trends Over Time")
-        video_snap = load_video_snapshots()
-        if video_snap.empty:
+        _trend_weeks = sorted(_all_video_df["week of"].dropna().unique())
+        if len(_trend_weeks) < 2:
             st.caption("No historical data yet — trends will build automatically each week.")
         else:
+            _trend_rows = []
+            for _wk in _trend_weeks:
+                _wk_df = _all_video_df[_all_video_df["week of"] == _wk].copy()
+                _wk_df["duration_secs"] = _wk_df["video duration"].apply(duration_to_secs)
+                _wk_summary = build_video_tutor_summary(_wk_df)
+                _wk_summary["week_date"] = pd.to_datetime(_wk)
+                _trend_rows.append(_wk_summary)
+            video_snap = pd.concat(_trend_rows, ignore_index=True) if _trend_rows else pd.DataFrame()
+
             trend_metric_v = st.selectbox(
                 "Trend metric",
                 ["parent_update_pct","pct_with_video","videos_found","updates_sent","median_secs"],
