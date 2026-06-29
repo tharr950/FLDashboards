@@ -764,15 +764,24 @@ def load_ar_kpi(start, end):
 
 @st.cache_data(ttl=3600)
 def load_low_delivery_not_accepting(faculty_leader: str):
-    """Tutors with accepting off and low delivery in next 3 weeks."""
+    """Tutors with low delivery in next 3 weeks, not accepting new students.
+
+    Trigger logic by tier:
+      - Distinguished / Premium: use the regular `accept_new_students` toggle (unchanged).
+      - Advanced: use the BUC `accept_new_students` toggle instead, since Advanced
+        tutors' relevant "not accepting" signal is their BUC acceptance status.
+    """
     conn = get_redshift_connection()
     query = f"""
         SELECT u.first_name||' '||u.last_name AS tutor,
+            tiers.name AS tier,
+            e.accept_new_students,
             e.delivery_target,
             ROUND(AVG(tc.instruction_actual)::numeric, 1) AS avg_delivery_next_3wks,
             ROUND(AVG(tc.instruction_actual)::numeric / NULLIF(e.delivery_target,0) * 100, 1) AS delivery_pct
         FROM dw.employees e
         JOIN dw.users u ON e.user_id = u.id
+        JOIN dw.tiers ON e.tier_id = tiers.id
         JOIN dw.team_members ON e.id = team_members.member_id
         JOIN dw.teams ON team_members.team_id = teams.id
         JOIN dw.employees managers ON teams.manager_id = managers.id
@@ -781,11 +790,10 @@ def load_low_delivery_not_accepting(faculty_leader: str):
         WHERE e.end_date IS NULL
           AND e.type = 'Tutor'
           AND u.title = 'Tutor'
-          AND e.accept_new_students = FALSE
           AND fl_users.first_name||' '||fl_users.last_name = '{faculty_leader}'
           AND tc.first_day_of_week_sunday_start >= CURRENT_DATE
           AND tc.first_day_of_week_sunday_start <= CURRENT_DATE + 21
-        GROUP BY u.first_name, u.last_name, e.delivery_target
+        GROUP BY u.first_name, u.last_name, tiers.name, e.accept_new_students, e.delivery_target
         HAVING AVG(tc.instruction_actual) < e.delivery_target * 0.80
         ORDER BY delivery_pct
     """
@@ -795,20 +803,90 @@ def load_low_delivery_not_accepting(faculty_leader: str):
         df = _gh_read_cache("data/cache/low_delivery.csv")
         if not df.empty:
             keep = [c for c in df.columns if c not in ["faculty_leader","_cached_at"]]
-            return df[df["faculty_leader"] == faculty_leader][keep] if "faculty_leader" in df.columns else df[keep]
-        return pd.DataFrame()
-    try:
-        df = pd.read_sql(query, conn)
+            df = df[df["faculty_leader"] == faculty_leader][keep] if "faculty_leader" in df.columns else df[keep]
+        else:
+            df = pd.DataFrame()
+    else:
+        try:
+            df = pd.read_sql(query, conn)
+        except Exception:
+            df = _gh_read_cache("data/cache/low_delivery.csv")
+            if not df.empty:
+                keep = [c for c in df.columns if c not in ["faculty_leader","_cached_at"]]
+                df = df[df["faculty_leader"] == faculty_leader][keep] if "faculty_leader" in df.columns else df[keep]
+            else:
+                df = pd.DataFrame()
+        finally:
+            try: conn.close()
+            except: pass
+
+    if df.empty:
         return df
+
+    # Apply tier-specific "not accepting" toggle and filter
+    try:
+        buc_df = load_buc_rates()
     except Exception:
-        df = _gh_read_cache("data/cache/low_delivery.csv")
-        if not df.empty:
-            keep = [c for c in df.columns if c not in ["faculty_leader","_cached_at"]]
-            return df[df["faculty_leader"] == faculty_leader][keep] if "faculty_leader" in df.columns else df[keep]
+        buc_df = pd.DataFrame()
+
+    if not buc_df.empty and "tutor" in buc_df.columns:
+        buc_lookup = buc_df.set_index("tutor")[["buc_accepting"]].to_dict(orient="index")
+    else:
+        buc_lookup = {}
+
+    def _is_not_accepting(row):
+        tier = str(row.get("tier", ""))
+        if tier == "Advanced":
+            buc_info = buc_lookup.get(row["tutor"])
+            if buc_info is not None and pd.notna(buc_info.get("buc_accepting")):
+                return float(buc_info["buc_accepting"]) == 0
+            # If we don't have BUC data for this tutor, fall back to the regular toggle
+            return row.get("accept_new_students") in (False, 0, "0", "False")
+        # Distinguished / Premium — unchanged behavior
+        return row.get("accept_new_students") in (False, 0, "0", "False")
+
+    df = df[df.apply(_is_not_accepting, axis=1)].copy()
+    return df
+
+
+def load_buc_instruction_toggle_mismatch(faculty_leader: str):
+    """For Distinguished/Premium tutors where BUC rate == Instruction rate,
+    flag if the BUC accepting toggle doesn't match the Instruction accepting toggle.
+    These tutors should always be accepting (or not accepting) both at the same time.
+    """
+    try:
+        buc_df = load_buc_rates()
+    except Exception:
         return pd.DataFrame()
-    finally:
-        try: conn.close()
-        except: pass
+
+    if buc_df.empty:
+        return pd.DataFrame()
+
+    df = buc_df[buc_df["manager"] == faculty_leader].copy() if "manager" in buc_df.columns else buc_df.copy()
+    if df.empty:
+        return pd.DataFrame()
+
+    # Only Distinguished/Premium are in scope (Advanced uses BUC toggle as primary signal already)
+    df = df[df["tier"].isin(["Distinguished", "Premium"])].copy()
+    if df.empty:
+        return pd.DataFrame()
+
+    # Only rows where BUC rate equals instruction rate (i.e. they actually have BUC pricing parity)
+    df = df[df["buc_rate"].notna() & df["instruction_rate"].notna()]
+    df = df[df["buc_rate"].astype(float) == df["instruction_rate"].astype(float)]
+    if df.empty:
+        return pd.DataFrame()
+
+    def _toggles_match(row):
+        inst = row.get("accept_new_students")
+        buc  = row.get("buc_accepting")
+        if pd.isna(inst) or pd.isna(buc):
+            return True  # not enough info to flag
+        return bool(float(inst)) == bool(float(buc))
+
+    df["toggles_match"] = df.apply(_toggles_match, axis=1)
+    mismatched = df[df["toggles_match"] == False].copy()
+    return mismatched[["tutor","tier","instruction_rate","buc_rate","accept_new_students","buc_accepting"]]
 @st.cache_data(ttl=3600)
 def load_study_areas():
     """Load goal scores and starting scores from orbit_stitch.study_areas."""
@@ -981,6 +1059,21 @@ def load_exam_data():
         raise RuntimeError(f"Could not load exam data from GitHub: {e}")
 
 
+@st.cache_data(ttl=3600)
+def load_buc_rates():
+    """Load tutor BUC/Instruction pay rates and accepting toggles from GitHub."""
+    try:
+        github_repo  = st.secrets["github"]["repo"]
+        github_token = st.secrets["github"]["token"]
+        github_path  = "data/buc_rates.csv"
+        ts   = int(pd.Timestamp.now().timestamp())
+        url  = f"https://raw.githubusercontent.com/{github_repo}/main/{github_path}?cb={ts}"
+        resp = _requests.get(url, headers={"Authorization": f"token {github_token}"}, timeout=30)
+        resp.raise_for_status()
+        df = pd.read_csv(io.StringIO(resp.text))
+        return df
+    except Exception:
+        return pd.DataFrame()
 
 
 @st.cache_data(ttl=3600)
@@ -2590,15 +2683,39 @@ def render_app(config):
             _low_del_df = load_low_delivery_not_accepting("Geoff St. Marie")
             if not _low_del_df.empty:
                 with st.expander(f"🚨 {len(_low_del_df)} tutor(s) — Accepting OFF + Low Delivery (next 3 wks)", expanded=False):
-                    st.caption("These tutors have accepting new students turned off AND are projected below 80% of their delivery target over the next 3 weeks.")
+                    st.caption("These tutors have accepting new students turned off (or, for Advanced tier, the BUC accepting toggle off) AND are projected below 80% of their delivery target over the next 3 weeks.")
                     _ld_display = _low_del_df.rename(columns={
                         "tutor": "Tutor",
+                        "tier": "Tier",
                         "delivery_target": "Target (hrs)",
                         "avg_delivery_next_3wks": "Avg Delivery (next 3 wks)",
                         "delivery_pct": "% of Target"
                     })
                     _ld_display["% of Target"] = _ld_display["% of Target"].apply(lambda x: f"{x:.1f}%")
-                    st.dataframe(_ld_display, use_container_width=True, hide_index=True)
+                    _ld_cols = [c for c in ["Tutor","Tier","Target (hrs)","Avg Delivery (next 3 wks)","% of Target"] if c in _ld_display.columns]
+                    st.dataframe(_ld_display[_ld_cols], use_container_width=True, hide_index=True)
+        except Exception:
+            pass
+
+        # ── BUC / Instruction Accepting Toggle Mismatch Alert ─────────────
+        try:
+            _toggle_mismatch_df = load_buc_instruction_toggle_mismatch("Geoff St. Marie")
+            if not _toggle_mismatch_df.empty:
+                with st.expander(f"⚠️ {len(_toggle_mismatch_df)} tutor(s) — BUC/Instruction Accepting Toggle Mismatch", expanded=False):
+                    st.caption("These tutors have the same BUC and Instruction pay rate, so their accepting toggles should match. Currently they don't.")
+                    _tm_display = _toggle_mismatch_df.rename(columns={
+                        "tutor": "Tutor",
+                        "tier": "Tier",
+                        "instruction_rate": "Instruction Rate",
+                        "buc_rate": "BUC Rate",
+                        "accept_new_students": "Instruction Accepting",
+                        "buc_accepting": "BUC Accepting",
+                    })
+                    for _bcol in ["Instruction Accepting","BUC Accepting"]:
+                        if _bcol in _tm_display.columns:
+                            _tm_display[_bcol] = _tm_display[_bcol].apply(
+                                lambda x: "✅ On" if pd.notna(x) and bool(float(x)) else ("❌ Off" if pd.notna(x) else "—"))
+                    st.dataframe(_tm_display, use_container_width=True, hide_index=True)
         except Exception:
             pass
 
