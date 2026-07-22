@@ -225,7 +225,6 @@ def load_archivable_unscheduled():
         join dw.students on dw.enrollments.enrollee_id = dw.students.id
         join dw.users student_users on dw.students.user_id = student_users.id
         join dw.brands on dw.courses.brand_id = dw.brands.id
-        left join dw.sessions on dw.courses.id = dw.sessions.course_id
         where 1=1 and dw.courses.brand_id in (2,41,42,43,47,48)
         group by 1,2,3,4,5,6,7)
         select dw.tutoring_histories.tutor_id as tutor_id,
@@ -235,7 +234,10 @@ def load_archivable_unscheduled():
         cte_courses.brand, cte_courses.student_name,
         min(dw.sessions.starts_at) as first_session_day,
         max(dw.sessions.starts_at) as last_session_day,
-        max(dw.sessions.starts_at) < (getdate() -30) as should_archive,
+        CASE WHEN MAX(dw.sessions.starts_at) IS NULL
+             THEN dw.tutoring_histories.created_at < (getdate() - 30)
+             ELSE MAX(dw.sessions.starts_at) < (getdate() - 30)
+        END AS should_archive,
         cte_courses.provisioned_hours - cte_courses.delivered_hours as hours_remaining,
         case when cte_courses.brand = 'Academics' and (cte_courses.provisioned_hours - cte_courses.duration_hours)<0
              then 0 else cte_courses.provisioned_hours - cte_courses.duration_hours end as unscheduled_hours
@@ -245,14 +247,16 @@ def load_archivable_unscheduled():
         JOIN dw.users tutor_users ON tutor_users.id = dw.employees.user_id
         JOIN dw.team_members ON dw.team_members.member_id = dw.employees.id
         JOIN dw.teams ON dw.teams.id = dw.team_members.team_id
-        JOIN dw.enrollments ON dw.enrollments.id = dw.tutoring_histories.enrollment_id
-        join dw.sessions on (dw.sessions.course_id = dw.enrollments.course_id)
-             and (dw.sessions.supervisor_id = dw.employees.id)
-        join cte_courses on dw.enrollments.course_id = cte_courses.course_id
+        LEFT JOIN dw.enrollments ON dw.enrollments.id = dw.tutoring_histories.enrollment_id
+        LEFT JOIN dw.sessions ON (dw.sessions.course_id = dw.enrollments.course_id)
+             AND (dw.sessions.supervisor_id = dw.employees.id)
+        LEFT JOIN cte_courses ON dw.enrollments.course_id = cte_courses.course_id
         where 1=1 and dw.tutoring_histories.active = true
-        AND dw.employees.end_date IS NULL AND dw.enrollments.unenrolled_at IS NULL
+        AND dw.employees.end_date IS NULL
         AND dw.team_members.member_type = 'Employee'
-        group by 1,2,3,4,5,6,7,8,12,13 order by unscheduled_hours
+        group by 1,2,3,4,5,6,7,8,cte_courses.provisioned_hours,cte_courses.duration_hours,
+                 cte_courses.delivered_hours,dw.tutoring_histories.created_at
+        order by unscheduled_hours
     """
     if FORCE_CACHE_MODE:
         try: conn.close()

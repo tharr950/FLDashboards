@@ -93,7 +93,6 @@ QUERIES = {
             JOIN dw.students ON dw.enrollments.enrollee_id = dw.students.id
             JOIN dw.users student_users ON dw.students.user_id = student_users.id
             JOIN dw.brands ON dw.courses.brand_id = dw.brands.id
-            LEFT JOIN dw.sessions ON dw.courses.id = dw.sessions.course_id
             WHERE dw.courses.brand_id IN (2,41,42,43,47,48)
             GROUP BY 1,2,3,4,5,6,7
         )
@@ -108,7 +107,10 @@ QUERIES = {
             cte_courses.student_name,
             MIN(dw.sessions.starts_at) AS first_session_day,
             MAX(dw.sessions.starts_at) AS last_session_day,
-            CASE WHEN MAX(dw.sessions.starts_at) < (GETDATE()-30) THEN 1 ELSE 0 END AS should_archive,
+            CASE WHEN MAX(dw.sessions.starts_at) IS NULL
+                 THEN CASE WHEN dw.tutoring_histories.created_at < (GETDATE()-30) THEN 1 ELSE 0 END
+                 ELSE CASE WHEN MAX(dw.sessions.starts_at) < (GETDATE()-30) THEN 1 ELSE 0 END
+            END AS should_archive,
             cte_courses.provisioned_hours - cte_courses.delivered_hours AS hours_remaining,
             CASE WHEN cte_courses.brand = 'Academics'
                  AND (cte_courses.provisioned_hours - cte_courses.duration_hours) < 0
@@ -123,15 +125,15 @@ QUERIES = {
         JOIN dw.teams ON dw.teams.id = dw.team_members.team_id
         JOIN dw.employees managers ON managers.id = dw.teams.manager_id
         JOIN dw.users fl_users ON fl_users.id = managers.user_id
-        JOIN dw.enrollments ON dw.enrollments.id = dw.tutoring_histories.enrollment_id
-        JOIN dw.sessions ON dw.sessions.course_id = dw.enrollments.course_id
+        LEFT JOIN dw.enrollments ON dw.enrollments.id = dw.tutoring_histories.enrollment_id
+        LEFT JOIN dw.sessions ON dw.sessions.course_id = dw.enrollments.course_id
             AND dw.sessions.supervisor_id = dw.employees.id
-        JOIN cte_courses ON dw.enrollments.course_id = cte_courses.course_id
+        LEFT JOIN cte_courses ON dw.enrollments.course_id = cte_courses.course_id
         WHERE dw.tutoring_histories.active = TRUE
           AND dw.employees.end_date IS NULL
-          AND dw.enrollments.unenrolled_at IS NULL
           AND dw.team_members.member_type = 'Employee'
-        GROUP BY 1,2,3,4,5,6,7,8,9,13,14
+        GROUP BY 1,2,3,4,5,6,7,8,9,cte_courses.provisioned_hours,cte_courses.duration_hours,
+                 cte_courses.delivered_hours,dw.tutoring_histories.created_at
         ORDER BY unscheduled_hours
         """
     ),
