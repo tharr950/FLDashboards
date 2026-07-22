@@ -94,7 +94,7 @@ QUERIES = {
             JOIN dw.users student_users ON dw.students.user_id = student_users.id
             JOIN dw.brands ON dw.courses.brand_id = dw.brands.id
             LEFT JOIN dw.sessions ON dw.courses.id = dw.sessions.course_id
-            WHERE dw.courses.brand_id IN (2,41,42,43)
+            WHERE dw.courses.brand_id IN (2,41,42,43,47,48)
             GROUP BY 1,2,3,4,5,6,7
         )
         SELECT dw.tutoring_histories.tutor_id AS tutor_id,
