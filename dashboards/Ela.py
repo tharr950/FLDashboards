@@ -81,6 +81,78 @@ def get_redshift_connection():
         connect_timeout=10
     )
 
+
+@st.cache_data(ttl=3600)
+def load_tutor_prep_time(lookback_weeks=12):
+    today = date.today()
+    from datetime import timedelta
+    day_end = today - timedelta(days=today.weekday() + 1)
+    day_start = day_end - timedelta(weeks=lookback_weeks) + timedelta(days=1)
+    query = f"""
+    WITH time_period AS (
+      SELECT '{day_start.strftime("%Y-%m-%d")}'::date AS day_start,
+             '{day_end.strftime("%Y-%m-%d")}'::date AS day_end
+    ),
+    cte_prep1 AS (
+        SELECT employees.id AS tutor_id, sessions.starts_at,
+            brands.name AS category,
+            CASE WHEN sessions.attendances_attended_count = 0
+                THEN 'Unattended Session' ELSE 'Attended Session' END AS type,
+            sessions.duration/60.0 AS duration_hours,
+            dates.first_day_of_week_sunday_start AS week_of
+        FROM dw.sessions
+            JOIN rp_bi.dates ON (DATEPART(year,sessions.starts_at) = dates.year
+                AND DATEPART(month,sessions.starts_at) = dates.month
+                AND DATEPART(day,sessions.starts_at) = dates.day)
+            JOIN dw.courses ON sessions.course_id = courses.id
+            JOIN dw.brands ON courses.brand_id = brands.id
+            JOIN dw.employees ON sessions.supervisor_id = employees.id
+        WHERE dates.first_day_of_week_sunday_start >= (SELECT day_start FROM time_period)
+            AND dates.first_day_of_week_sunday_start <= (SELECT day_end FROM time_period)
+        UNION
+        SELECT employees.id AS tutor_id, events.starts_at,
+            events.category AS category,
+            replace(events.type,'Event::','') AS type,
+            events.duration/60.0 AS duration_hours,
+            dates.first_day_of_week_sunday_start AS week_of
+        FROM dw.events
+            JOIN rp_bi.dates ON (DATEPART(year,events.starts_at) = dates.year
+                AND DATEPART(month,events.starts_at) = dates.month
+                AND DATEPART(day,events.starts_at) = dates.day)
+            JOIN dw.employees ON (events.attendee_id = employees.id
+                AND events.attendee_type = 'Employee')
+        WHERE dates.first_day_of_week_sunday_start >= (SELECT day_start FROM time_period)
+            AND dates.first_day_of_week_sunday_start <= (SELECT day_end FROM time_period)
+            AND events.category IN ('Session Preparation', 'Email or Slack Communication')
+    ),
+    cte_prep2 AS (
+        SELECT cte_prep1.tutor_id, cte_prep1.week_of,
+            CASE WHEN cte_prep1.type = 'PrepTime' THEN SUM(cte_prep1.duration_hours) END AS session_and_email_prep,
+            CASE WHEN cte_prep1.type = 'Unattended Session' THEN SUM(cte_prep1.duration_hours) END AS unattended_sessions,
+            CASE WHEN cte_prep1.type = 'Attended Session' THEN SUM(cte_prep1.duration_hours) END AS attended_sessions
+        FROM cte_prep1 GROUP BY cte_prep1.tutor_id, cte_prep1.week_of, cte_prep1.type
+    )
+    SELECT DISTINCT employees.id AS tutor_id,
+        tutor_users.first_name||' '||tutor_users.last_name AS tutor_name,
+        cte_prep2.week_of,
+        MAX(cte_prep2.attended_sessions) AS attended_sessions,
+        MAX(cte_prep2.session_and_email_prep) AS session_and_email_prep,
+        MAX(cte_prep2.unattended_sessions) AS unattended_sessions
+    FROM dw.employees
+        JOIN dw.users tutor_users ON employees.user_id = tutor_users.id
+        LEFT JOIN cte_prep2 ON employees.id = cte_prep2.tutor_id
+    WHERE employees.end_date IS NULL AND employees.type = 'Tutor'
+        AND tutor_users.title = 'Tutor'
+    GROUP BY employees.id, tutor_name, cte_prep2.week_of
+    ORDER BY tutor_name
+    """
+    conn = get_redshift_connection()
+    df = pd.read_sql(query, conn)
+    df["week_of"] = pd.to_datetime(df["week_of"], errors="coerce")
+    for col in ["attended_sessions", "session_and_email_prep", "unattended_sessions"]:
+        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+    return df
+
 # ─────────────────────────────────────────────
 # REVOLUTION PREP MYSQL CONNECTION
 # ─────────────────────────────────────────────
@@ -4253,6 +4325,41 @@ def render_app(config):
             pass
 
         st.markdown("---")
+
+        # Prep Time / Attended / Unattended Hours
+        try:
+            prep_range_map = {"Past 4 Weeks": 4, "Past 8 Weeks": 8, "Past 12 Weeks": 12}
+            sel_prep_range = st.selectbox("Prep Time Date Range", list(prep_range_map.keys()), index=2, key="profile_prep_range")
+            prep_weeks = prep_range_map[sel_prep_range]
+            prep_all = load_tutor_prep_time(lookback_weeks=prep_weeks)
+            prep_tutor = prep_all[prep_all["tutor_name"] == profile_tutor].copy()
+
+            if not prep_tutor.empty:
+                p_attended = prep_tutor["attended_sessions"].sum()
+                p_prep = prep_tutor["session_and_email_prep"].sum()
+                p_unattended = prep_tutor["unattended_sessions"].sum()
+                p_total = p_attended + p_prep + p_unattended
+
+                pct_attended = round(p_attended / p_total * 100, 1) if p_total > 0 else 0
+                pct_prep = round(p_prep / p_total * 100, 1) if p_total > 0 else 0
+                pct_unattended = round(p_unattended / p_total * 100, 1) if p_total > 0 else 0
+
+                st.markdown("**⏱️ Session & Prep Hours**")
+                pp1, pp2, pp3 = st.columns(3)
+                pp1.metric("Attended", f"{p_attended:.1f} hrs", f"{pct_attended:.1f}%")
+                pp2.metric("Prep Time", f"{p_prep:.1f} hrs", f"{pct_prep:.1f}%")
+                pp3.metric("Unattended", f"{p_unattended:.1f} hrs", f"{pct_unattended:.1f}%")
+
+                if pct_prep >= 20:
+                    st.markdown("<p style='color:#991b1b; font-size:0.82rem;'>🔴 Prep time is 20%+ of total hours</p>", unsafe_allow_html=True)
+                elif pct_prep >= 15:
+                    st.markdown("<p style='color:#9a3412; font-size:0.82rem;'>🟠 Prep time is 15%+ of total hours</p>", unsafe_allow_html=True)
+                elif pct_prep >= 10:
+                    st.markdown("<p style='color:#854d0e; font-size:0.82rem;'>🟡 Prep time is 10%+ of total hours</p>", unsafe_allow_html=True)
+
+                st.markdown("---")
+        except Exception:
+            pass
 
         p_errors = []
         with st.spinner(f"Loading data for {profile_tutor}…"):
