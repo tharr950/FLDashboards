@@ -6741,18 +6741,43 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
         )
         available_weeks = sorted(team_scores_df["week_sunday"].dropna().unique(), reverse=True)
         week_labels     = {w: f"Week of {w.strftime('%b %d, %Y')}" for w in available_weeks}
-        selected_week   = st.selectbox(
-            "Select Week Of (Sunday):",
-            options=available_weeks,
-            format_func=lambda w: week_labels[w],
-            key="qs_week_select"
+
+        _view_mode = st.radio(
+            "View mode:",
+            ["Single Week", "Rolling 4 Weeks"],
+            horizontal=True,
+            key="qs_view_mode"
         )
-        week_start  = pd.Timestamp(selected_week)
-        week_end    = week_start + pd.Timedelta(days=7)
-        filtered_df = team_scores_df[
-            (team_scores_df["sent_at"] >= week_start) &
-            (team_scores_df["sent_at"] <  week_end)
-        ].copy()
+
+        if _view_mode == "Single Week":
+            selected_week = st.selectbox(
+                "Select Week Of (Sunday):",
+                options=available_weeks,
+                format_func=lambda w: week_labels[w],
+                key="qs_week_select"
+            )
+            week_start  = pd.Timestamp(selected_week)
+            week_end    = week_start + pd.Timedelta(days=7)
+            filtered_df = team_scores_df[
+                (team_scores_df["sent_at"] >= week_start) &
+                (team_scores_df["sent_at"] <  week_end)
+            ].copy()
+            _period_label = f"Week of {selected_week.strftime('%b %d, %Y')}"
+        else:
+            # Rolling 4 weeks — pick the anchor week (most recent by default)
+            anchor_week = st.selectbox(
+                "Most recent week in 4-week window:",
+                options=available_weeks,
+                format_func=lambda w: week_labels[w],
+                key="qs_week_select"
+            )
+            _four_week_end   = pd.Timestamp(anchor_week) + pd.Timedelta(days=7)
+            _four_week_start = pd.Timestamp(anchor_week) - pd.Timedelta(weeks=3)
+            filtered_df = team_scores_df[
+                (team_scores_df["sent_at"] >= _four_week_start) &
+                (team_scores_df["sent_at"] <  _four_week_end)
+            ].copy()
+            _period_label = f"Rolling 4 weeks ending {anchor_week.strftime('%b %d, %Y')}"
 
         if filtered_df.empty:
             st.info("No updates found in this date range.")
@@ -6761,7 +6786,7 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
         st.divider()
 
         st.markdown("### 📊 Team Overview")
-        st.caption(f"{len(filtered_df)} updates scored · Max total score is 10")
+        st.caption(f"{_period_label} · {len(filtered_df)} updates scored · Max total score is 10")
         m1, m2, m3, m4, m5 = st.columns(5)
         m1.metric("Avg Total",          f"{filtered_df['total'].mean():.1f} / 10")
         m2.metric("Avg What Worked On", f"{filtered_df['what_worked_on'].mean():.1f} / 2")
