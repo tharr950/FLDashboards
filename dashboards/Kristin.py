@@ -2538,9 +2538,9 @@ def render_app(config):
                     home_exam_df["_anum"] = home_exam_df["attempt"].apply(_anum_h1)
                     _vm = home_exam_df["exam_valid_composite"] == True
                     if _vm.any() and "student_id" in home_exam_df.columns:
-                        _mn = (home_exam_df[_vm].groupby(["student_id","exam_family","exam_code"])["_anum"]
+                        _mn = (home_exam_df[_vm].groupby(["student_id","exam_family"] + (["exam_code"] if "exam_code" in home_exam_df.columns else []))["_anum"]
                                .min().reset_index().rename(columns={"_anum":"_min_a"}))
-                        home_exam_df = home_exam_df.merge(_mn, on=["student_id","exam_family","exam_code"], how="left")
+                        home_exam_df = home_exam_df.merge(_mn, on=["student_id","exam_family"] + (["exam_code"] if "exam_code" in home_exam_df.columns else []), how="left")
                         home_exam_df["exam_valid_composite"] = (
                             home_exam_df["exam_valid_composite"] &
                             (home_exam_df["_anum"] == home_exam_df["_min_a"]))
@@ -3137,9 +3137,9 @@ def render_app(config):
                 home_exam_df["_anum"] = home_exam_df["attempt"].apply(_anum_h2)
                 _vm = home_exam_df["exam_valid_composite"] == True
                 if _vm.any() and "student_id" in home_exam_df.columns:
-                    _mn = (home_exam_df[_vm].groupby(["student_id","exam_family","exam_code"])["_anum"]
+                    _mn = (home_exam_df[_vm].groupby(["student_id","exam_family"] + (["exam_code"] if "exam_code" in home_exam_df.columns else []))["_anum"]
                            .min().reset_index().rename(columns={"_anum":"_min_a"}))
-                    home_exam_df = home_exam_df.merge(_mn, on=["student_id","exam_family","exam_code"], how="left")
+                    home_exam_df = home_exam_df.merge(_mn, on=["student_id","exam_family"] + (["exam_code"] if "exam_code" in home_exam_df.columns else []), how="left")
                     home_exam_df["exam_valid_composite"] = (
                         home_exam_df["exam_valid_composite"] &
                         (home_exam_df["_anum"] == home_exam_df["_min_a"]))
@@ -3814,9 +3814,9 @@ def render_app(config):
                 wl_exam_df["_anum"] = wl_exam_df["attempt"].apply(_anum_wl)
                 _vm = wl_exam_df["exam_valid_composite"] == True
                 if _vm.any() and "student_id" in wl_exam_df.columns:
-                    _mn = (wl_exam_df[_vm].groupby(["student_id","exam_family","exam_code"])["_anum"]
+                    _mn = (wl_exam_df[_vm].groupby(["student_id","exam_family"] + (["exam_code"] if "exam_code" in wl_exam_df.columns else []))["_anum"]
                            .min().reset_index().rename(columns={"_anum":"_min_a"}))
-                    wl_exam_df = wl_exam_df.merge(_mn, on=["student_id","exam_family","exam_code"], how="left")
+                    wl_exam_df = wl_exam_df.merge(_mn, on=["student_id","exam_family"] + (["exam_code"] if "exam_code" in wl_exam_df.columns else []), how="left")
                     wl_exam_df["exam_valid_composite"] = (
                         wl_exam_df["exam_valid_composite"] &
                         (wl_exam_df["_anum"] == wl_exam_df["_min_a"]))
@@ -4442,9 +4442,9 @@ def render_app(config):
                 p_exam["_anum"] = p_exam["attempt"].apply(_anum_p)
                 _vm = p_exam["exam_valid_composite"] == True
                 if _vm.any() and "student_id" in p_exam.columns:
-                    _mn = (p_exam[_vm].groupby(["student_id","exam_family","exam_code"])["_anum"]
+                    _mn = (p_exam[_vm].groupby(["student_id","exam_family"] + (["exam_code"] if "exam_code" in p_exam.columns else []))["_anum"]
                            .min().reset_index().rename(columns={"_anum":"_min_a"}))
-                    p_exam = p_exam.merge(_mn, on=["student_id","exam_family","exam_code"], how="left")
+                    p_exam = p_exam.merge(_mn, on=["student_id","exam_family"] + (["exam_code"] if "exam_code" in p_exam.columns else []), how="left")
                     p_exam["exam_valid_composite"] = (
                         p_exam["exam_valid_composite"] &
                         (p_exam["_anum"] == p_exam["_min_a"]))
