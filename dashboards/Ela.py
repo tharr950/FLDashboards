@@ -2521,14 +2521,32 @@ def render_app(config):
                     home_exam_df["exam_family"] = home_exam_df["subject"].apply(
                         lambda x: "SAT/PSAT" if x in _SAT_H else ("ACT" if x in _ACT_H else "Other"))
                     home_exam_df["exam_valid_composite"] = home_exam_df.apply(
-                        lambda r: (pd.isna(r.get("attempt")) or str(r.get("attempt","")) in ("1","1.0","n/a","nan")) and (
-                                  (pd.notna(r["sat_math"]) and r["sat_math"] >= 300 and
-                                   pd.notna(r["sat_rw"])   and r["sat_rw"]   >= 300)
-                                  if r["exam_family"] == "SAT/PSAT"
-                                  else ((pd.notna(r["act_english"]) and r["act_english"] >= 10 and
-                                         pd.notna(r["act_math"])    and r["act_math"]    >= 10 and
-                                         pd.notna(r["act_reading"]) and r["act_reading"] >= 10)
-                                        if r["exam_family"] == "ACT" else False)), axis=1)
+                        lambda r: (
+                            (pd.notna(r["sat_math"]) and r["sat_math"] >= 300 and
+                             pd.notna(r["sat_rw"])   and r["sat_rw"]   >= 300)
+                            if r["exam_family"] == "SAT/PSAT"
+                            else ((pd.notna(r["act_english"]) and r["act_english"] >= 10 and
+                                   pd.notna(r["act_math"])    and r["act_math"]    >= 10 and
+                                   pd.notna(r["act_reading"]) and r["act_reading"] >= 10)
+                                  if r["exam_family"] == "ACT" else False)), axis=1)
+                    # Keep only lowest attempt per student+exam_family
+                    def _anum_h1(a):
+                        try:
+                            v = str(a).strip().lower()
+                            return 1 if v in ("n/a","nan","","none") else float(v)
+                        except: return 1
+                    home_exam_df["_anum"] = home_exam_df["attempt"].apply(_anum_h1)
+                    _vm = home_exam_df["exam_valid_composite"] == True
+                    if _vm.any() and "student_id" in home_exam_df.columns:
+                        _mn = (home_exam_df[_vm].groupby(["student_id","exam_family"])["_anum"]
+                               .min().reset_index().rename(columns={"_anum":"_min_a"}))
+                        home_exam_df = home_exam_df.merge(_mn, on=["student_id","exam_family"], how="left")
+                        home_exam_df["exam_valid_composite"] = (
+                            home_exam_df["exam_valid_composite"] &
+                            (home_exam_df["_anum"] == home_exam_df["_min_a"]))
+                        home_exam_df = home_exam_df.drop(columns=["_anum","_min_a"], errors="ignore")
+                    else:
+                        home_exam_df = home_exam_df.drop(columns=["_anum"], errors="ignore")
             except Exception as e:
                 home_exam_df = pd.DataFrame(); load_errors.append(f"Exam data: {e}")
 
@@ -3107,9 +3125,27 @@ def render_app(config):
                             pd.notna(r["act_math"])    and r["act_math"]    >= 10 and
                             pd.notna(r["act_reading"]) and r["act_reading"] >= 10)
                 home_exam_df["exam_valid_composite"] = home_exam_df.apply(
-                    lambda r: (pd.isna(r.get("attempt")) or str(r.get("attempt","")) in ("1","1.0","n/a","nan")) and (
+                    lambda r: (
                         sat_composite_ok(r) if r["exam_family"] == "SAT/PSAT"
                         else (act_composite_ok(r) if r["exam_family"] == "ACT" else False)), axis=1)
+                # Keep only lowest attempt per student+exam_family
+                def _anum_h2(a):
+                    try:
+                        v = str(a).strip().lower()
+                        return 1 if v in ("n/a","nan","","none") else float(v)
+                    except: return 1
+                home_exam_df["_anum"] = home_exam_df["attempt"].apply(_anum_h2)
+                _vm = home_exam_df["exam_valid_composite"] == True
+                if _vm.any() and "student_id" in home_exam_df.columns:
+                    _mn = (home_exam_df[_vm].groupby(["student_id","exam_family"])["_anum"]
+                           .min().reset_index().rename(columns={"_anum":"_min_a"}))
+                    home_exam_df = home_exam_df.merge(_mn, on=["student_id","exam_family"], how="left")
+                    home_exam_df["exam_valid_composite"] = (
+                        home_exam_df["exam_valid_composite"] &
+                        (home_exam_df["_anum"] == home_exam_df["_min_a"]))
+                    home_exam_df = home_exam_df.drop(columns=["_anum","_min_a"], errors="ignore")
+                else:
+                    home_exam_df = home_exam_df.drop(columns=["_anum"], errors="ignore")
                 no_exam_by_tutor = {}
                 for tutor, tdf in home_exam_df.groupby("tutor_name"):
                     count = sum(1 for sid, sdf in tdf.groupby("student_id")
@@ -3766,9 +3802,27 @@ def render_app(config):
                             pd.notna(r["act_math"])    and r["act_math"]    >= 10 and
                             pd.notna(r["act_reading"]) and r["act_reading"] >= 10)
                 wl_exam_df["exam_valid_composite"] = wl_exam_df.apply(
-                    lambda r: (pd.isna(r.get("attempt")) or str(r.get("attempt","")) in ("1","1.0","n/a","nan")) and (
+                    lambda r: (
                         _sat_ok(r) if r["exam_family"] == "SAT/PSAT"
                         else (_act_ok(r) if r["exam_family"] == "ACT" else False)), axis=1)
+                # Keep only lowest attempt per student+exam_family
+                def _anum_wl(a):
+                    try:
+                        v = str(a).strip().lower()
+                        return 1 if v in ("n/a","nan","","none") else float(v)
+                    except: return 1
+                wl_exam_df["_anum"] = wl_exam_df["attempt"].apply(_anum_wl)
+                _vm = wl_exam_df["exam_valid_composite"] == True
+                if _vm.any() and "student_id" in wl_exam_df.columns:
+                    _mn = (wl_exam_df[_vm].groupby(["student_id","exam_family"])["_anum"]
+                           .min().reset_index().rename(columns={"_anum":"_min_a"}))
+                    wl_exam_df = wl_exam_df.merge(_mn, on=["student_id","exam_family"], how="left")
+                    wl_exam_df["exam_valid_composite"] = (
+                        wl_exam_df["exam_valid_composite"] &
+                        (wl_exam_df["_anum"] == wl_exam_df["_min_a"]))
+                    wl_exam_df = wl_exam_df.drop(columns=["_anum","_min_a"], errors="ignore")
+                else:
+                    wl_exam_df = wl_exam_df.drop(columns=["_anum"], errors="ignore")
             except Exception as e:
                 wl_exam_df = pd.DataFrame(); load_errors_wl.append(f"Exams: {e}")
 
@@ -4376,9 +4430,27 @@ def render_app(config):
                             pd.notna(r["act_math"])    and r["act_math"]    >= 10 and
                             pd.notna(r["act_reading"]) and r["act_reading"] >= 10)
                 p_exam["exam_valid_composite"] = p_exam.apply(
-                    lambda r: (pd.isna(r.get("attempt")) or str(r.get("attempt","")) in ("1","1.0","n/a","nan")) and (
+                    lambda r: (
                         _sat_ok_p(r) if r["exam_family"] == "SAT/PSAT"
                         else (_act_ok_p(r) if r["exam_family"] == "ACT" else False)), axis=1)
+                # Keep only lowest attempt per student+exam_family
+                def _anum_p(a):
+                    try:
+                        v = str(a).strip().lower()
+                        return 1 if v in ("n/a","nan","","none") else float(v)
+                    except: return 1
+                p_exam["_anum"] = p_exam["attempt"].apply(_anum_p)
+                _vm = p_exam["exam_valid_composite"] == True
+                if _vm.any() and "student_id" in p_exam.columns:
+                    _mn = (p_exam[_vm].groupby(["student_id","exam_family"])["_anum"]
+                           .min().reset_index().rename(columns={"_anum":"_min_a"}))
+                    p_exam = p_exam.merge(_mn, on=["student_id","exam_family"], how="left")
+                    p_exam["exam_valid_composite"] = (
+                        p_exam["exam_valid_composite"] &
+                        (p_exam["_anum"] == p_exam["_min_a"]))
+                    p_exam = p_exam.drop(columns=["_anum","_min_a"], errors="ignore")
+                else:
+                    p_exam = p_exam.drop(columns=["_anum"], errors="ignore")
                 p_exam["is_official"] = p_exam["subject"].str.lower().str.contains("official", na=False)
             except Exception as e:
                 p_exam = pd.DataFrame(); p_errors.append(f"Exams: {e}")
@@ -6081,10 +6153,33 @@ def render_app(config):
             for col in act_validity.columns:
                 team_exam_df.loc[act_validity.index, col] = act_validity[col]
 
+        # Step 1: mark section-valid exams (no attempt filter yet)
         team_exam_df["exam_valid_composite"] = team_exam_df.apply(
-            lambda r: (pd.isna(r.get("attempt")) or str(r.get("attempt","")) in ("1","1.0","n/a","nan")) and (
+            lambda r: (
                 r["sat_composite_valid"] if r["exam_family"] == "SAT/PSAT"
                 else (r["act_composite_valid"] if r["exam_family"] == "ACT" else False)), axis=1)
+
+        # Step 2: among valid exams, keep only the lowest attempt per student+exam_family
+        def _attempt_num(a):
+            try:
+                v = str(a).strip().lower()
+                if v in ("n/a","nan","","none"): return 1
+                return float(v)
+            except: return 1
+
+        team_exam_df["_attempt_num"] = team_exam_df["attempt"].apply(_attempt_num)
+        _valid_mask = team_exam_df["exam_valid_composite"] == True
+        _min_attempt = (team_exam_df[_valid_mask]
+                        .groupby(["student_id","exam_family"])["_attempt_num"]
+                        .min().reset_index()
+                        .rename(columns={"_attempt_num": "_min_attempt"}))
+        team_exam_df = team_exam_df.merge(_min_attempt, on=["student_id","exam_family"], how="left")
+        # Only keep valid if it's the lowest attempt for that student/family
+        team_exam_df["exam_valid_composite"] = (
+            team_exam_df["exam_valid_composite"] &
+            (team_exam_df["_attempt_num"] == team_exam_df["_min_attempt"])
+        )
+        team_exam_df = team_exam_df.drop(columns=["_attempt_num","_min_attempt"], errors="ignore")
 
         def invalidity_reason(r):
             reasons = []
