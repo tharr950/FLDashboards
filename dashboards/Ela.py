@@ -2538,9 +2538,9 @@ def render_app(config):
                     home_exam_df["_anum"] = home_exam_df["attempt"].apply(_anum_h1)
                     _vm = home_exam_df["exam_valid_composite"] == True
                     if _vm.any() and "student_id" in home_exam_df.columns:
-                        _mn = (home_exam_df[_vm].groupby(["student_id","exam_family"])["_anum"]
+                        _mn = (home_exam_df[_vm].groupby(["student_id","exam_family","exam_code"])["_anum"]
                                .min().reset_index().rename(columns={"_anum":"_min_a"}))
-                        home_exam_df = home_exam_df.merge(_mn, on=["student_id","exam_family"], how="left")
+                        home_exam_df = home_exam_df.merge(_mn, on=["student_id","exam_family","exam_code"], how="left")
                         home_exam_df["exam_valid_composite"] = (
                             home_exam_df["exam_valid_composite"] &
                             (home_exam_df["_anum"] == home_exam_df["_min_a"]))
@@ -3137,9 +3137,9 @@ def render_app(config):
                 home_exam_df["_anum"] = home_exam_df["attempt"].apply(_anum_h2)
                 _vm = home_exam_df["exam_valid_composite"] == True
                 if _vm.any() and "student_id" in home_exam_df.columns:
-                    _mn = (home_exam_df[_vm].groupby(["student_id","exam_family"])["_anum"]
+                    _mn = (home_exam_df[_vm].groupby(["student_id","exam_family","exam_code"])["_anum"]
                            .min().reset_index().rename(columns={"_anum":"_min_a"}))
-                    home_exam_df = home_exam_df.merge(_mn, on=["student_id","exam_family"], how="left")
+                    home_exam_df = home_exam_df.merge(_mn, on=["student_id","exam_family","exam_code"], how="left")
                     home_exam_df["exam_valid_composite"] = (
                         home_exam_df["exam_valid_composite"] &
                         (home_exam_df["_anum"] == home_exam_df["_min_a"]))
@@ -3814,9 +3814,9 @@ def render_app(config):
                 wl_exam_df["_anum"] = wl_exam_df["attempt"].apply(_anum_wl)
                 _vm = wl_exam_df["exam_valid_composite"] == True
                 if _vm.any() and "student_id" in wl_exam_df.columns:
-                    _mn = (wl_exam_df[_vm].groupby(["student_id","exam_family"])["_anum"]
+                    _mn = (wl_exam_df[_vm].groupby(["student_id","exam_family","exam_code"])["_anum"]
                            .min().reset_index().rename(columns={"_anum":"_min_a"}))
-                    wl_exam_df = wl_exam_df.merge(_mn, on=["student_id","exam_family"], how="left")
+                    wl_exam_df = wl_exam_df.merge(_mn, on=["student_id","exam_family","exam_code"], how="left")
                     wl_exam_df["exam_valid_composite"] = (
                         wl_exam_df["exam_valid_composite"] &
                         (wl_exam_df["_anum"] == wl_exam_df["_min_a"]))
@@ -4442,9 +4442,9 @@ def render_app(config):
                 p_exam["_anum"] = p_exam["attempt"].apply(_anum_p)
                 _vm = p_exam["exam_valid_composite"] == True
                 if _vm.any() and "student_id" in p_exam.columns:
-                    _mn = (p_exam[_vm].groupby(["student_id","exam_family"])["_anum"]
+                    _mn = (p_exam[_vm].groupby(["student_id","exam_family","exam_code"])["_anum"]
                            .min().reset_index().rename(columns={"_anum":"_min_a"}))
-                    p_exam = p_exam.merge(_mn, on=["student_id","exam_family"], how="left")
+                    p_exam = p_exam.merge(_mn, on=["student_id","exam_family","exam_code"], how="left")
                     p_exam["exam_valid_composite"] = (
                         p_exam["exam_valid_composite"] &
                         (p_exam["_anum"] == p_exam["_min_a"]))
@@ -6173,7 +6173,7 @@ def render_app(config):
                         .groupby(["student_id","exam_family"])["_attempt_num"]
                         .min().reset_index()
                         .rename(columns={"_attempt_num": "_min_attempt"}))
-        team_exam_df = team_exam_df.merge(_min_attempt, on=["student_id","exam_family"], how="left")
+        team_exam_df = team_exam_df.merge(_min_attempt, on=["student_id","exam_family","exam_code"], how="left")
         # Only keep valid if it's the lowest attempt for that student/family
         team_exam_df["exam_valid_composite"] = (
             team_exam_df["exam_valid_composite"] &
@@ -6655,7 +6655,7 @@ def render_app(config):
                             .groupby(["student_id","exam_family"]).first().reset_index()
                             [["student_id","exam_family","goal_score","starting_score"]])
                         # detail_e already has exam_family column
-                        detail_e = detail_e.merge(_sa_best, on=["student_id","exam_family"], how="left")
+                        detail_e = detail_e.merge(_sa_best, on=["student_id","exam_family","exam_code"], how="left")
                         # Flag if student has scored at or above goal — only when exam families match
                         def _goal_met(row):
                             if pd.isna(row.get("goal_score")) or pd.isna(row.get("score")):
