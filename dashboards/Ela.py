@@ -4326,39 +4326,6 @@ def render_app(config):
 
         st.markdown("---")
 
-        # Prep Time / Attended / Unattended Hours
-        if True:
-            prep_range_map = {"Past 4 Weeks": 4, "Past 8 Weeks": 8, "Past 12 Weeks": 12}
-            sel_prep_range = st.selectbox("Prep Time Date Range", list(prep_range_map.keys()), index=2, key="profile_prep_range")
-            prep_weeks = prep_range_map[sel_prep_range]
-            prep_all = load_tutor_prep_time(lookback_weeks=prep_weeks)
-            prep_tutor = prep_all[prep_all["tutor_name"] == profile_tutor].copy()
-
-            if not prep_tutor.empty:
-                p_attended = prep_tutor["attended_sessions"].sum()
-                p_prep = prep_tutor["session_and_email_prep"].sum()
-                p_unattended = prep_tutor["unattended_sessions"].sum()
-                p_total = p_attended + p_prep + p_unattended
-
-                pct_attended = round(p_attended / p_total * 100, 1) if p_total > 0 else 0
-                pct_prep = round(p_prep / p_total * 100, 1) if p_total > 0 else 0
-                pct_unattended = round(p_unattended / p_total * 100, 1) if p_total > 0 else 0
-
-                st.markdown("**⏱️ Session & Prep Hours**")
-                pp1, pp2, pp3 = st.columns(3)
-                pp1.metric("Attended", f"{p_attended:.1f} hrs", f"{pct_attended:.1f}%")
-                pp2.metric("Prep Time", f"{p_prep:.1f} hrs", f"{pct_prep:.1f}%")
-                pp3.metric("Unattended", f"{p_unattended:.1f} hrs", f"{pct_unattended:.1f}%")
-
-                if pct_prep >= 20:
-                    st.markdown("<p style='color:#991b1b; font-size:0.82rem;'>🔴 Prep time is 20%+ of total hours</p>", unsafe_allow_html=True)
-                elif pct_prep >= 15:
-                    st.markdown("<p style='color:#9a3412; font-size:0.82rem;'>🟠 Prep time is 15%+ of total hours</p>", unsafe_allow_html=True)
-                elif pct_prep >= 10:
-                    st.markdown("<p style='color:#854d0e; font-size:0.82rem;'>🟡 Prep time is 10%+ of total hours</p>", unsafe_allow_html=True)
-
-                st.markdown("---")
-
         p_errors = []
         with st.spinner(f"Loading data for {profile_tutor}…"):
             try:
@@ -5123,6 +5090,39 @@ def render_app(config):
         st.markdown("---")
 
         # KPI trends
+        # Prep Time / Attended / Unattended Hours
+        if True:
+            prep_range_map = {"Past 4 Weeks": 4, "Past 8 Weeks": 8, "Past 12 Weeks": 12}
+            sel_prep_range = st.selectbox("Prep Time Date Range", list(prep_range_map.keys()), index=2, key="profile_prep_range")
+            prep_weeks = prep_range_map[sel_prep_range]
+            prep_all = load_tutor_prep_time(lookback_weeks=prep_weeks)
+            prep_tutor = prep_all[prep_all["tutor_name"] == profile_tutor].copy()
+
+            if not prep_tutor.empty:
+                p_attended = prep_tutor["attended_sessions"].sum()
+                p_prep = prep_tutor["session_and_email_prep"].sum()
+                p_unattended = prep_tutor["unattended_sessions"].sum()
+                p_total = p_attended + p_prep + p_unattended
+
+                pct_attended = round(p_attended / p_total * 100, 1) if p_total > 0 else 0
+                pct_prep = round(p_prep / p_total * 100, 1) if p_total > 0 else 0
+                pct_unattended = round(p_unattended / p_total * 100, 1) if p_total > 0 else 0
+
+                st.markdown("**⏱️ Session & Prep Hours**")
+                pp1, pp2, pp3 = st.columns(3)
+                pp1.metric("Attended", f"{p_attended:.1f} hrs", f"{pct_attended:.1f}%")
+                pp2.metric("Prep Time", f"{p_prep:.1f} hrs", f"{pct_prep:.1f}%")
+                pp3.metric("Unattended", f"{p_unattended:.1f} hrs", f"{pct_unattended:.1f}%")
+
+                if pct_prep >= 20:
+                    st.markdown("<p style='color:#991b1b; font-size:0.82rem;'>🔴 Prep time is 20%+ of total hours</p>", unsafe_allow_html=True)
+                elif pct_prep >= 15:
+                    st.markdown("<p style='color:#9a3412; font-size:0.82rem;'>🟠 Prep time is 15%+ of total hours</p>", unsafe_allow_html=True)
+                elif pct_prep >= 10:
+                    st.markdown("<p style='color:#854d0e; font-size:0.82rem;'>🟡 Prep time is 10%+ of total hours</p>", unsafe_allow_html=True)
+
+                st.markdown("---")
+
         st.markdown("### 📈 KPI Trends")
         if p_monthly_t.empty:
             st.info("No KPI trend data found for this tutor.")
