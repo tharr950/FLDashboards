@@ -6169,11 +6169,12 @@ def render_app(config):
 
         team_exam_df["_attempt_num"] = team_exam_df["attempt"].apply(_attempt_num)
         _valid_mask = team_exam_df["exam_valid_composite"] == True
+        _grp_cols = ["student_id","exam_family"] + (["exam_code"] if "exam_code" in team_exam_df.columns else [])
         _min_attempt = (team_exam_df[_valid_mask]
-                        .groupby(["student_id","exam_family"])["_attempt_num"]
+                        .groupby(_grp_cols)["_attempt_num"]
                         .min().reset_index()
                         .rename(columns={"_attempt_num": "_min_attempt"}))
-        team_exam_df = team_exam_df.merge(_min_attempt, on=["student_id","exam_family","exam_code"], how="left")
+        team_exam_df = team_exam_df.merge(_min_attempt, on=_grp_cols, how="left")
         # Only keep valid if it's the lowest attempt for that student/family
         team_exam_df["exam_valid_composite"] = (
             team_exam_df["exam_valid_composite"] &
