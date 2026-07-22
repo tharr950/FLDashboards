@@ -4327,7 +4327,7 @@ def render_app(config):
         st.markdown("---")
 
         # Prep Time / Attended / Unattended Hours
-        try:
+        if True:
             prep_range_map = {"Past 4 Weeks": 4, "Past 8 Weeks": 8, "Past 12 Weeks": 12}
             sel_prep_range = st.selectbox("Prep Time Date Range", list(prep_range_map.keys()), index=2, key="profile_prep_range")
             prep_weeks = prep_range_map[sel_prep_range]
@@ -4358,8 +4358,6 @@ def render_app(config):
                     st.markdown("<p style='color:#854d0e; font-size:0.82rem;'>🟡 Prep time is 10%+ of total hours</p>", unsafe_allow_html=True)
 
                 st.markdown("---")
-        except Exception:
-            pass
 
         p_errors = []
         with st.spinner(f"Loading data for {profile_tutor}…"):
