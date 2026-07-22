@@ -84,8 +84,8 @@ def get_redshift_connection():
 
 @st.cache_data(ttl=3600)
 def load_tutor_prep_time(lookback_weeks=12):
-    today = date.today()
-    from datetime import timedelta
+    from datetime import date as _date, timedelta
+    today = _date.today()
     day_end = today - timedelta(days=today.weekday() + 1)
     day_start = day_end - timedelta(weeks=lookback_weeks) + timedelta(days=1)
     query = f"""
