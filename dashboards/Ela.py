@@ -4539,6 +4539,7 @@ def render_app(config):
             _mtg_all = load_fl_meeting_data(lookback_months=24)
             _mtg_tutor = _mtg_all[_mtg_all["tutor"] == profile_tutor]
 
+            st.markdown("<div style='margin-top:16px;'></div>", unsafe_allow_html=True)
             rc1, rc2 = st.columns(2)
             with rc1:
                 if not _restr_tutor.empty and bool(_restr_tutor.iloc[0]["restricted"]):
