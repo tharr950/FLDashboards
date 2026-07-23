@@ -227,7 +227,7 @@ def load_archivable_unscheduled():
         join dw.students on dw.enrollments.enrollee_id = dw.students.id
         join dw.users student_users on dw.students.user_id = student_users.id
         join dw.brands on dw.courses.brand_id = dw.brands.id
-        where 1=1 and dw.courses.brand_id in (2,41,42,43,47,48)
+        where 1=1 and dw.courses.brand_id in (2,37,41,42,43,47)
         group by 1,2,3,4,5,6,7)
         select dw.tutoring_histories.tutor_id as tutor_id,
         tutor_users.first_name||' '||tutor_users.last_name AS tutor_name,
@@ -583,7 +583,7 @@ def load_progress_updates(as_of_date: str, last_session_from: str, team_name: st
         JOIN dw.team_members ON employees.id = team_members.member_id
         JOIN dw.teams ON team_members.team_id = teams.id
         WHERE sessions.starts_at < '{as_of_date}'
-          AND courses.brand_id IN (2,41,42,43,47,48)
+          AND courses.brand_id IN (2,37,41,42,43,47,48)
           AND teams.name = '{team_name}'
         GROUP BY 1,2,3,4,5
         HAVING SUM(sessions.duration)/60.0 >= 6
@@ -1069,7 +1069,7 @@ def load_ppw_data(start_date: str, end_date: str, team_name: str):
             FROM dw.students
             JOIN dw.enrollments ON enrollments.enrollee_id = students.id
             JOIN dw.courses ON courses.id = enrollments.course_id
-            WHERE courses.brand_id IN (2,36,41,42,43,47,48)
+            WHERE courses.brand_id IN (2,36,37,41,42,43,47,48)
             GROUP BY students.id
         )
         SELECT
