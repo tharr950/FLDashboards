@@ -155,6 +155,152 @@ def load_tutor_prep_time(lookback_weeks=12):
         df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
     return df
 
+def load_restricted_status_data():
+    query = """
+    WITH cte_employee_with_histories AS (
+        SELECT
+            item_id AS employee_id,
+            CASE WHEN histories.updated_by_type = 'Employee'
+                 THEN histories.updated_by_id ELSE NULL END AS updated_by_employee_id,
+            CASE WHEN histories.value = 'Restricted' THEN True ELSE False END AS restricted,
+            histories.created_at AS status_starts_at,
+            histories.id AS history_id
+        FROM dw.histories
+        JOIN dw.employees ON histories.item_id = employees.id
+        WHERE employees.end_date IS NULL
+            AND item_type = 'Employee' AND attr = 'tutor_type'
+    ),
+    cte_employee_wo_history AS (
+        SELECT id AS employee_id, -1 AS updated_by_employee_id,
+            CASE WHEN employees.tutor_type = 'Restricted' THEN True ELSE False END AS restricted,
+            employees.created_at AS status_starts_at,
+            -1 AS history_id
+        FROM dw.employees
+        WHERE employees.end_date IS NULL
+            AND id NOT IN (SELECT DISTINCT employee_id FROM cte_employee_with_histories)
+    ),
+    cte_all_histories AS (
+        SELECT * FROM cte_employee_with_histories
+        UNION
+        SELECT * FROM cte_employee_wo_history
+    ),
+    cte_last_restricted AS (
+        SELECT
+            cte_all_histories.employee_id,
+            cte_all_histories.updated_by_employee_id,
+            CASE
+                WHEN cte_all_histories.employee_id = cte_all_histories.updated_by_employee_id THEN 'Tutor'
+                WHEN cte_all_histories.updated_by_employee_id = -1 THEN 'Never Changed'
+                ELSE 'Admin'
+            END AS update_type,
+            cte_all_histories.restricted,
+            cte_all_histories.status_starts_at,
+            CASE
+                WHEN LAG(status_starts_at,1) OVER (PARTITION BY employee_id ORDER BY status_starts_at ASC, history_id ASC) IS NULL
+                THEN NULL
+                ELSE DATEADD(SECOND, -1, LEAD(status_starts_at,1) OVER (PARTITION BY employee_id ORDER BY status_starts_at ASC, history_id ASC))
+            END AS status_ends_at,
+            DATEDIFF(DAY, status_starts_at, status_ends_at) AS days_in_effect,
+            CASE WHEN LEAD(status_starts_at,1) OVER (PARTITION BY employee_id ORDER BY status_starts_at ASC, history_id ASC) IS NULL
+                THEN 1 ELSE 0 END AS current_status_flag
+        FROM cte_all_histories
+        GROUP BY cte_all_histories.employee_id, cte_all_histories.updated_by_employee_id,
+                 cte_all_histories.restricted, cte_all_histories.status_starts_at, cte_all_histories.history_id
+    )
+    SELECT
+        cte_last_restricted.*,
+        tutor_users.first_name||' '||tutor_users.last_name AS tutor,
+        manager_users.first_name||' '||manager_users.last_name AS faculty_leader
+    FROM cte_last_restricted
+        JOIN dw.employees ON cte_last_restricted.employee_id = employees.id
+        JOIN dw.users tutor_users ON employees.user_id = tutor_users.id
+        JOIN dw.team_members ON employees.id = team_members.member_id
+        JOIN dw.teams ON team_members.team_id = teams.id
+        JOIN dw.employees managers ON teams.manager_id = managers.id
+        JOIN dw.users manager_users ON managers.user_id = manager_users.id
+    ORDER BY tutor, status_starts_at
+    """
+    conn = get_redshift_connection()
+    df = pd.read_sql(query, conn)
+    df["status_starts_at"] = pd.to_datetime(df["status_starts_at"], errors="coerce")
+    df["status_ends_at"] = pd.to_datetime(df["status_ends_at"], errors="coerce")
+    return df
+
+
+@st.cache_data(ttl=3600)
+def load_fl_meeting_data(lookback_months=24):
+    lookback_start = (pd.Timestamp.now() - pd.DateOffset(months=lookback_months)).strftime("%Y-%m-%d")
+    query = f"""
+    WITH cte_group_meetings AS (
+        SELECT e_tutor.id as tutor_id,
+               count(distinct s.id) as attended_meetings
+        FROM dw.courses c
+            JOIN dw.sessions s ON s.course_id = c.id
+            JOIN dw.attendances a ON s.id = a.session_id
+            JOIN dw.enrollments e ON e.id = a.enrollment_id
+            JOIN dw.employees e_tutor ON e.enrollee_id = e_tutor.id
+        WHERE c.brand_id = 24 AND a.attended IS TRUE
+            AND s.starts_at >= '{lookback_start}'
+        GROUP BY tutor_id
+    ),
+    cte_1on1_meetings AS (
+        SELECT s.supervisor_id as fl_id, e_tutor.id as tutor_id,
+               count(distinct s.id) as attended_meetings,
+               sum(s.duration)/60.0 as meeting_hours,
+               max(s.starts_at) as last_attended_1on1
+        FROM dw.courses c
+            JOIN dw.sessions s ON s.course_id = c.id
+            JOIN dw.attendances a ON s.id = a.session_id
+            JOIN dw.enrollments e ON e.id = a.enrollment_id
+            JOIN dw.employees e_tutor ON e.enrollee_id = e_tutor.id
+        WHERE c.brand_id = 25
+            AND s.starts_at >= '{lookback_start}'
+            AND a.attended IS TRUE
+        GROUP BY s.supervisor_id, e_tutor.id
+    ),
+    cte_next_1on1 AS (
+        SELECT s2.supervisor_id AS fl_id, e_t2.id AS tutor_id,
+               MIN(s2.starts_at) AS next_1on1
+        FROM dw.courses c2
+            JOIN dw.sessions s2 ON s2.course_id = c2.id
+            JOIN dw.attendances a2 ON a2.session_id = s2.id
+            JOIN dw.enrollments e2 ON e2.id = a2.enrollment_id
+            JOIN dw.employees e_t2 ON e2.enrollee_id = e_t2.id
+        WHERE c2.brand_id = 25
+            AND s2.starts_at > GETDATE()
+        GROUP BY s2.supervisor_id, e_t2.id
+    )
+    SELECT
+        tutor_users.first_name||' '||tutor_users.last_name AS tutor,
+        manager_users.first_name||' '||manager_users.last_name AS faculty_leader,
+        date(e_tutor.hire_date) AS hire_date,
+        COALESCE(cte_1on1_meetings.attended_meetings, 0) AS attended_1on1_meetings,
+        COALESCE(cte_1on1_meetings.meeting_hours, 0) AS "1on1_meeting_hours",
+        cte_1on1_meetings.last_attended_1on1 AS last_1on1,
+        DATEDIFF(DAY, cte_1on1_meetings.last_attended_1on1, GETDATE()) AS days_since_last_1on1,
+        COALESCE(cte_group_meetings.attended_meetings, 0) AS attended_group_meetings,
+        cte_next_1on1.next_1on1
+    FROM dw.employees e_tutor
+        JOIN dw.users tutor_users ON e_tutor.user_id = tutor_users.id
+        JOIN dw.team_members ON e_tutor.id = team_members.member_id
+        JOIN dw.teams ON team_members.team_id = teams.id
+        JOIN dw.employees managers ON teams.manager_id = managers.id
+        JOIN dw.users manager_users ON managers.user_id = manager_users.id
+        LEFT JOIN cte_1on1_meetings ON (cte_1on1_meetings.fl_id = managers.id AND cte_1on1_meetings.tutor_id = e_tutor.id)
+        LEFT JOIN cte_group_meetings ON cte_group_meetings.tutor_id = e_tutor.id
+        LEFT JOIN cte_next_1on1 ON (cte_next_1on1.fl_id = managers.id AND cte_next_1on1.tutor_id = e_tutor.id)
+    WHERE e_tutor.end_date IS NULL AND e_tutor.type = 'Tutor'
+        AND tutor_users.title = 'Tutor'
+    ORDER BY tutor
+    """
+    conn = get_redshift_connection()
+    df = pd.read_sql(query, conn)
+    df["last_1on1"] = pd.to_datetime(df["last_1on1"], errors="coerce")
+    df["next_1on1"] = pd.to_datetime(df["next_1on1"], errors="coerce")
+    df["hire_date"] = pd.to_datetime(df["hire_date"], errors="coerce")
+    return df
+
+
 # ─────────────────────────────────────────────
 # REVOLUTION PREP MYSQL CONNECTION
 # ─────────────────────────────────────────────
@@ -2449,6 +2595,8 @@ def render_app(config):
         "Archivable Students & Unscheduled Hours",
         "📋 Annual Reviews",
         "🔰 90-Day Review",
+        "🚫 Restricted Status",
+        "📅 Meetings",
         "📄 PPW Report (Tableau)",
         "📊 Progress Updates (Tableau)",
         "⭐ NPS Scores (Tableau)",
@@ -4382,6 +4530,33 @@ def render_app(config):
                                 unsafe_allow_html=True)
         except Exception:
             pass
+
+        # Restricted Status & Next Meeting
+        try:
+            _restr_all = load_restricted_status_data()
+            _restr_tutor = _restr_all[(_restr_all["tutor"] == profile_tutor) & (_restr_all["current_status_flag"] == 1)]
+            _mtg_all = load_fl_meeting_data(lookback_months=24)
+            _mtg_tutor = _mtg_all[_mtg_all["tutor"] == profile_tutor]
+
+            rc1, rc2 = st.columns(2)
+            with rc1:
+                if not _restr_tutor.empty and bool(_restr_tutor.iloc[0]["restricted"]):
+                    days_restr = (pd.Timestamp.now() - _restr_tutor.iloc[0]["status_starts_at"]).days
+                    st.metric("Restricted Status", "🔴 Restricted", f"{days_restr} days")
+                else:
+                    st.metric("Restricted Status", "✅ Not Restricted")
+            with rc2:
+                if not _mtg_tutor.empty and pd.notna(_mtg_tutor.iloc[0]["next_1on1"]):
+                    next_dt = _mtg_tutor.iloc[0]["next_1on1"].strftime("%Y-%m-%d")
+                    st.metric("Next 1:1 Meeting", next_dt)
+                else:
+                    st.metric("Next 1:1 Meeting", "None scheduled")
+
+            st.markdown("---")
+        except Exception:
+            pass
+
+
 
         st.markdown("---")
 
@@ -7674,6 +7849,98 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                     "hours_delivered": "Hours", "last_session": "Last Session",
                     "last_progress_update": "Last Progress Update", "on_time": "Current"})
                 st.dataframe(display, use_container_width=True, hide_index=True)
+
+
+    if page == "🚫 Restricted Status":
+        st.markdown('<div class="main-title">🚫 Restricted Status</div>', unsafe_allow_html=True)
+
+        try:
+            restr_df = load_restricted_status_data()
+            restr_df = restr_df[restr_df["faculty_leader"] == "Nikki Pencak"].copy()
+        except Exception as e:
+            st.error(f"Could not load restricted status data: {e}")
+            restr_df = pd.DataFrame()
+
+        if restr_df.empty:
+            st.info("No restricted status data available for your team.")
+        else:
+            current = restr_df[restr_df["current_status_flag"] == 1].copy()
+            currently_restricted = current[current["restricted"] == True].copy()
+
+            st.markdown(f"**{len(currently_restricted)}** of **{current['tutor'].nunique()}** tutors are currently restricted.")
+
+            if len(currently_restricted) > 0:
+                currently_restricted["days_restricted"] = (pd.Timestamp.now() - currently_restricted["status_starts_at"]).dt.days
+                curr_display = currently_restricted[["tutor", "status_starts_at", "days_restricted", "update_type"]].copy()
+                curr_display["status_starts_at"] = curr_display["status_starts_at"].dt.strftime("%Y-%m-%d")
+                curr_display = curr_display.rename(columns={
+                    "tutor": "Tutor", "status_starts_at": "Restricted Since",
+                    "days_restricted": "Days Restricted", "update_type": "Changed By",
+                }).sort_values("Days Restricted", ascending=False)
+                st.dataframe(curr_display, hide_index=True, use_container_width=True,
+                             height=min(500, len(curr_display) * 35 + 60))
+            else:
+                st.success("No tutors on your team are currently restricted.")
+
+            st.markdown("")
+            st.markdown("**History (Past Year)**")
+            lookback_start = pd.Timestamp.now() - pd.DateOffset(years=1)
+            hist = restr_df[restr_df["status_starts_at"] >= lookback_start].copy()
+            hist_display = hist[["tutor", "restricted", "status_starts_at", "status_ends_at", "days_in_effect", "current_status_flag"]].copy()
+            hist_display["status_starts_at"] = hist_display["status_starts_at"].dt.strftime("%Y-%m-%d")
+            hist_display["status_ends_at"] = hist_display["status_ends_at"].dt.strftime("%Y-%m-%d").fillna("Present")
+            hist_display["days_in_effect"] = hist_display["days_in_effect"].fillna(0).astype(int)
+            hist_display["current_status_flag"] = hist_display["current_status_flag"].map({1: "Yes", 0: "No"})
+            hist_display = hist_display.rename(columns={
+                "tutor": "Tutor", "restricted": "Restricted",
+                "status_starts_at": "Start", "status_ends_at": "End",
+                "days_in_effect": "Days", "current_status_flag": "Current",
+            }).sort_values(["Tutor", "Start"], ascending=[True, False])
+            st.dataframe(hist_display, hide_index=True, use_container_width=True,
+                         height=min(500, len(hist_display) * 35 + 60))
+
+
+    if page == "📅 Meetings":
+        st.markdown('<div class="main-title">📅 Meetings</div>', unsafe_allow_html=True)
+
+        mtg_range_options = {
+            "Past 2 Years": 24, "Past Year": 12, "Past 6 Months": 6,
+            "Past 3 Months": 3, "Past Month": 1,
+        }
+        sel_range = st.selectbox("Date Range", list(mtg_range_options.keys()), index=0, key="fl_mtg_range")
+        sel_months = mtg_range_options[sel_range]
+
+        try:
+            mtg_df = load_fl_meeting_data(lookback_months=sel_months)
+            mtg_df = mtg_df[mtg_df["faculty_leader"] == "Nikki Pencak"].copy()
+        except Exception as e:
+            st.error(f"Could not load meeting data: {e}")
+            mtg_df = pd.DataFrame()
+
+        if mtg_df.empty:
+            st.info("No meeting data available for your team.")
+        else:
+            mm1, mm2, mm3, mm4 = st.columns(4)
+            mm1.metric("Avg 1:1s per Tutor", f"{mtg_df['attended_1on1_meetings'].mean():.1f}")
+            mm2.metric("Avg 1:1 Hours", f"{mtg_df['1on1_meeting_hours'].mean():.1f}")
+            mm3.metric("Avg Group Meetings", f"{mtg_df['attended_group_meetings'].mean():.1f}")
+            avg_days = mtg_df["days_since_last_1on1"].mean()
+            mm4.metric("Avg Days Since Last 1:1", f"{avg_days:.0f}" if pd.notna(avg_days) else "—")
+
+            st.markdown("")
+            mtg_display = mtg_df[["tutor", "attended_1on1_meetings", "1on1_meeting_hours",
+                                   "last_1on1", "days_since_last_1on1", "attended_group_meetings", "next_1on1"]].copy()
+            mtg_display["last_1on1"] = mtg_display["last_1on1"].dt.strftime("%Y-%m-%d").fillna("none")
+            mtg_display["next_1on1"] = mtg_display["next_1on1"].dt.strftime("%Y-%m-%d").fillna("none scheduled")
+            mtg_display["days_since_last_1on1"] = mtg_display["days_since_last_1on1"].fillna("—")
+            mtg_display = mtg_display.rename(columns={
+                "tutor": "Tutor", "attended_1on1_meetings": "1:1s",
+                "1on1_meeting_hours": "1:1 Hrs", "last_1on1": "Last 1:1",
+                "days_since_last_1on1": "Days Since", "attended_group_meetings": "Group Mtgs",
+                "next_1on1": "Next 1:1",
+            }).sort_values("Tutor")
+            st.dataframe(mtg_display, hide_index=True, use_container_width=True,
+                         height=min(600, len(mtg_display) * 35 + 60))
 
     elif page == "📄 PPW Report (Tableau)":
         st.markdown("## 📄 PPW Report")
