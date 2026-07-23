@@ -2442,7 +2442,6 @@ def render_app(config):
         "👤 Tutor Profile",
         "Concerns",
         "KPI Table",
-        "KPI Trends",
         "Grades Summary",
         "Test Prep & Exams",
         "📹 Parent Update Videos",
