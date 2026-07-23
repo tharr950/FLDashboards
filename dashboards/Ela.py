@@ -4532,6 +4532,33 @@ def render_app(config):
         except Exception:
             pass
 
+        # Restricted Status & Next Meeting
+        try:
+            _restr_all = load_restricted_status_data()
+            _restr_tutor = _restr_all[(_restr_all["tutor"] == profile_tutor) & (_restr_all["current_status_flag"] == 1)]
+            _mtg_all = load_fl_meeting_data(lookback_months=24)
+            _mtg_tutor = _mtg_all[_mtg_all["tutor"] == profile_tutor]
+
+            rc1, rc2 = st.columns(2)
+            with rc1:
+                if not _restr_tutor.empty and bool(_restr_tutor.iloc[0]["restricted"]):
+                    days_restr = (pd.Timestamp.now() - _restr_tutor.iloc[0]["status_starts_at"]).days
+                    st.metric("Restricted Status", "🔴 Restricted", f"{days_restr} days")
+                else:
+                    st.metric("Restricted Status", "✅ Not Restricted")
+            with rc2:
+                if not _mtg_tutor.empty and pd.notna(_mtg_tutor.iloc[0]["next_1on1"]):
+                    next_dt = _mtg_tutor.iloc[0]["next_1on1"].strftime("%Y-%m-%d")
+                    st.metric("Next 1:1 Meeting", next_dt)
+                else:
+                    st.metric("Next 1:1 Meeting", "None scheduled")
+
+            st.markdown("---")
+        except Exception:
+            pass
+
+
+
         st.markdown("---")
 
         p_errors = []
@@ -5316,31 +5343,6 @@ def render_app(config):
         st.markdown("---")
 
         # KPI trends
-
-        # Restricted Status & Next Meeting
-        try:
-            _restr_all = load_restricted_status_data()
-            _restr_tutor = _restr_all[(_restr_all["tutor"] == profile_tutor) & (_restr_all["current_status_flag"] == 1)]
-            _mtg_all = load_fl_meeting_data(lookback_months=24)
-            _mtg_tutor = _mtg_all[_mtg_all["tutor"] == profile_tutor]
-
-            rc1, rc2 = st.columns(2)
-            with rc1:
-                if not _restr_tutor.empty and bool(_restr_tutor.iloc[0]["restricted"]):
-                    days_restr = (pd.Timestamp.now() - _restr_tutor.iloc[0]["status_starts_at"]).days
-                    st.metric("Restricted Status", "🔴 Restricted", f"{days_restr} days")
-                else:
-                    st.metric("Restricted Status", "✅ Not Restricted")
-            with rc2:
-                if not _mtg_tutor.empty and pd.notna(_mtg_tutor.iloc[0]["next_1on1"]):
-                    next_dt = _mtg_tutor.iloc[0]["next_1on1"].strftime("%Y-%m-%d")
-                    st.metric("Next 1:1 Meeting", next_dt)
-                else:
-                    st.metric("Next 1:1 Meeting", "None scheduled")
-
-            st.markdown("---")
-        except Exception:
-            pass
 
         # Prep Time / Attended / Unattended Hours
         if True:
