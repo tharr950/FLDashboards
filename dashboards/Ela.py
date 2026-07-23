@@ -232,56 +232,54 @@ def load_restricted_status_data():
 def load_fl_meeting_data(lookback_months=24):
     lookback_start = (pd.Timestamp.now() - pd.DateOffset(months=lookback_months)).strftime("%Y-%m-%d")
     query = f"""
-    WITH cte_1on1_meetings AS (
-        SELECT s.supervisor_id AS fl_id, e_tutor.id AS tutor_id,
-            COUNT(DISTINCT s.id) AS attended_1on1_meetings,
-            SUM(s.duration)/60.0 AS one_on_one_meeting_hours,
-            MAX(s.starts_at) AS last_1on1
-        FROM dw.sessions s
-            JOIN dw.courses c ON s.course_id = c.id
-            JOIN dw.enrollments enr ON enr.course_id = c.id
-            JOIN dw.students stu ON enr.enrollee_id = stu.id
-            JOIN dw.employees e_tutor ON stu.user_id = e_tutor.user_id
-            JOIN dw.brands b ON c.brand_id = b.id
-        WHERE b.id = 25 AND s.attendances_attended_count > 0
+    WITH cte_group_meetings AS (
+        SELECT e_tutor.id as tutor_id,
+               count(distinct s.id) as attended_meetings
+        FROM dw.courses c
+            JOIN dw.sessions s ON s.course_id = c.id
+            JOIN dw.attendances a ON s.id = a.session_id
+            JOIN dw.enrollments e ON e.id = a.enrollment_id
+            JOIN dw.employees e_tutor ON e.enrollee_id = e_tutor.id
+        WHERE c.brand_id = 24 AND a.attended IS TRUE
             AND s.starts_at >= '{lookback_start}'
-        GROUP BY s.supervisor_id, e_tutor.id
+        GROUP BY tutor_id
     ),
-    cte_group_meetings AS (
-        SELECT s.supervisor_id AS fl_id, e_tutor.id AS tutor_id,
-            COUNT(DISTINCT s.id) AS attended_group_meetings
-        FROM dw.sessions s
-            JOIN dw.courses c ON s.course_id = c.id
-            JOIN dw.enrollments enr ON enr.course_id = c.id
-            JOIN dw.students stu ON enr.enrollee_id = stu.id
-            JOIN dw.employees e_tutor ON stu.user_id = e_tutor.user_id
-            JOIN dw.brands b ON c.brand_id = b.id
-        WHERE b.id = 24 AND s.attendances_attended_count > 0
+    cte_1on1_meetings AS (
+        SELECT s.supervisor_id as fl_id, e_tutor.id as tutor_id,
+               count(distinct s.id) as attended_meetings,
+               sum(s.duration)/60.0 as meeting_hours,
+               max(s.starts_at) as last_attended_1on1
+        FROM dw.courses c
+            JOIN dw.sessions s ON s.course_id = c.id
+            JOIN dw.attendances a ON s.id = a.session_id
+            JOIN dw.enrollments e ON e.id = a.enrollment_id
+            JOIN dw.employees e_tutor ON e.enrollee_id = e_tutor.id
+        WHERE c.brand_id = 25
             AND s.starts_at >= '{lookback_start}'
+            AND a.attended IS TRUE
         GROUP BY s.supervisor_id, e_tutor.id
     ),
     cte_next_1on1 AS (
         SELECT s2.supervisor_id AS fl_id, e_t2.id AS tutor_id,
-            MIN(s2.starts_at) AS next_1on1
-        FROM dw.sessions s2
-            JOIN dw.courses c2 ON s2.course_id = c2.id
-            JOIN dw.enrollments enr2 ON enr2.course_id = c2.id
-            JOIN dw.students stu2 ON enr2.enrollee_id = stu2.id
-            JOIN dw.employees e_t2 ON stu2.user_id = e_t2.user_id
-            JOIN dw.brands b2 ON c2.brand_id = b2.id
-        WHERE b2.id = 25 AND s2.starts_at > GETDATE()
+               MIN(s2.starts_at) AS next_1on1
+        FROM dw.courses c2
+            JOIN dw.sessions s2 ON s2.course_id = c2.id
+            JOIN dw.attendances a2 ON a2.session_id = s2.id
+            JOIN dw.enrollments e2 ON e2.id = a2.enrollment_id
+            JOIN dw.employees e_t2 ON e2.enrollee_id = e_t2.id
+        WHERE c2.brand_id = 25
+            AND s2.starts_at > GETDATE()
         GROUP BY s2.supervisor_id, e_t2.id
     )
     SELECT
-        e_tutor.id AS tutor_id,
         tutor_users.first_name||' '||tutor_users.last_name AS tutor,
         manager_users.first_name||' '||manager_users.last_name AS faculty_leader,
         date(e_tutor.hire_date) AS hire_date,
-        COALESCE(cte_1on1_meetings.attended_1on1_meetings, 0) AS attended_1on1_meetings,
-        COALESCE(cte_1on1_meetings.one_on_one_meeting_hours, 0) AS "1on1_meeting_hours",
-        cte_1on1_meetings.last_1on1,
-        DATEDIFF(DAY, cte_1on1_meetings.last_1on1, GETDATE()) AS days_since_last_1on1,
-        COALESCE(cte_group_meetings.attended_group_meetings, 0) AS attended_group_meetings,
+        COALESCE(cte_1on1_meetings.attended_meetings, 0) AS attended_1on1_meetings,
+        COALESCE(cte_1on1_meetings.meeting_hours, 0) AS "1on1_meeting_hours",
+        cte_1on1_meetings.last_attended_1on1 AS last_1on1,
+        DATEDIFF(DAY, cte_1on1_meetings.last_attended_1on1, GETDATE()) AS days_since_last_1on1,
+        COALESCE(cte_group_meetings.attended_meetings, 0) AS attended_group_meetings,
         cte_next_1on1.next_1on1
     FROM dw.employees e_tutor
         JOIN dw.users tutor_users ON e_tutor.user_id = tutor_users.id
@@ -289,9 +287,9 @@ def load_fl_meeting_data(lookback_months=24):
         JOIN dw.teams ON team_members.team_id = teams.id
         JOIN dw.employees managers ON teams.manager_id = managers.id
         JOIN dw.users manager_users ON managers.user_id = manager_users.id
-        LEFT JOIN cte_1on1_meetings ON e_tutor.id = cte_1on1_meetings.tutor_id
-        LEFT JOIN cte_group_meetings ON e_tutor.id = cte_group_meetings.tutor_id
-        LEFT JOIN cte_next_1on1 ON e_tutor.id = cte_next_1on1.tutor_id
+        LEFT JOIN cte_1on1_meetings ON (cte_1on1_meetings.fl_id = managers.id AND cte_1on1_meetings.tutor_id = e_tutor.id)
+        LEFT JOIN cte_group_meetings ON cte_group_meetings.tutor_id = e_tutor.id
+        LEFT JOIN cte_next_1on1 ON (cte_next_1on1.fl_id = managers.id AND cte_next_1on1.tutor_id = e_tutor.id)
     WHERE e_tutor.end_date IS NULL AND e_tutor.type = 'Tutor'
         AND tutor_users.title = 'Tutor'
     ORDER BY tutor
