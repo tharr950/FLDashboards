@@ -197,7 +197,7 @@ def load_restricted_status_data():
             cte_all_histories.restricted,
             cte_all_histories.status_starts_at,
             CASE
-                WHEN LAG(status_starts_at,1) OVER (PARTITION BY employee_id ORDER BY status_starts_at ASC, history_id ASC) IS NULL
+                WHEN LEAD(status_starts_at,1) OVER (PARTITION BY employee_id ORDER BY status_starts_at ASC, history_id ASC) IS NULL
                 THEN NULL
                 ELSE DATEADD(SECOND, -1, LEAD(status_starts_at,1) OVER (PARTITION BY employee_id ORDER BY status_starts_at ASC, history_id ASC))
             END AS status_ends_at,
