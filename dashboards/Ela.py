@@ -7894,6 +7894,10 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
             hist_display = hist[["tutor", "restricted", "status_starts_at", "status_ends_at", "days_in_effect", "current_status_flag"]].copy()
             hist_display["status_starts_at"] = hist_display["status_starts_at"].dt.strftime("%Y-%m-%d")
             hist_display["status_ends_at"] = hist_display["status_ends_at"].dt.strftime("%Y-%m-%d").fillna("Present")
+            # For ongoing (current) periods, compute days-so-far instead of showing 0
+            hist_display.loc[hist["current_status_flag"] == 1, "days_in_effect"] = (
+                pd.Timestamp.now() - hist.loc[hist["current_status_flag"] == 1, "status_starts_at"]
+            ).dt.days
             hist_display["days_in_effect"] = hist_display["days_in_effect"].fillna(0).astype(int)
             hist_display["current_status_flag"] = hist_display["current_status_flag"].map({1: "Yes", 0: "No"})
             hist_display = hist_display.rename(columns={
