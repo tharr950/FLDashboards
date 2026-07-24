@@ -7907,6 +7907,12 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
 
     if page == "📅 Meetings":
         st.markdown('<div class="main-title">📅 Meetings</div>', unsafe_allow_html=True)
+        st.markdown(
+            "<p style='color:#64748b; font-size:0.8rem; font-style:italic; margin-top:-8px;'>"
+            "ℹ️ Group Meetings are only captured if the tutor is marked as attending a Group Meeting — "
+            "logged Prep Time and Professional Development do not count.</p>",
+            unsafe_allow_html=True,
+        )
 
         mtg_range_options = {
             "Past 2 Years": 24, "Past Year": 12, "Past 6 Months": 6,
