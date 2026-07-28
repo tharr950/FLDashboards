@@ -9598,13 +9598,51 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                 except: return ''
 
             st.markdown("### 📊 Summary by Tutor & Week")
-            st.caption(f"{pivot_av['tutor'].nunique()} tutor(s) with isolated 30-min blocks")
 
-            styled = pivot_av.style
-            if "meeting_target" in pivot_av.columns:
+            # Filters
+            _filt_col1, _filt_col2 = st.columns(2)
+            with _filt_col1:
+                _av_tutor_filter = st.multiselect(
+                    "Filter by Tutor",
+                    options=sorted([t for t in df_av["tutor"].unique() if t in set(annelies_tutors)]),
+                    default=[],
+                    key="av_summary_tutor_filter",
+                    placeholder="All tutors"
+                )
+            with _filt_col2:
+                _av_target_filter = st.radio(
+                    "Delivery Target",
+                    ["All", "Not Meeting Only"],
+                    horizontal=True,
+                    key="av_target_filter"
+                )
+
+            # Apply filters to pivot
+            _pivot_filtered = pivot_av.copy()
+            if _av_tutor_filter:
+                _pivot_filtered = _pivot_filtered[_pivot_filtered["tutor"].isin(_av_tutor_filter)]
+            if _av_target_filter == "Not Meeting Only":
+                _pivot_filtered = _pivot_filtered[_pivot_filtered["meeting_target"] == "No"]
+
+            # Add total 30-min blocks column
+            _wk_cols = [c for c in _pivot_filtered.columns if c.startswith("Wk of")]
+            if _wk_cols:
+                _pivot_filtered["Total Blocks"] = _pivot_filtered[_wk_cols].sum(axis=1, skipna=True).astype(int)
+                # Sort by total blocks descending to float worst offenders to top
+                _pivot_filtered = _pivot_filtered.sort_values("Total Blocks", ascending=False)
+
+            st.caption(f"{_pivot_filtered['tutor'].nunique()} tutor(s) · {int(_pivot_filtered['Total Blocks'].sum()) if 'Total Blocks' in _pivot_filtered.columns else '?'} total 30-min blocks")
+
+            styled = _pivot_filtered.style
+            if "meeting_target" in _pivot_filtered.columns:
                 styled = styled.map(_color_meeting, subset=["meeting_target"])
-            if "pct_of_target" in pivot_av.columns:
+            if "pct_of_target" in _pivot_filtered.columns:
                 styled = styled.map(_color_pct, subset=["pct_of_target"])
+            if "Total Blocks" in _pivot_filtered.columns:
+                styled = styled.map(
+                    lambda v: "font-weight: bold; color: #c62828" if isinstance(v, (int,float)) and v >= 3 else "",
+                    subset=["Total Blocks"]
+                )
             st.dataframe(styled, use_container_width=True, hide_index=True)
 
             st.divider()
@@ -9614,12 +9652,17 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
             _av_tutors = sorted([t for t in df_av["tutor"].unique().tolist() if t in set(annelies_tutors)])
             _sel_av_tutor = st.selectbox("Select Tutor", _av_tutors, key="av_tutor_select")
             _det_av = df_av[df_av["tutor"] == _sel_av_tutor].copy()
-            _det_av["Day"] = _det_av["starts_at"].dt.strftime("%A %b %d")
-            _det_av["Time"] = _det_av["starts_at"].dt.strftime("%I:%M %p")
-            _det_av["Week"] = _det_av["week_start"].dt.strftime("Wk of %b %d")
+            _det_av["Week Of"] = _det_av["week_start"].dt.strftime("Wk of %b %d")
+            _det_av["Date"] = _det_av["starts_at"].dt.strftime("%A %b %d")
+            _det_av["Time (PST)"] = _det_av["starts_at"].dt.strftime("%I:%M %p")
             _det_av["Block Type"] = _det_av["block_type"] if "block_type" in _det_av.columns else "—"
-            st.dataframe(_det_av[["Week","Day","Time","Block Type"]].sort_values(["Week","Day","Time"]),
-                         use_container_width=True, hide_index=True)
+            _det_av["_sort_key"] = _det_av["starts_at"]
+            st.dataframe(
+                _det_av[["Week Of","Date","Time (PST)","Block Type"]]
+                .sort_values("_sort_key" if "_sort_key" in _det_av.columns else ["Week Of","Date","Time (PST)"])
+                .drop(columns=["_sort_key"], errors="ignore"),
+                use_container_width=True, hide_index=True
+            )
 
     if page == "📋 Annual Reviews":
         st.markdown('<div class="main-title">📋 Annual Reviews</div>', unsafe_allow_html=True)
