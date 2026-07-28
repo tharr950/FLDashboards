@@ -9542,7 +9542,7 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                 LEFT JOIN delivery d ON b.employee_id = d.employee_id
                 ORDER BY b.tutor, b.starts_at
             """
-            df_av = pd.read_sql(query_av.format(fl_name=leader_name), conn_av)
+            df_av = pd.read_sql(query_av.format(fl_name=faculty_leader_name), conn_av)
             conn_av.close()
         except Exception as e:
             st.error(f"Could not load availability data: {e}")
