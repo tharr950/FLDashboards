@@ -9510,6 +9510,7 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                         t.name AS tier,
                         DATE_TRUNC('week', a.starts_at)::date AS week_start,
                         a.starts_at,
+                        a.contiguous_duration,
                         COUNT(*) OVER (PARTITION BY a.employee_id, DATE_TRUNC('week', a.starts_at)) AS thirty_min_slots_week
                     FROM dw.availabilities a
                     JOIN dw.employees e ON a.employee_id = e.id
@@ -9522,7 +9523,6 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                     WHERE a.starts_at >= CURRENT_DATE
                       AND a.starts_at < CURRENT_DATE + 28
                       AND a.duration = 30
-                      AND a.contiguous_duration = 30
                       AND a.consumed_by_type IS NULL
                       AND e.end_date IS NULL
                       AND e.type = 'Tutor'
@@ -9534,6 +9534,8 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                     b.week_start,
                     b.starts_at,
                     b.thirty_min_slots_week AS slots_this_week,
+                    CASE WHEN b.contiguous_duration = 30 THEN 'Isolated Block'
+                         ELSE 'Fragmented Gap' END AS block_type,
                     ROUND(d.avg_delivery, 1) AS avg_delivery_last_3wks,
                     ROUND(d.avg_target, 1) AS delivery_target,
                     ROUND(d.avg_delivery / NULLIF(d.avg_target, 0) * 100, 1) AS pct_of_target,
@@ -9611,7 +9613,8 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
             _det_av["Day"] = _det_av["starts_at"].dt.strftime("%A %b %d")
             _det_av["Time"] = _det_av["starts_at"].dt.strftime("%I:%M %p")
             _det_av["Week"] = _det_av["week_start"].dt.strftime("Wk of %b %d")
-            st.dataframe(_det_av[["Week","Day","Time"]].sort_values(["Week","Day","Time"]),
+            _det_av["Block Type"] = _det_av["block_type"] if "block_type" in _det_av.columns else "—"
+            st.dataframe(_det_av[["Week","Day","Time","Block Type"]].sort_values(["Week","Day","Time"]),
                          use_container_width=True, hide_index=True)
 
     if page == "📋 Annual Reviews":
