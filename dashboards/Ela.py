@@ -2594,6 +2594,7 @@ def render_app(config):
         "📹 Parent Update Videos",
         "📝 Progress Update Quality Scores",
         "Archivable Students & Unscheduled Hours",
+        "📅 30-Min Availability",
         "📋 Annual Reviews",
         "🔰 90-Day Review",
         "🚫 Restricted Status",
@@ -9486,6 +9487,136 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                     c3.metric("Last 8 Wks",fmt_num_90(v8,0))
                     c4.metric("Peer Avg (1M)",fmt_num_90(p1,1))
                 _card_90("20. Weeks Meeting Delivery Target", _90s20)
+
+    # ─────────────────────────────────────────────
+    # PAGE: 30-MIN AVAILABILITY
+    # ─────────────────────────────────────────────
+    if page == "📅 30-Min Availability":
+        st.markdown('<div class="main-title">📅 30-Min Availability Blocks</div>', unsafe_allow_html=True)
+        st.caption("Tutors with isolated 30-minute availability blocks (not part of a longer contiguous window) in the next 4 weeks.")
+
+        try:
+            conn_av = get_redshift_connection()
+            query_av = f"""
+                WITH delivery AS (
+                    SELECT employee_id,
+                        AVG(instruction_actual) AS avg_delivery,
+                        AVG(instruction_target) AS avg_target
+                    FROM rp_bi.tutor_capacity
+                    WHERE first_day_of_week_sunday_start >= CURRENT_DATE - 21
+                      AND first_day_of_week_sunday_start <= CURRENT_DATE
+                    GROUP BY employee_id
+                ),
+                thirty_min_blocks AS (
+                    SELECT
+                        a.employee_id,
+                        u.first_name||' '||u.last_name AS tutor,
+                        t.name AS tier,
+                        DATE_TRUNC('week', a.starts_at)::date AS week_start,
+                        a.starts_at,
+                        COUNT(*) OVER (PARTITION BY a.employee_id, DATE_TRUNC('week', a.starts_at)) AS thirty_min_slots_week
+                    FROM dw.availabilities a
+                    JOIN dw.employees e ON a.employee_id = e.id
+                    JOIN dw.users u ON e.user_id = u.id
+                    JOIN dw.team_members tm ON e.id = tm.member_id
+                    JOIN dw.teams teams ON tm.team_id = teams.id
+                    JOIN dw.employees mgr ON teams.manager_id = mgr.id
+                    JOIN dw.users flu ON mgr.user_id = flu.id
+                    JOIN dw.tiers t ON e.tier_id = t.id
+                    WHERE a.starts_at >= DATE_TRUNC('week', CURRENT_DATE)
+                      AND a.starts_at < DATE_TRUNC('week', CURRENT_DATE) + 28
+                      AND a.duration = 30
+                      AND a.contiguous_duration = 30
+                      AND a.consumed_by_type IS NULL
+                      AND e.end_date IS NULL
+                      AND e.type = 'Tutor'
+                      AND flu.first_name||' '||flu.last_name = '{{fl_name}}'
+                )
+                SELECT
+                    b.tutor,
+                    b.tier,
+                    b.week_start,
+                    b.starts_at,
+                    b.thirty_min_slots_week AS slots_this_week,
+                    ROUND(d.avg_delivery, 1) AS avg_delivery_last_3wks,
+                    ROUND(d.avg_target, 1) AS delivery_target,
+                    ROUND(d.avg_delivery / NULLIF(d.avg_target, 0) * 100, 1) AS pct_of_target,
+                    CASE WHEN d.avg_delivery >= d.avg_target THEN 'Yes' ELSE 'No' END AS meeting_target
+                FROM thirty_min_blocks b
+                LEFT JOIN delivery d ON b.employee_id = d.employee_id
+                ORDER BY b.tutor, b.starts_at
+            """
+            df_av = pd.read_sql(query_av.format(fl_name=leader_name), conn_av)
+            conn_av.close()
+        except Exception as e:
+            st.error(f"Could not load availability data: {e}")
+            df_av = pd.DataFrame()
+
+        if df_av.empty:
+            st.success("✅ No tutors with isolated 30-minute availability blocks in the next 4 weeks.")
+        else:
+            df_av["week_start"] = pd.to_datetime(df_av["week_start"])
+            df_av["starts_at"] = pd.to_datetime(df_av["starts_at"])
+
+            # Summary table — one row per tutor per week
+            summary_av = (df_av.groupby(["tutor","tier","week_start","slots_this_week",
+                                          "avg_delivery_last_3wks","delivery_target",
+                                          "pct_of_target","meeting_target"])
+                          .size().reset_index(drop=True)
+                          .drop_duplicates() if False else
+                          df_av[["tutor","tier","week_start","slots_this_week",
+                                 "avg_delivery_last_3wks","delivery_target",
+                                 "pct_of_target","meeting_target"]]
+                          .drop_duplicates()
+                          .sort_values(["meeting_target","tutor","week_start"]))
+
+            # Pivot weeks as columns
+            pivot_av = summary_av.pivot_table(
+                index=["tutor","tier","avg_delivery_last_3wks","delivery_target","pct_of_target","meeting_target"],
+                columns="week_start",
+                values="slots_this_week",
+                aggfunc="max"
+            ).reset_index()
+            pivot_av.columns.name = None
+            # Rename week columns to friendly labels
+            for col in pivot_av.columns:
+                if hasattr(col, 'strftime'):
+                    pivot_av = pivot_av.rename(columns={col: f"Wk of {col.strftime('%b %d')}"})
+
+            def _color_meeting(val):
+                if val == 'Yes': return 'color: #2e7d32; font-weight: bold'
+                if val == 'No':  return 'color: #c62828; font-weight: bold'
+                return ''
+            def _color_pct(val):
+                try:
+                    v = float(val)
+                    if v >= 100: return 'color: #2e7d32; font-weight: bold'
+                    if v >= 80:  return 'color: #f57f17; font-weight: bold'
+                    return 'color: #c62828; font-weight: bold'
+                except: return ''
+
+            st.markdown("### 📊 Summary by Tutor & Week")
+            st.caption(f"{pivot_av['tutor'].nunique()} tutor(s) with isolated 30-min blocks")
+
+            styled = pivot_av.style
+            if "meeting_target" in pivot_av.columns:
+                styled = styled.map(_color_meeting, subset=["meeting_target"])
+            if "pct_of_target" in pivot_av.columns:
+                styled = styled.map(_color_pct, subset=["pct_of_target"])
+            st.dataframe(styled, use_container_width=True, hide_index=True)
+
+            st.divider()
+
+            # Detail — tutor selector
+            st.markdown("### 🔍 Slot Detail")
+            _av_tutors = sorted(df_av["tutor"].unique().tolist())
+            _sel_av_tutor = st.selectbox("Select Tutor", _av_tutors, key="av_tutor_select")
+            _det_av = df_av[df_av["tutor"] == _sel_av_tutor].copy()
+            _det_av["Day"] = _det_av["starts_at"].dt.strftime("%A %b %d")
+            _det_av["Time"] = _det_av["starts_at"].dt.strftime("%I:%M %p")
+            _det_av["Week"] = _det_av["week_start"].dt.strftime("Wk of %b %d")
+            st.dataframe(_det_av[["Week","Day","Time"]].sort_values(["Week","Day","Time"]),
+                         use_container_width=True, hide_index=True)
 
     if page == "📋 Annual Reviews":
         st.markdown('<div class="main-title">📋 Annual Reviews</div>', unsafe_allow_html=True)
