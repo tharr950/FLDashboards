@@ -9656,11 +9656,9 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
             _det_av["Date"] = _det_av["starts_at"].dt.strftime("%A %b %d")
             _det_av["Time (PST)"] = _det_av["starts_at"].dt.strftime("%I:%M %p")
             _det_av["Block Type"] = _det_av["block_type"] if "block_type" in _det_av.columns else "—"
-            _det_av["_sort_key"] = _det_av["starts_at"]
+            _det_av = _det_av.sort_values("starts_at")
             st.dataframe(
-                _det_av[["Week Of","Date","Time (PST)","Block Type"]]
-                .sort_values("_sort_key" if "_sort_key" in _det_av.columns else ["Week Of","Date","Time (PST)"])
-                .drop(columns=["_sort_key"], errors="ignore"),
+                _det_av[["Week Of","Date","Time (PST)","Block Type"]],
                 use_container_width=True, hide_index=True
             )
 
