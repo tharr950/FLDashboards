@@ -9519,8 +9519,8 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                     JOIN dw.employees mgr ON teams.manager_id = mgr.id
                     JOIN dw.users flu ON mgr.user_id = flu.id
                     JOIN dw.tiers t ON e.tier_id = t.id
-                    WHERE a.starts_at >= DATE_TRUNC('week', CURRENT_DATE)
-                      AND a.starts_at < DATE_TRUNC('week', CURRENT_DATE) + 28
+                    WHERE a.starts_at >= CURRENT_DATE
+                      AND a.starts_at < CURRENT_DATE + 28
                       AND a.duration = 30
                       AND a.contiguous_duration = 30
                       AND a.consumed_by_type IS NULL
@@ -9605,7 +9605,7 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
 
             # Detail — tutor selector
             st.markdown("### 🔍 Slot Detail")
-            _av_tutors = sorted(df_av["tutor"].unique().tolist())
+            _av_tutors = sorted([t for t in df_av["tutor"].unique().tolist() if t in set(annelies_tutors)])
             _sel_av_tutor = st.selectbox("Select Tutor", _av_tutors, key="av_tutor_select")
             _det_av = df_av[df_av["tutor"] == _sel_av_tutor].copy()
             _det_av["Day"] = _det_av["starts_at"].dt.strftime("%A %b %d")
