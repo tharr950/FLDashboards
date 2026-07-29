@@ -9514,10 +9514,10 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                         a.employee_id,
                         u.first_name||' '||u.last_name AS tutor,
                         t.name AS tier,
-                        (DATE_TRUNC('week', a.starts_at) - INTERVAL '1 day')::date AS week_start,
+                        DATEADD(day, -1, DATE_TRUNC('week', a.starts_at)::date) AS week_start,
                         a.starts_at,
                         a.contiguous_duration,
-                        COUNT(*) OVER (PARTITION BY a.employee_id, (DATE_TRUNC('week', a.starts_at) - INTERVAL '1 day')::date) AS thirty_min_slots_week
+                        COUNT(*) OVER (PARTITION BY a.employee_id, DATEADD(day, -1, DATE_TRUNC('week', a.starts_at)::date)) AS thirty_min_slots_week
                     FROM dw.availabilities a
                     JOIN dw.employees e ON a.employee_id = e.id
                     JOIN dw.users u ON e.user_id = u.id
@@ -9654,12 +9654,25 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
             if _av_target_filter == "Not Meeting Only":
                 _pivot_filtered = _pivot_filtered[_pivot_filtered["meeting_target"] == "No"]
 
-            # Add total 30-min blocks column
+            # Add total blocks and blocks-when-not-meeting-target columns
             _wk_cols = [c for c in _pivot_filtered.columns if c.startswith("Wk of")]
             if _wk_cols:
                 _pivot_filtered["Total Blocks"] = _pivot_filtered[_wk_cols].sum(axis=1, skipna=True).astype(int)
-                # Sort by total blocks descending to float worst offenders to top
-                _pivot_filtered = _pivot_filtered.sort_values("Total Blocks", ascending=False)
+
+                # For each tutor, count blocks only for weeks where meeting_target = No
+                # We need to join back to the per-week meeting_target data
+                _not_meeting_blocks = []
+                for _, row in _pivot_filtered.iterrows():
+                    tutor = row["tutor"]
+                    _tutor_weeks = _df_av_filtered[_df_av_filtered["tutor"] == tutor][
+                        ["week_start","slots_this_week","meeting_target"]].drop_duplicates()
+                    _not_meeting = _tutor_weeks[_tutor_weeks["meeting_target"] == "No"]["slots_this_week"].sum()
+                    _not_meeting_blocks.append(int(_not_meeting))
+                _pivot_filtered["Blocks (Not Meeting Target)"] = _not_meeting_blocks
+
+                # Sort by not-meeting-target blocks first, then total
+                _pivot_filtered = _pivot_filtered.sort_values(
+                    ["Blocks (Not Meeting Target)", "Total Blocks"], ascending=False)
 
             st.caption(f"{_pivot_filtered['tutor'].nunique()} tutor(s) · {int(_pivot_filtered['Total Blocks'].sum()) if 'Total Blocks' in _pivot_filtered.columns else '?'} total 30-min blocks")
 
