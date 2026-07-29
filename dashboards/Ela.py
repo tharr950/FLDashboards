@@ -9539,7 +9539,7 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                     b.tier,
                     b.week_start,
                     b.starts_at,
-                    b.thirty_min_slots_week AS slots_this_week,
+                    b.slot_count AS slots_this_week,
                     CASE WHEN b.contiguous_duration = 30 THEN 'Isolated Block'
                          ELSE 'Fragmented Gap' END AS block_type,
                     d.delivery_this_week,
