@@ -9494,14 +9494,16 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
         try:
             conn_av = get_redshift_connection()
             query_av = f"""
-                WITH delivery AS (
+                WITH delivery_by_week AS (
                     SELECT employee_id,
-                        AVG(instruction_actual) AS avg_delivery,
-                        AVG(instruction_target) AS avg_target
+                        first_day_of_week_sunday_start AS week_start,
+                        ROUND(instruction_actual::numeric, 1) AS delivery_this_week,
+                        ROUND(instruction_target::numeric, 1) AS delivery_target,
+                        ROUND(instruction_actual / NULLIF(instruction_target, 0) * 100, 0) AS pct_of_target,
+                        CASE WHEN instruction_actual >= instruction_target THEN 'Yes' ELSE 'No' END AS meeting_target
                     FROM rp_bi.tutor_capacity
-                    WHERE first_day_of_week_sunday_start >= CURRENT_DATE - 21
-                      AND first_day_of_week_sunday_start <= CURRENT_DATE
-                    GROUP BY employee_id
+                    WHERE first_day_of_week_sunday_start >= CURRENT_DATE
+                      AND first_day_of_week_sunday_start < CURRENT_DATE + 28
                 ),
                 thirty_min_blocks AS (
                     SELECT
@@ -9526,7 +9528,7 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                       AND a.consumed_by_type IS NULL
                       AND e.end_date IS NULL
                       AND e.type = 'Tutor'
-                      AND flu.first_name||' '||flu.last_name = '{{fl_name}}'
+                      AND flu.first_name||' '||flu.last_name = '{fl_name}'
                 )
                 SELECT
                     b.tutor,
@@ -9536,12 +9538,13 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                     b.thirty_min_slots_week AS slots_this_week,
                     CASE WHEN b.contiguous_duration = 30 THEN 'Isolated Block'
                          ELSE 'Fragmented Gap' END AS block_type,
-                    ROUND(d.avg_delivery, 1) AS avg_delivery_last_3wks,
-                    ROUND(d.avg_target, 1) AS delivery_target,
-                    ROUND(d.avg_delivery / NULLIF(d.avg_target, 0) * 100, 1) AS pct_of_target,
-                    CASE WHEN d.avg_delivery >= d.avg_target THEN 'Yes' ELSE 'No' END AS meeting_target
+                    d.delivery_this_week,
+                    d.delivery_target,
+                    d.pct_of_target,
+                    COALESCE(d.meeting_target, '?') AS meeting_target
                 FROM thirty_min_blocks b
-                LEFT JOIN delivery d ON b.employee_id = d.employee_id
+                LEFT JOIN delivery_by_week d ON b.employee_id = d.employee_id
+                    AND b.week_start = d.week_start
                 ORDER BY b.tutor, b.starts_at
             """
             df_av = pd.read_sql(query_av.format(fl_name=faculty_leader_name), conn_av)
@@ -9563,20 +9566,19 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                           .size().reset_index(drop=True)
                           .drop_duplicates() if False else
                           df_av[["tutor","tier","week_start","slots_this_week",
-                                 "avg_delivery_last_3wks","delivery_target",
+                                 "delivery_this_week","delivery_target",
                                  "pct_of_target","meeting_target"]]
                           .drop_duplicates()
                           .sort_values(["meeting_target","tutor","week_start"]))
 
             # Pivot weeks as columns
             pivot_av = summary_av.pivot_table(
-                index=["tutor","tier","avg_delivery_last_3wks","delivery_target","pct_of_target","meeting_target"],
+                index=["tutor","tier","delivery_target","meeting_target"],
                 columns="week_start",
                 values="slots_this_week",
                 aggfunc="max"
             ).reset_index()
             pivot_av.columns.name = None
-            # Rename week columns to friendly labels
             for col in pivot_av.columns:
                 if hasattr(col, 'strftime'):
                     pivot_av = pivot_av.rename(columns={col: f"Wk of {col.strftime('%b %d')}"})
@@ -9595,8 +9597,14 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
 
             st.markdown("### 📊 Summary by Tutor & Week")
 
+            with st.expander("ℹ️ Block Type Definitions", expanded=False):
+                st.markdown("""
+- **Isolated Block**: A standalone 30-minute availability window — never part of a larger continuous block. Hard to fill with a standard session.
+- **Fragmented Gap**: Originally part of a larger availability window, but sessions scheduled around it have left a 30-minute gap that is now effectively unschedulable.
+                """)
+
             # Filters
-            _filt_col1, _filt_col2 = st.columns(2)
+            _filt_col1, _filt_col2, _filt_col3 = st.columns(3)
             with _filt_col1:
                 _av_tutor_filter = st.multiselect(
                     "Filter by Tutor",
@@ -9612,9 +9620,34 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                     horizontal=True,
                     key="av_target_filter"
                 )
+            with _filt_col3:
+                _av_block_filter = st.radio(
+                    "Block Type",
+                    ["All", "Isolated Block", "Fragmented Gap"],
+                    horizontal=True,
+                    key="av_block_filter"
+                )
 
-            # Apply filters to pivot
-            _pivot_filtered = pivot_av.copy()
+            # Apply filters — block type filter applied before pivot
+            _df_av_filtered = df_av.copy()
+            if _av_block_filter != "All" and "block_type" in _df_av_filtered.columns:
+                _df_av_filtered = _df_av_filtered[_df_av_filtered["block_type"] == _av_block_filter]
+
+            # Re-pivot with filtered data
+            _summary_filtered = _df_av_filtered[["tutor","tier","week_start","slots_this_week",
+                                                  "delivery_this_week","delivery_target",
+                                                  "pct_of_target","meeting_target"]].drop_duplicates()
+            _pivot_filtered = _summary_filtered.pivot_table(
+                index=["tutor","tier","delivery_target","meeting_target"],
+                columns="week_start",
+                values="slots_this_week",
+                aggfunc="max"
+            ).reset_index()
+            _pivot_filtered.columns.name = None
+            for col in _pivot_filtered.columns:
+                if hasattr(col, 'strftime'):
+                    _pivot_filtered = _pivot_filtered.rename(columns={col: f"Wk of {col.strftime('%b %d')}"})
+
             if _av_tutor_filter:
                 _pivot_filtered = _pivot_filtered[_pivot_filtered["tutor"].isin(_av_tutor_filter)]
             if _av_target_filter == "Not Meeting Only":
