@@ -9560,12 +9560,7 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
             df_av["starts_at"] = pd.to_datetime(df_av["starts_at"])
 
             # Summary table — one row per tutor per week
-            summary_av = (df_av.groupby(["tutor","tier","week_start","slots_this_week",
-                                          "avg_delivery_last_3wks","delivery_target",
-                                          "pct_of_target","meeting_target"])
-                          .size().reset_index(drop=True)
-                          .drop_duplicates() if False else
-                          df_av[["tutor","tier","week_start","slots_this_week",
+            summary_av = (df_av[["tutor","tier","week_start","slots_this_week",
                                  "delivery_this_week","delivery_target",
                                  "pct_of_target","meeting_target"]]
                           .drop_duplicates()
