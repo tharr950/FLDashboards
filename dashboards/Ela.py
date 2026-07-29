@@ -9532,7 +9532,7 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                       AND a.consumed_by_type IS NULL
                       AND e.end_date IS NULL
                       AND e.type = 'Tutor'
-                      AND flu.first_name||' '||flu.last_name = '{fl_name}'
+                      AND flu.first_name||' '||flu.last_name = '{faculty_leader_name}'
                 )
                 SELECT
                     b.tutor,
@@ -9551,7 +9551,7 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                     AND b.week_start = d.week_start
                 ORDER BY b.tutor, b.starts_at
             """
-            df_av = pd.read_sql(query_av.format(fl_name=faculty_leader_name), conn_av)
+            df_av = pd.read_sql(query_av, conn_av)
             conn_av.close()
         except Exception as e:
             st.error(f"Could not load availability data: {e}")
