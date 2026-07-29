@@ -9506,7 +9506,7 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                         ROUND(instruction_actual / NULLIF(instruction_target, 0) * 100, 0) AS pct_of_target,
                         CASE WHEN instruction_actual >= instruction_target THEN 'Yes' ELSE 'No' END AS meeting_target
                     FROM rp_bi.tutor_capacity
-                    WHERE first_day_of_week_sunday_start >= CURRENT_DATE
+                    WHERE first_day_of_week_sunday_start >= CURRENT_DATE - 7
                       AND first_day_of_week_sunday_start < CURRENT_DATE + 28
                 ),
                 thirty_min_blocks AS (
