@@ -9674,9 +9674,18 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                 ["Blocks (Not Meeting Target)", "Total Blocks"], ascending=False)
 
             # Build per-tutor per-week meeting_target lookup for cell coloring
+            # Normalize week_start to string for consistent key matching
             _mt_lookup = {}
             for _, r in _week_summary.iterrows():
-                _mt_lookup[(r["tutor"], _week_col_map.get(r["week_start"], str(r["week_start"])))] = r["meeting_target"]
+                _ws_str = str(r["week_start"])[:10]  # normalize to YYYY-MM-DD
+                # Find the display label for this week_start
+                _display_label = None
+                for raw_col, label in _week_col_map.items():
+                    if str(raw_col)[:10] == _ws_str:
+                        _display_label = label
+                        break
+                if _display_label:
+                    _mt_lookup[(r["tutor"], _display_label)] = r["meeting_target"]
 
             def _color_wk_cell(val, col, tutor_series):
                 # Color week block counts red if not meeting target that week
@@ -9693,6 +9702,7 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                 return styles
 
             st.caption(f"{_pivot_filtered['tutor'].nunique()} tutor(s) · {int(_pivot_filtered['Total Blocks'].sum()) if 'Total Blocks' in _pivot_filtered.columns else '?'} total 30-min blocks")
+            st.caption("🔴 Red = tutor not meeting delivery target that week · ⚫ Black = meeting target")
 
             styled = _pivot_filtered.style
             # Color week columns red if not meeting target that week
