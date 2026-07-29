@@ -9704,6 +9704,11 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                         styles.append("color: #1e293b")
                 return styles
 
+            # Convert float columns to int to remove .000000
+            for _c in _wk_cols + ["Total Blocks", "Blocks (Not Meeting Target)"]:
+                if _c in _pivot_filtered.columns:
+                    _pivot_filtered[_c] = pd.to_numeric(_pivot_filtered[_c], errors="coerce").fillna(0).astype(int).replace(0, None)
+
             st.caption(f"{_pivot_filtered['tutor'].nunique()} tutor(s) · {int(_pivot_filtered['Total Blocks'].sum()) if 'Total Blocks' in _pivot_filtered.columns else '?'} total 30-min blocks")
             st.caption("🔴 Red = tutor not meeting delivery target that week · ⚫ Black = meeting target")
 
