@@ -9624,62 +9624,92 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                     key="av_block_filter"
                 )
 
-            # Apply filters — block type filter applied before pivot
-            _df_av_filtered = df_av.copy()
+            # Apply filters
+            _df_av_filtered = df_av[df_av["tutor"].isin(set(annelies_tutors))].copy()
             if _av_block_filter != "All" and "block_type" in _df_av_filtered.columns:
                 _df_av_filtered = _df_av_filtered[_df_av_filtered["block_type"] == _av_block_filter]
+            if _av_tutor_filter:
+                _df_av_filtered = _df_av_filtered[_df_av_filtered["tutor"].isin(_av_tutor_filter)]
 
-            # Re-pivot with filtered data
-            _summary_filtered = _df_av_filtered[["tutor","tier","week_start","slots_this_week",
-                                                  "delivery_this_week","delivery_target",
-                                                  "pct_of_target","meeting_target"]].drop_duplicates()
-            _pivot_filtered = _summary_filtered.pivot_table(
-                index=["tutor","tier","delivery_target","meeting_target"],
+            # Build per-tutor per-week summary (one row per tutor+week)
+            _week_summary = (_df_av_filtered[["tutor","tier","week_start","slots_this_week","meeting_target"]]
+                             .drop_duplicates(subset=["tutor","week_start"])
+                             .copy())
+
+            if _av_target_filter == "Not Meeting Only":
+                _week_summary = _week_summary[_week_summary["meeting_target"] == "No"]
+
+            # Pivot: tutor x week -> slot count
+            _pivot_filtered = _week_summary.pivot_table(
+                index=["tutor","tier"],
                 columns="week_start",
                 values="slots_this_week",
                 aggfunc="max"
             ).reset_index()
             _pivot_filtered.columns.name = None
-            _pivot_filtered.columns = [
-                f"Wk of {pd.to_datetime(col).strftime('%b %d')}" if str(col) not in ["tutor","tier","delivery_target","meeting_target"] and col not in ["tutor","tier","delivery_target","meeting_target"] else col
-                for col in _pivot_filtered.columns
-            ]
 
-            if _av_tutor_filter:
-                _pivot_filtered = _pivot_filtered[_pivot_filtered["tutor"].isin(_av_tutor_filter)]
-            if _av_target_filter == "Not Meeting Only":
-                _pivot_filtered = _pivot_filtered[_pivot_filtered["meeting_target"] == "No"]
+            # Rename week columns to friendly labels, track week->meeting_target map per tutor
+            _week_cols_raw = [c for c in _pivot_filtered.columns if c not in ["tutor","tier"]]
+            _week_col_map = {}  # raw col -> display label
+            for col in _week_cols_raw:
+                try:
+                    label = f"Wk of {pd.to_datetime(col).strftime('%b %d')}"
+                except:
+                    label = str(col)
+                _week_col_map[col] = label
+                _pivot_filtered = _pivot_filtered.rename(columns={col: label})
+            _wk_cols = list(_week_col_map.values())
 
-            # Add total blocks and blocks-when-not-meeting-target columns
-            _wk_cols = [c for c in _pivot_filtered.columns if c.startswith("Wk of")]
-            if _wk_cols:
-                _pivot_filtered["Total Blocks"] = _pivot_filtered[_wk_cols].sum(axis=1, skipna=True).astype(int)
+            # Total blocks
+            _pivot_filtered["Total Blocks"] = _pivot_filtered[_wk_cols].sum(axis=1, skipna=True).fillna(0).astype(int)
 
-                # For each tutor, count blocks only for weeks where meeting_target = No
-                # We need to join back to the per-week meeting_target data
-                _not_meeting_blocks = []
-                for _, row in _pivot_filtered.iterrows():
-                    tutor = row["tutor"]
-                    _tutor_weeks = _df_av_filtered[_df_av_filtered["tutor"] == tutor][
-                        ["week_start","slots_this_week","meeting_target"]].drop_duplicates()
-                    _not_meeting = _tutor_weeks[_tutor_weeks["meeting_target"] == "No"]["slots_this_week"].sum()
-                    _not_meeting_blocks.append(int(_not_meeting))
-                _pivot_filtered["Blocks (Not Meeting Target)"] = _not_meeting_blocks
+            # Blocks in weeks NOT meeting target
+            def _not_meeting_count(tutor):
+                _t = _week_summary[(_week_summary["tutor"] == tutor) & (_week_summary["meeting_target"] == "No")]
+                return int(_t["slots_this_week"].sum())
+            _pivot_filtered["Blocks (Not Meeting Target)"] = _pivot_filtered["tutor"].apply(_not_meeting_count)
 
-                # Sort by not-meeting-target blocks first, then total
-                _pivot_filtered = _pivot_filtered.sort_values(
-                    ["Blocks (Not Meeting Target)", "Total Blocks"], ascending=False)
+            # Sort: most blocks not meeting target first, then total
+            _pivot_filtered = _pivot_filtered.sort_values(
+                ["Blocks (Not Meeting Target)", "Total Blocks"], ascending=False)
+
+            # Build per-tutor per-week meeting_target lookup for cell coloring
+            _mt_lookup = {}
+            for _, r in _week_summary.iterrows():
+                _mt_lookup[(r["tutor"], _week_col_map.get(r["week_start"], str(r["week_start"])))] = r["meeting_target"]
+
+            def _color_wk_cell(val, col, tutor_series):
+                # Color week block counts red if not meeting target that week
+                styles = []
+                for idx_v, v in enumerate(val):
+                    tutor = tutor_series.iloc[idx_v]
+                    mt = _mt_lookup.get((tutor, col), "?")
+                    if pd.isna(v) or v == 0:
+                        styles.append("")
+                    elif mt == "No":
+                        styles.append("color: #c62828; font-weight: bold")
+                    else:
+                        styles.append("color: #1e293b")
+                return styles
 
             st.caption(f"{_pivot_filtered['tutor'].nunique()} tutor(s) · {int(_pivot_filtered['Total Blocks'].sum()) if 'Total Blocks' in _pivot_filtered.columns else '?'} total 30-min blocks")
 
             styled = _pivot_filtered.style
-            if "meeting_target" in _pivot_filtered.columns:
-                styled = styled.map(_color_meeting, subset=["meeting_target"])
-            if "pct_of_target" in _pivot_filtered.columns:
-                styled = styled.map(_color_pct, subset=["pct_of_target"])
+            # Color week columns red if not meeting target that week
+            for _wc in _wk_cols:
+                if _wc in _pivot_filtered.columns:
+                    styled = styled.apply(
+                        lambda col, _wc=_wc: _color_wk_cell(col, _wc, _pivot_filtered["tutor"]),
+                        subset=[_wc]
+                    )
+            if "Blocks (Not Meeting Target)" in _pivot_filtered.columns:
+                styled = styled.map(
+                    lambda v: "font-weight: bold; color: #c62828" if isinstance(v, (int,float)) and v > 0 else "",
+                    subset=["Blocks (Not Meeting Target)"]
+                )
             if "Total Blocks" in _pivot_filtered.columns:
                 styled = styled.map(
-                    lambda v: "font-weight: bold; color: #c62828" if isinstance(v, (int,float)) and v >= 3 else "",
+                    lambda v: "font-weight: bold" if isinstance(v, (int,float)) and v > 0 else "",
                     subset=["Total Blocks"]
                 )
             st.dataframe(styled, use_container_width=True, hide_index=True)
