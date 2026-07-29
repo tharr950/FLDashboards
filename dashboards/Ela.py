@@ -9514,10 +9514,10 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                         a.employee_id,
                         u.first_name||' '||u.last_name AS tutor,
                         t.name AS tier,
-                        DATE_TRUNC('week', a.starts_at)::date AS week_start,
+                        (DATE_TRUNC('week', a.starts_at) - INTERVAL '1 day')::date AS week_start,
                         a.starts_at,
                         a.contiguous_duration,
-                        COUNT(*) OVER (PARTITION BY a.employee_id, DATE_TRUNC('week', a.starts_at)) AS thirty_min_slots_week
+                        COUNT(*) OVER (PARTITION BY a.employee_id, (DATE_TRUNC('week', a.starts_at) - INTERVAL '1 day')::date) AS thirty_min_slots_week
                     FROM dw.availabilities a
                     JOIN dw.employees e ON a.employee_id = e.id
                     JOIN dw.users u ON e.user_id = u.id
@@ -9578,9 +9578,10 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                 aggfunc="max"
             ).reset_index()
             pivot_av.columns.name = None
-            for col in pivot_av.columns:
-                if hasattr(col, 'strftime'):
-                    pivot_av = pivot_av.rename(columns={col: f"Wk of {col.strftime('%b %d')}"})
+            pivot_av.columns = [
+                f"Wk of {pd.to_datetime(col).strftime('%b %d')}" if str(col) not in ["tutor","tier","delivery_target","meeting_target"] and col not in ["tutor","tier","delivery_target","meeting_target"] else col
+                for col in pivot_av.columns
+            ]
 
             def _color_meeting(val):
                 if val == 'Yes': return 'color: #2e7d32; font-weight: bold'
@@ -9643,9 +9644,10 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                 aggfunc="max"
             ).reset_index()
             _pivot_filtered.columns.name = None
-            for col in _pivot_filtered.columns:
-                if hasattr(col, 'strftime'):
-                    _pivot_filtered = _pivot_filtered.rename(columns={col: f"Wk of {col.strftime('%b %d')}"})
+            _pivot_filtered.columns = [
+                f"Wk of {pd.to_datetime(col).strftime('%b %d')}" if str(col) not in ["tutor","tier","delivery_target","meeting_target"] and col not in ["tutor","tier","delivery_target","meeting_target"] else col
+                for col in _pivot_filtered.columns
+            ]
 
             if _av_tutor_filter:
                 _pivot_filtered = _pivot_filtered[_pivot_filtered["tutor"].isin(_av_tutor_filter)]
