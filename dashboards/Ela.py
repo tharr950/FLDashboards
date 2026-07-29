@@ -9517,7 +9517,7 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                         DATEADD(day, -1, DATE_TRUNC('week', a.starts_at)::date) AS week_start,
                         a.starts_at,
                         a.contiguous_duration,
-                        COUNT(*) OVER (PARTITION BY a.employee_id, DATEADD(day, -1, DATE_TRUNC('week', a.starts_at)::date)) AS thirty_min_slots_week
+                        1 AS slot_count
                     FROM dw.availabilities a
                     JOIN dw.employees e ON a.employee_id = e.id
                     JOIN dw.users u ON e.user_id = u.id
@@ -9635,10 +9635,9 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
             if _av_tutor_filter:
                 _df_av_filtered = _df_av_filtered[_df_av_filtered["tutor"].isin(_av_tutor_filter)]
 
-            # Build per-tutor per-week summary (one row per tutor+week)
-            _week_summary = (_df_av_filtered[["tutor","tier","week_start","slots_this_week","meeting_target"]]
-                             .drop_duplicates(subset=["tutor","week_start"])
-                             .copy())
+            # Build per-tutor per-week summary — count slots AFTER block type filter
+            _week_summary = (_df_av_filtered.groupby(["tutor","tier","week_start","meeting_target"])
+                             .size().reset_index(name="slots_this_week"))
 
             if _av_target_filter == "Not Meeting Only":
                 _week_summary = _week_summary[_week_summary["meeting_target"] == "No"]
@@ -9648,7 +9647,7 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                 index=["tutor","tier"],
                 columns="week_start",
                 values="slots_this_week",
-                aggfunc="max"
+                aggfunc="sum"
             ).reset_index()
             _pivot_filtered.columns.name = None
 
@@ -9670,7 +9669,7 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
             # Blocks in weeks NOT meeting target
             def _not_meeting_count(tutor):
                 _t = _week_summary[(_week_summary["tutor"] == tutor) & (_week_summary["meeting_target"] == "No")]
-                return int(_t["slots_this_week"].sum())
+                return int(_t["slots_this_week"].sum()) if not _t.empty else 0
             _pivot_filtered["Blocks (Not Meeting Target)"] = _pivot_filtered["tutor"].apply(_not_meeting_count)
 
             # Sort: most blocks not meeting target first, then total
