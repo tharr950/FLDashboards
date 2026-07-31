@@ -1073,6 +1073,63 @@ def load_low_delivery_not_accepting(faculty_leader: str):
     return df
 
 
+def load_low_delivery_low_availability(faculty_leader: str):
+    """Tutors who are accepting new students but have low delivery AND low availability
+    in the next 3 weeks. Low delivery = <80% of target. Low availability = avg available
+    hours < delivery target."""
+    conn = get_redshift_connection()
+    query = f"""
+        SELECT u.first_name||' '||u.last_name AS tutor,
+            tiers.name AS tier,
+            e.accept_new_students,
+            e.delivery_target,
+            ROUND(AVG(tc.instruction_actual)::numeric, 1) AS avg_delivery_next_3wks,
+            ROUND(AVG(tc.instruction_actual)::numeric / NULLIF(e.delivery_target,0) * 100, 1) AS delivery_pct,
+            ROUND(AVG(av.total_avail_hours)::numeric, 1) AS avg_avail_hours
+        FROM dw.employees e
+        JOIN dw.users u ON e.user_id = u.id
+        JOIN dw.tiers ON e.tier_id = tiers.id
+        JOIN dw.team_members ON e.id = team_members.member_id
+        JOIN dw.teams ON team_members.team_id = teams.id
+        JOIN dw.employees managers ON teams.manager_id = managers.id
+        JOIN dw.users fl_users ON managers.user_id = fl_users.id
+        JOIN rp_bi.tutor_capacity tc ON tc.employee_id = e.id
+        LEFT JOIN (
+            SELECT employee_id,
+                DATEADD(day, -1, DATE_TRUNC('week', starts_at)::date) AS week_start,
+                SUM(duration) / 60.0 AS total_avail_hours
+            FROM dw.availabilities
+            WHERE starts_at >= CURRENT_DATE
+              AND starts_at < CURRENT_DATE + 21
+              AND consumed_by_type IS NULL
+            GROUP BY employee_id, DATEADD(day, -1, DATE_TRUNC('week', starts_at)::date)
+        ) av ON av.employee_id = e.id
+        WHERE e.end_date IS NULL
+          AND e.type = 'Tutor'
+          AND u.title = 'Tutor'
+          AND e.accept_new_students = TRUE
+          AND fl_users.first_name||' '||fl_users.last_name = '{{faculty_leader}}'
+          AND tc.first_day_of_week_sunday_start >= CURRENT_DATE
+          AND tc.first_day_of_week_sunday_start <= CURRENT_DATE + 21
+        GROUP BY u.first_name, u.last_name, tiers.name, e.accept_new_students, e.delivery_target
+        HAVING AVG(tc.instruction_actual) < e.delivery_target * 0.80
+           AND AVG(av.total_avail_hours) < e.delivery_target OR AVG(av.total_avail_hours) IS NULL
+        ORDER BY delivery_pct
+    """
+    query = query.format(faculty_leader=faculty_leader)
+    if FORCE_CACHE_MODE:
+        try: conn.close()
+        except: pass
+        return pd.DataFrame()
+    try:
+        df = pd.read_sql(query, conn)
+        return df
+    except Exception:
+        return pd.DataFrame()
+    finally:
+        try: conn.close()
+        except: pass
+
 def load_buc_instruction_toggle_mismatch(faculty_leader: str):
     """For Distinguished/Premium tutors where BUC rate == Instruction rate,
     flag if the BUC accepting toggle doesn't match the Instruction accepting toggle.
@@ -2941,6 +2998,26 @@ def render_app(config):
                     _ld_display["% of Target"] = _ld_display["% of Target"].apply(lambda x: f"{x:.1f}%")
                     _ld_cols = [c for c in ["Tutor","Tier","Target (hrs)","Avg Delivery (next 3 wks)","% of Target"] if c in _ld_display.columns]
                     st.dataframe(_ld_display[_ld_cols], use_container_width=True, hide_index=True)
+        except Exception:
+            pass
+
+        # ── Low Delivery + Accepting ON + Low Availability Alert ───────────
+        try:
+            _low_avail_df = load_low_delivery_low_availability("Katherine Marino")
+            if not _low_avail_df.empty:
+                with st.expander(f"⚠️ {len(_low_avail_df)} tutor(s) — Accepting ON + Low Delivery + Low Availability (next 3 wks)", expanded=False):
+                    st.caption("These tutors are accepting new students but are projected below 80% of their delivery target AND have insufficient availability to meet their target over the next 3 weeks.")
+                    _la_display = _low_avail_df.rename(columns={
+                        "tutor": "Tutor",
+                        "tier": "Tier",
+                        "delivery_target": "Target (hrs)",
+                        "avg_delivery_next_3wks": "Avg Delivery (next 3 wks)",
+                        "delivery_pct": "% of Target",
+                        "avg_avail_hours": "Avg Avail Hrs/Wk"
+                    })
+                    _la_display["% of Target"] = _la_display["% of Target"].apply(lambda x: f"{x:.1f}%")
+                    _la_cols = [c for c in ["Tutor","Tier","Target (hrs)","Avg Delivery (next 3 wks)","% of Target","Avg Avail Hrs/Wk"] if c in _la_display.columns]
+                    st.dataframe(_la_display[_la_cols], use_container_width=True, hide_index=True)
         except Exception:
             pass
 
