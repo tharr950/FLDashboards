@@ -1110,7 +1110,7 @@ def load_low_delivery_low_availability(faculty_leader: str):
           AND fl_users.first_name||' '||fl_users.last_name = '{{faculty_leader}}'
           AND tc.first_day_of_week_sunday_start >= CURRENT_DATE
           AND tc.first_day_of_week_sunday_start <= CURRENT_DATE + 21
-        GROUP BY u.first_name, u.last_name, tiers.name, e.accept_new_students, e.delivery_target
+        GROUP BY u.first_name, u.last_name, tiers.name, e.accept_new_students, e.delivery_target, av.avg_avail_hours
         HAVING AVG(tc.instruction_actual) < e.delivery_target * 0.80
            AND (av.avg_avail_hours < e.delivery_target OR av.avg_avail_hours IS NULL)
         ORDER BY delivery_pct
