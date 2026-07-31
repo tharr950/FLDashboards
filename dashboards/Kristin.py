@@ -1099,9 +1099,8 @@ def load_low_delivery_low_availability(faculty_leader: str):
                 DATEADD(day, -1, DATE_TRUNC('week', starts_at)::date) AS week_start,
                 SUM(duration) / 60.0 AS total_avail_hours
             FROM dw.availabilities
-            WHERE starts_at >= CURRENT_DATE
+            WHERE starts_at >= DATEADD(day, -1, DATE_TRUNC('week', CURRENT_DATE + 7)::date)
               AND starts_at < CURRENT_DATE + 21
-              AND consumed_by_type IS NULL
             GROUP BY employee_id, DATEADD(day, -1, DATE_TRUNC('week', starts_at)::date)
         ) av ON av.employee_id = e.id
         WHERE e.end_date IS NULL
@@ -3006,7 +3005,7 @@ def render_app(config):
             _low_avail_df = load_low_delivery_low_availability("Kristin Haase-Alvey")
             if not _low_avail_df.empty:
                 with st.expander(f"⚠️ {len(_low_avail_df)} tutor(s) — Accepting ON + Low Delivery + Low Availability (next 3 wks)", expanded=False):
-                    st.caption("These tutors are accepting new students but are projected below 80% of their delivery target AND have insufficient availability to meet their target over the next 3 weeks.")
+                    st.caption("These tutors are accepting new students but are projected below 80% of their delivery target AND have average open availability below their delivery target over the next 2 weeks (current partial week excluded).")
                     _la_display = _low_avail_df.rename(columns={
                         "tutor": "Tutor",
                         "tier": "Tier",
