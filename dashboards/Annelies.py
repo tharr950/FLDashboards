@@ -2653,6 +2653,7 @@ def render_app(config):
         "📝 Progress Update Quality Scores",
         "Archivable Students & Unscheduled Hours",
         "📅 30-Min Availability",
+        "🚫 Session Cancellation Patterns",
         "📋 Annual Reviews",
         "🔰 90-Day Review",
         "🚫 Restricted Status",
@@ -9822,6 +9823,159 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                 _det_av[["Week Of","Date","Time (PST)","Block Type"]],
                 use_container_width=True, hide_index=True
             )
+
+    # ─────────────────────────────────────────────
+    # PAGE: SESSION CANCELLATION PATTERNS
+    # ─────────────────────────────────────────────
+    if page == "🚫 Session Cancellation Patterns":
+        st.markdown('<div class="main-title">🚫 Session Cancellation Patterns</div>', unsafe_allow_html=True)
+        st.caption("Tutors who cancelled sessions within the past 30 days or next 4 weeks. 'All Cleared' = no sessions remain on that day after cancellations.")
+
+        try:
+            import json as _json
+            from datetime import timedelta as _td
+
+            conn_cp = get_redshift_connection()
+            cur_cp = conn_cp.cursor()
+            cur_cp.execute("""
+                SELECT
+                    h.updated_by_id AS tutor_id,
+                    eu.first_name||' '||eu.last_name AS tutor_name,
+                    h.value,
+                    h.created_at AS cancelled_at
+                FROM dw.histories h
+                JOIN dw.employees e ON h.updated_by_id = e.id AND h.updated_by_type = 'Employee'
+                JOIN dw.users eu ON e.user_id = eu.id
+                JOIN dw.team_members tm ON e.id = tm.member_id
+                JOIN dw.teams t ON tm.team_id = t.id
+                JOIN dw.employees mgr ON t.manager_id = mgr.id
+                JOIN dw.users flu ON mgr.user_id = flu.id
+                WHERE h.item_type = 'Session'
+                  AND h.event = 'destroy'
+                  AND LEFT(h.value, 6) = '{"id":'
+                  AND flu.first_name||' '||flu.last_name = 'Annelies de Groot'
+                  AND h.created_at >= CURRENT_DATE - 60
+            """)
+            _cp_rows = cur_cp.fetchall()
+            _cp_cols = [d[0] for d in cur_cp.description]
+            _cp_df = pd.DataFrame(_cp_rows, columns=_cp_cols)
+
+            # Parse JSON in Python to avoid Redshift timestamp cast issues
+            def _parse_hist(row):
+                try:
+                    v = _json.loads(row['value'])
+                    starts = pd.to_datetime(v.get('starts_at'), utc=True).tz_localize(None)
+                    dur = v.get('duration', 0)
+                    return starts, dur
+                except:
+                    return None, None
+
+            if not _cp_df.empty:
+                _cp_df[['session_starts_at','duration']] = _cp_df.apply(
+                    lambda r: pd.Series(_parse_hist(r)), axis=1)
+                _cp_df = _cp_df.dropna(subset=['session_starts_at'])
+                _cp_df['session_date'] = _cp_df['session_starts_at'].dt.date
+
+                _today = pd.Timestamp.today().date()
+                _cp_df = _cp_df[
+                    (_cp_df['session_date'] >= _today - _td(days=30)) &
+                    (_cp_df['session_date'] <= _today + _td(days=28))
+                ]
+                # Filter out FLs
+                _cp_df = _cp_df[_cp_df['tutor_name'].isin(set(annelies_tutors))]
+
+            # Get remaining sessions
+            cur_cp.execute("""
+                SELECT supervisor_id AS tutor_id, starts_at::date AS session_date,
+                       COUNT(*) AS sessions_remaining
+                FROM dw.sessions
+                WHERE starts_at::date BETWEEN CURRENT_DATE - 30 AND CURRENT_DATE + 28
+                GROUP BY supervisor_id, starts_at::date
+            """)
+            _rem_rows = cur_cp.fetchall()
+            _rem_df = pd.DataFrame(_rem_rows, columns=['tutor_id','session_date','sessions_remaining'])
+            _rem_df['session_date'] = pd.to_datetime(_rem_df['session_date']).dt.date
+            conn_cp.close()
+
+            if _cp_df.empty:
+                st.success("✅ No session cancellation patterns found in the selected window.")
+            else:
+                # Group by tutor + day
+                _summary_cp = _cp_df.groupby(['tutor_id','tutor_name','session_date']).agg(
+                    sessions_cancelled=('session_starts_at','count'),
+                    hours_cancelled=('duration', lambda x: round(sum(x)/60, 1)),
+                    first_cancelled_at=('cancelled_at','min'),
+                    last_cancelled_at=('cancelled_at','max')
+                ).reset_index()
+
+                _summary_cp = _summary_cp.merge(_rem_df, on=['tutor_id','session_date'], how='left')
+                _summary_cp['sessions_remaining'] = _summary_cp['sessions_remaining'].fillna(0).astype(int)
+                _summary_cp['status'] = _summary_cp['sessions_remaining'].apply(
+                    lambda x: '🔴 All Cleared' if x == 0 else '🟡 Partial')
+                _summary_cp = _summary_cp.sort_values(['session_date','sessions_cancelled'],
+                                                       ascending=[False, False])
+
+                # Filters
+                _cp_col1, _cp_col2, _cp_col3 = st.columns(3)
+                with _cp_col1:
+                    _cp_tutor_filter = st.multiselect(
+                        "Filter by Tutor",
+                        options=sorted(_summary_cp['tutor_name'].unique()),
+                        default=[],
+                        key="cp_tutor_filter",
+                        placeholder="All tutors"
+                    )
+                with _cp_col2:
+                    _cp_status_filter = st.radio(
+                        "Status",
+                        ["All", "All Cleared Only"],
+                        horizontal=True,
+                        key="cp_status_filter"
+                    )
+                with _cp_col3:
+                    _cp_window_filter = st.radio(
+                        "Time Window",
+                        ["All", "Past 30 Days", "Next 4 Weeks"],
+                        horizontal=True,
+                        key="cp_window_filter"
+                    )
+
+                _filtered_cp = _summary_cp.copy()
+                if _cp_tutor_filter:
+                    _filtered_cp = _filtered_cp[_filtered_cp['tutor_name'].isin(_cp_tutor_filter)]
+                if _cp_status_filter == "All Cleared Only":
+                    _filtered_cp = _filtered_cp[_filtered_cp['status'] == '🔴 All Cleared']
+                if _cp_window_filter == "Past 30 Days":
+                    _filtered_cp = _filtered_cp[_filtered_cp['session_date'] < _today]
+                elif _cp_window_filter == "Next 4 Weeks":
+                    _filtered_cp = _filtered_cp[_filtered_cp['session_date'] >= _today]
+
+                st.caption(f"{len(_filtered_cp)} cancellation day(s) · {_filtered_cp['tutor_name'].nunique()} tutor(s)")
+
+                _disp_cp = _filtered_cp.rename(columns={
+                    'tutor_name': 'Tutor',
+                    'session_date': 'Date',
+                    'sessions_cancelled': 'Sessions Cancelled',
+                    'hours_cancelled': 'Hours Cancelled',
+                    'sessions_remaining': 'Sessions Remaining',
+                    'status': 'Status',
+                    'first_cancelled_at': 'First Cancelled At',
+                    'last_cancelled_at': 'Last Cancelled At',
+                })[['Tutor','Date','Sessions Cancelled','Hours Cancelled',
+                      'Sessions Remaining','Status','First Cancelled At','Last Cancelled At']]
+
+                def _color_status(val):
+                    if '🔴' in str(val): return 'color: #c62828; font-weight: bold'
+                    if '🟡' in str(val): return 'color: #f57f17; font-weight: bold'
+                    return ''
+
+                st.dataframe(
+                    _disp_cp.style.map(_color_status, subset=['Status']),
+                    use_container_width=True, hide_index=True
+                )
+
+        except Exception as _e:
+            st.error(f"Could not load cancellation data: {_e}")
 
     if page == "📋 Annual Reviews":
         st.markdown('<div class="main-title">📋 Annual Reviews</div>', unsafe_allow_html=True)
