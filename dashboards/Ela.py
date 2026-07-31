@@ -1211,35 +1211,41 @@ def load_ppw_data(start_date: str, end_date: str, team_name: str):
     query = f"""
         WITH first_course AS (
             SELECT
-                students.id AS student_id,
-                MIN(courses.starts_at) AS course_start
-            FROM dw.students
-            JOIN dw.enrollments ON enrollments.enrollee_id = students.id
-            JOIN dw.courses ON courses.id = enrollments.course_id
-            WHERE courses.brand_id IN (2,36,37,41,42,43,47,48)
-            GROUP BY students.id
+                enrollments.enrollee_id AS student_id,
+                sessions.id AS session_id,
+                sessions.starts_at AS session_start,
+                sessions.supervisor_id AS tutor_id,
+                courses.brand_id
+            FROM dw.sessions
+            JOIN dw.courses ON (courses.id = sessions.course_id
+                AND courses.brand_id IN (2,36,41,42,43,47,48))
+            JOIN dw.enrollments ON sessions.course_id = enrollments.course_id
+            WHERE sessions.starts_at::DATE >= '{start_date}'
+              AND sessions.starts_at::DATE <= '{end_date}'
+            QUALIFY ROW_NUMBER() OVER (
+                PARTITION BY enrollments.enrollee_id
+                ORDER BY sessions.starts_at ASC, sessions.id ASC
+            ) = 1
         )
         SELECT
-            courses.starts_at,
-            courses.brand_id,
-            employees.id AS tutor_id,
+            first_course.session_start AS starts_at,
+            first_course.brand_id,
+            first_course.tutor_id,
             tutor_users.first_name||' '||tutor_users.last_name AS tutor_name,
             student_users.first_name||' '||student_users.last_name AS student_name,
             sessions.attendances_attended_count,
             CASE
                 WHEN orbit_stitch.attachments.updated_at IS NOT NULL
-                AND (EXTRACT(DAY FROM (orbit_stitch.attachments.created_at - courses.starts_at))*24
-                     + EXTRACT(HOUR FROM (orbit_stitch.attachments.created_at - courses.starts_at)) < 72)
+                AND (EXTRACT(DAY FROM (orbit_stitch.attachments.created_at - first_course.session_start))*24
+                     + EXTRACT(HOUR FROM (orbit_stitch.attachments.created_at - first_course.session_start)) < 72)
                 THEN 1 ELSE 0
             END AS attachment_uploaded,
             orbit_stitch.attachments.created_at AS attachment_created_at
         FROM first_course
+        JOIN dw.sessions ON sessions.id = first_course.session_id
         JOIN dw.students ON first_course.student_id = students.id
         JOIN dw.users student_users ON students.user_id = student_users.id
-        JOIN dw.enrollments ON students.id = enrollments.enrollee_id
-        JOIN dw.courses ON (courses.id = enrollments.course_id AND courses.starts_at = first_course.course_start)
-        JOIN dw.sessions ON (sessions.course_id = courses.id AND sessions.starts_at = courses.starts_at)
-        JOIN dw.employees ON sessions.supervisor_id = employees.id
+        JOIN dw.employees ON first_course.tutor_id = employees.id
         JOIN dw.users tutor_users ON employees.user_id = tutor_users.id
         JOIN dw.team_members ON employees.id = team_members.member_id
         JOIN dw.teams ON team_members.team_id = teams.id
@@ -1247,10 +1253,8 @@ def load_ppw_data(start_date: str, end_date: str, team_name: str):
             orbit_stitch.attachments.attachable_id = sessions.id
             AND orbit_stitch.attachments.attachable_type = 'Session'
         )
-        WHERE courses.starts_at >= '{start_date}'
-          AND courses.starts_at <= '{end_date}'
-          AND teams.name = '{team_name}'
-        ORDER BY tutor_name, courses.starts_at
+        WHERE teams.name = '{team_name}'
+        ORDER BY tutor_name, first_course.session_start
     """
     try:
         df = pd.read_sql(query, conn)
