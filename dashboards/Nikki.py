@@ -3004,7 +3004,7 @@ def render_app(config):
             _low_avail_df = load_low_delivery_low_availability("Nikki Pencak")
             if not _low_avail_df.empty:
                 with st.expander(f"⚠️ {len(_low_avail_df)} tutor(s) — Accepting ON + Low Delivery + Low Availability (next 3 wks)", expanded=False):
-                    st.caption("These tutors are accepting new students but are projected below 80% of their delivery target AND have average open availability below their delivery target over the next 2 weeks (current partial week excluded).")
+                    st.caption("These tutors are accepting new students but are projected below 80% of their delivery target AND have average posted availability below their delivery target over the next 3 weeks.")
                     _la_display = _low_avail_df.rename(columns={
                         "tutor": "Tutor",
                         "tier": "Tier",
