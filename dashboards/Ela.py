@@ -2605,7 +2605,6 @@ def render_app(config):
         "📅 Meetings",
         "📄 PPW Report (Tableau)",
         "📊 Progress Updates (Tableau)",
-        "⭐ NPS Scores (Tableau)",
     ]
     _default_index = _page_options.index(_goto) if _goto in _page_options else 0
     with st.sidebar.expander("⚙️ Admin", expanded=False):
