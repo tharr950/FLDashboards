@@ -1086,7 +1086,7 @@ def load_low_delivery_low_availability(faculty_leader: str):
             e.delivery_target,
             ROUND(AVG(tc.instruction_actual)::numeric, 1) AS avg_delivery_next_3wks,
             ROUND(AVG(tc.instruction_actual)::numeric / NULLIF(e.delivery_target,0) * 100, 1) AS delivery_pct,
-            ROUND(AVG(av.total_avail_hours)::numeric, 1) AS avg_avail_hours
+            ROUND(av.avg_avail_hours::numeric, 1) AS avg_avail_hours
         FROM dw.employees e
         JOIN dw.users u ON e.user_id = u.id
         JOIN dw.tiers ON e.tier_id = tiers.id
@@ -1097,12 +1097,11 @@ def load_low_delivery_low_availability(faculty_leader: str):
         JOIN rp_bi.tutor_capacity tc ON tc.employee_id = e.id
         LEFT JOIN (
             SELECT employee_id,
-                DATEADD(day, -1, DATE_TRUNC('week', starts_at)::date) AS week_start,
-                SUM(duration) / 60.0 AS total_avail_hours
-            FROM dw.availabilities
-            WHERE starts_at >= DATEADD(day, -1, DATE_TRUNC('week', CURRENT_DATE + 7)::date)
-              AND starts_at < CURRENT_DATE + 21
-            GROUP BY employee_id, DATEADD(day, -1, DATE_TRUNC('week', starts_at)::date)
+                AVG(availability_actual) AS avg_avail_hours
+            FROM rp_bi.tutor_capacity
+            WHERE first_day_of_week_sunday_start >= DATEADD(day, -1, DATE_TRUNC('week', CURRENT_DATE + 7)::date)
+              AND first_day_of_week_sunday_start < DATEADD(day, -1, DATE_TRUNC('week', CURRENT_DATE + 7)::date) + 21
+            GROUP BY employee_id
         ) av ON av.employee_id = e.id
         WHERE e.end_date IS NULL
           AND e.type = 'Tutor'
@@ -1113,7 +1112,7 @@ def load_low_delivery_low_availability(faculty_leader: str):
           AND tc.first_day_of_week_sunday_start <= CURRENT_DATE + 21
         GROUP BY u.first_name, u.last_name, tiers.name, e.accept_new_students, e.delivery_target
         HAVING AVG(tc.instruction_actual) < e.delivery_target * 0.80
-           AND AVG(av.total_avail_hours) < e.delivery_target OR AVG(av.total_avail_hours) IS NULL
+           AND (av.avg_avail_hours < e.delivery_target OR av.avg_avail_hours IS NULL)
         ORDER BY delivery_pct
     """
     query = query.format(faculty_leader=faculty_leader)
