@@ -9952,6 +9952,79 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
 
                 st.caption(f"{len(_filtered_cp)} cancellation day(s) · {_filtered_cp['tutor_name'].nunique()} tutor(s)")
 
+                # ── Calendar View ──────────────────────────────────────────
+                import calendar as _cal
+                _today = pd.Timestamp.today().date()
+                _all_dates = sorted(_filtered_cp['session_date'].unique())
+
+                # Build lookup: date -> list of (tutor_name, status)
+                _date_lookup = {}
+                for _, _row in _filtered_cp.iterrows():
+                    _d = _row['session_date']
+                    if _d not in _date_lookup:
+                        _date_lookup[_d] = []
+                    _date_lookup[_d].append((_row['tutor_name'], _row['status']))
+
+                # Show calendar for each month in range
+                if _all_dates:
+                    _min_date = min(_all_dates)
+                    _max_date = max(_all_dates)
+                    _months = []
+                    _y, _m = _min_date.year, _min_date.month
+                    while (_y, _m) <= (_max_date.year, _max_date.month):
+                        _months.append((_y, _m))
+                        _m += 1
+                        if _m > 12:
+                            _m = 1
+                            _y += 1
+
+                    for (_yr, _mo) in _months:
+                        import datetime as _dt
+                        _month_name = _dt.date(_yr, _mo, 1).strftime('%B %Y')
+                        st.markdown(f"**{_month_name}**")
+
+                        _cal_html = """
+                        <style>
+                        .rp-cal { width:100%; border-collapse:collapse; margin-bottom:1rem; }
+                        .rp-cal th { text-align:center; font-size:11px; color:#888; padding:4px 2px; font-weight:500; }
+                        .rp-cal td { vertical-align:top; border:0.5px solid #e5e5e5; border-radius:4px; padding:4px; min-height:60px; width:14.28%; font-size:11px; }
+                        .rp-cal td.empty { background:#fafafa; }
+                        .rp-cal td.today { border-color:#4A90D9; }
+                        .rp-daynum { color:#aaa; font-size:10px; margin-bottom:3px; }
+                        .rp-cleared { background:#fde8e8; color:#c62828; border-radius:3px; padding:1px 4px; margin:1px 0; display:block; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-size:10px; }
+                        .rp-partial { background:#fff3cd; color:#856404; border-radius:3px; padding:1px 4px; margin:1px 0; display:block; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-size:10px; }
+                        </style>
+                        <table class="rp-cal">
+                        <tr><th>Sun</th><th>Mon</th><th>Tue</th><th>Wed</th><th>Thu</th><th>Fri</th><th>Sat</th></tr>
+                        """
+
+                        _month_cal = _cal.monthcalendar(_yr, _mo)
+                        for _week in _month_cal:
+                            _cal_html += "<tr>"
+                            for _day in _week:
+                                if _day == 0:
+                                    _cal_html += '<td class="empty"></td>'
+                                else:
+                                    import datetime as _dt2
+                                    _d = _dt2.date(_yr, _mo, _day)
+                                    _is_today = ' today' if _d == _today else ''
+                                    _cal_html += f'<td class="{_is_today}"><div class="rp-daynum">{_day}</div>'
+                                    if _d in _date_lookup:
+                                        for (_tname, _tstatus) in _date_lookup[_d]:
+                                            _initials = ' '.join([p[0]+'.' for p in _tname.split()])
+                                            _short = _tname.split()[0][0]+'. '+_tname.split()[-1]
+                                            _css = 'rp-cleared' if 'Cleared' in _tstatus else 'rp-partial'
+                                            _cal_html += f'<span class="{_css}" title="{_tname}">{_short}</span>'
+                                    _cal_html += '</td>'
+                            _cal_html += "</tr>"
+                        _cal_html += "</table>"
+                        st.markdown(_cal_html, unsafe_allow_html=True)
+
+                    st.markdown("🔴 Red = all sessions cleared &nbsp;&nbsp; 🟡 Yellow = partial cancellations", unsafe_allow_html=True)
+                    st.divider()
+
+                # ── Detail Table ───────────────────────────────────────────
+                st.markdown("#### Detail")
                 _disp_cp = _filtered_cp.rename(columns={
                     'tutor_name': 'Tutor',
                     'session_date': 'Date',
