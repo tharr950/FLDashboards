@@ -386,9 +386,11 @@ def generate_exam_reports(df):
     df['exam_date'] = pd.to_datetime(df['exam_date'], errors='coerce', utc=True).dt.tz_localize(None)
 
     today = datetime.today()
+    # Use the PREVIOUS complete week (Sun-Sat)
     days_since_sunday = today.weekday() + 1 if today.weekday() != 6 else 0
-    week_start = (today - timedelta(days=days_since_sunday)).replace(hour=0, minute=0, second=0, microsecond=0)
-    week_end   = week_start + timedelta(days=7)
+    this_sunday = (today - timedelta(days=days_since_sunday)).replace(hour=0, minute=0, second=0, microsecond=0)
+    week_end   = this_sunday  # previous Saturday midnight = this Sunday 00:00
+    week_start = week_end - timedelta(days=7)
 
     def exam_family(subject):
         s = str(subject).upper()
@@ -542,10 +544,14 @@ if __name__ == "__main__":
         return df
     df = run_with_retry(_run)
     if df is not None:
-        try:
-            generate_exam_reports(df)
-        except Exception as e:
-            print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] PDF generation failed: {e}")
+        # Only generate exam report on Sundays (when previous week is complete)
+        if datetime.today().weekday() == 6:  # 6 = Sunday
+            try:
+                generate_exam_reports(df)
+            except Exception as e:
+                print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] PDF generation failed: {e}")
+        else:
+            print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] Skipping exam report (runs Sundays only)")
     print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] ✅ Done.")
 
 
