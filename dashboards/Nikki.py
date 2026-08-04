@@ -9969,7 +9969,7 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                 _cp_status_filter = st.radio("Status", ["All Cleared Only", "All"],
                     horizontal=True, key="cp_status_filter")
             with _cp_f3:
-                _cp_window_filter = st.radio("Time Window", ["All", "Past 30 Days", "Next 4 Weeks"],
+                _cp_window_filter = st.radio("Time Window", ["Next 4 Weeks", "Past 30 Days", "All"],
                     horizontal=True, key="cp_window_filter")
 
             def _apply_cp_filters(df, status_col):
