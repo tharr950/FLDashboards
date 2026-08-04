@@ -356,9 +356,200 @@ def push_to_github(df):
         print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] Created new file.")
 
 
+
+
+TEAM_MAP = {
+    "Team Cross":        "Ela_Cross",
+    "Team de Groot":     "Annelies_de_Groot",
+    "Team Plamondon":    "Ian_Plamondon",
+    "Team St. Marie":    "Geoff_St_Marie",
+    "Team Haase-Alvey":  "Kristin_Haase_Alvey",
+    "Team Pencak":       "Nikki_Pencak",
+    "Team Marino":       "Katherine_Marino",
+}
+
+def generate_exam_reports(df):
+    from datetime import timedelta
+    import pandas as pd
+    try:
+        from reportlab.lib.pagesizes import letter
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib import colors
+        from reportlab.lib.units import inch
+        import requests, base64, tempfile, os
+    except ImportError as e:
+        print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] Skipping PDF generation — missing library: {e}")
+        return
+
+    df = df.copy()
+    df['exam_date'] = pd.to_datetime(df['exam_date'], errors='coerce', utc=True).dt.tz_localize(None)
+
+    today = datetime.today()
+    days_since_sunday = today.weekday() + 1 if today.weekday() != 6 else 0
+    week_start = (today - timedelta(days=days_since_sunday)).replace(hour=0, minute=0, second=0, microsecond=0)
+    week_end   = week_start + timedelta(days=7)
+
+    def exam_family(subject):
+        s = str(subject).upper()
+        if 'ACT' in s: return 'ACT'
+        if 'SAT' in s or 'PSAT' in s: return 'SAT'
+        return subject
+
+    def is_valid(row):
+        try:
+            if pd.isna(row['score']): return False
+            fam = row['exam_family']
+            if fam == 'SAT':
+                return pd.notna(row['sat_math']) and float(row['sat_math']) >= 200 and pd.notna(row['sat_rw']) and float(row['sat_rw']) >= 200
+            if fam == 'ACT':
+                return pd.notna(row['act_english']) and float(row['act_english']) >= 10 and pd.notna(row['act_math']) and float(row['act_math']) >= 10
+            return pd.notna(row['score']) and float(row['score']) > 0
+        except: return False
+
+    def safe_int(v):
+        try:
+            if pd.isna(v): return '—'
+            return str(int(v))
+        except: return '—'
+
+    # Convert numeric columns
+    for _col in ['score','sat_math','sat_rw','act_english','act_math','act_reading','act_science']:
+        if _col in df.columns:
+            df[_col] = pd.to_numeric(df[_col], errors='coerce')
+    df['exam_family'] = df['subject'].apply(exam_family)
+    df['valid'] = df.apply(is_valid, axis=1)
+    this_week = df[(df['exam_date'] >= week_start) & (df['exam_date'] < week_end) & (df['valid'] == True)].copy()
+
+    results = []
+    for _, row in this_week.iterrows():
+        prior = df[
+            (df['student_id'] == row['student_id']) &
+            (df['exam_family'] == row['exam_family']) &
+            (df['exam_date'] < row['exam_date']) &
+            (df['valid'] == True)
+        ].sort_values('exam_date', ascending=False)
+        prior_score = prior.iloc[0]['score'] if not prior.empty else None
+        prior_date  = prior.iloc[0]['exam_date'] if not prior.empty else None
+        prior_code  = prior.iloc[0]['exam_code'] if not prior.empty else None
+        delta = round(row['score'] - prior_score, 0) if prior_score is not None else None
+        results.append({
+            'team': row['team_name'], 'tutor': row['tutor_name'], 'student': row['student_name'],
+            'exam_family': row['exam_family'],
+            'new_exam': str(row['exam_code'])[:22],
+            'new_date': row['exam_date'].strftime('%m/%d/%y'),
+            'new_score': safe_int(row['score']),
+            'prior_exam': str(prior_code)[:22] if prior_code else '—',
+            'prior_date': prior_date.strftime('%m/%d/%y') if prior_date is not None else '—',
+            'prior_score': safe_int(prior_score),
+            'delta': delta,
+        })
+
+    out = pd.DataFrame(results) if results else pd.DataFrame()
+
+    def build_pdf(team_df, team_name, output_path):
+        doc = SimpleDocTemplate(output_path, pagesize=letter,
+                                topMargin=0.5*inch, bottomMargin=0.5*inch,
+                                leftMargin=0.6*inch, rightMargin=0.6*inch)
+        styles = getSampleStyleSheet()
+        story = []
+        title_style  = ParagraphStyle('title',  parent=styles['Heading1'], fontSize=16, textColor=colors.HexColor('#1e293b'), spaceAfter=4)
+        sub_style    = ParagraphStyle('sub',    parent=styles['Normal'],   fontSize=10, textColor=colors.HexColor('#64748b'), spaceAfter=12)
+        tutor_style  = ParagraphStyle('tutor',  parent=styles['Heading2'], fontSize=12, textColor=colors.HexColor('#1e293b'), spaceBefore=14, spaceAfter=6)
+        footer_style = ParagraphStyle('footer', parent=styles['Normal'],   fontSize=8,  textColor=colors.HexColor('#94a3b8'))
+
+        story.append(Paragraph(f"Weekly Exam Score Report — {team_name}", title_style))
+        story.append(Paragraph(f"Week of {week_start.strftime('%B %d')} – {(week_end - timedelta(days=1)).strftime('%B %d, %Y')}", sub_style))
+        story.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor('#e2e8f0')))
+        story.append(Spacer(1, 12))
+
+        if team_df.empty:
+            story.append(Paragraph("No new exam scores this week.", styles['Normal']))
+        else:
+            for tutor, tdf in team_df.groupby('tutor'):
+                story.append(Paragraph(tutor, tutor_style))
+                table_data = [['Student', 'Type', 'New Exam', 'Date', 'Score', 'Prior Exam', 'Prior Date', 'Prior', 'Δ']]
+                for _, row in tdf.sort_values('student').iterrows():
+                    delta_str = ''
+                    if row['delta'] is not None and not pd.isna(row['delta']):
+                        delta_str = f"+{int(row['delta'])}" if row['delta'] > 0 else str(int(row['delta']))
+                    table_data.append([
+                        row['student'], row['exam_family'], row['new_exam'], row['new_date'],
+                        row['new_score'], row['prior_exam'], row['prior_date'], row['prior_score'], delta_str
+                    ])
+                col_widths = [1.4*inch, 0.4*inch, 1.4*inch, 0.6*inch, 0.5*inch, 1.4*inch, 0.6*inch, 0.55*inch, 0.45*inch]
+                t = Table(table_data, colWidths=col_widths, repeatRows=1)
+                ts = TableStyle([
+                    ('BACKGROUND',    (0,0), (-1,0), colors.HexColor('#1e293b')),
+                    ('TEXTCOLOR',     (0,0), (-1,0), colors.white),
+                    ('FONTNAME',      (0,0), (-1,0), 'Helvetica-Bold'),
+                    ('FONTSIZE',      (0,0), (-1,-1), 8),
+                    ('ROWBACKGROUNDS',(0,1), (-1,-1), [colors.white, colors.HexColor('#f8fafc')]),
+                    ('GRID',          (0,0), (-1,-1), 0.5, colors.HexColor('#e2e8f0')),
+                    ('VALIGN',        (0,0), (-1,-1), 'MIDDLE'),
+                    ('LEFTPADDING',   (0,0), (-1,-1), 4),
+                    ('RIGHTPADDING',  (0,0), (-1,-1), 4),
+                    ('TOPPADDING',    (0,0), (-1,-1), 4),
+                    ('BOTTOMPADDING', (0,0), (-1,-1), 4),
+                ])
+                for i, row in enumerate(table_data[1:], 1):
+                    if row[8].startswith('+'):
+                        ts.add('TEXTCOLOR', (8,i), (8,i), colors.HexColor('#15803d'))
+                        ts.add('FONTNAME',  (8,i), (8,i), 'Helvetica-Bold')
+                    elif row[8].startswith('-'):
+                        ts.add('TEXTCOLOR', (8,i), (8,i), colors.HexColor('#b91c1c'))
+                        ts.add('FONTNAME',  (8,i), (8,i), 'Helvetica-Bold')
+                t.setStyle(ts)
+                story.append(t)
+                story.append(Spacer(1, 8))
+
+        story.append(Spacer(1, 12))
+        story.append(Paragraph(f"Generated {datetime.now().strftime('%B %d, %Y at %I:%M %p')} · Revolution Prep", footer_style))
+        doc.build(story)
+
+    # Generate and push one PDF per team
+    api_headers = {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github.v3+json"}
+    for team_name, slug in TEAM_MAP.items():
+        team_df = out[out['team'] == team_name].copy() if not out.empty else pd.DataFrame()
+        tmp = tempfile.NamedTemporaryFile(suffix='.pdf', delete=False)
+        tmp.close()
+        try:
+            build_pdf(team_df, team_name, tmp.name)
+            with open(tmp.name, 'rb') as f:
+                pdf_bytes = f.read()
+            encoded = base64.b64encode(pdf_bytes).decode()
+            gh_path = f"data/exam_reports/{slug}_exam_report.pdf"
+            api_url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{gh_path}"
+            r = requests.get(api_url, headers=api_headers, timeout=15)
+            payload = {
+                "message": f"exam report: {team_name} {week_start.strftime('%Y-%m-%d')}",
+                "content": encoded,
+            }
+            if r.status_code == 200:
+                payload["sha"] = r.json().get("sha")
+            requests.put(api_url, headers=api_headers, json=payload, timeout=30).raise_for_status()
+            print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] Exam report pushed: {gh_path}")
+        except Exception as e:
+            print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] Failed to generate/push report for {team_name}: {e}")
+        finally:
+            os.unlink(tmp.name)
+
+
 if __name__ == "__main__":
     def _run():
         df = fetch_exam_data()
         push_to_github(df)
-        print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] ✅ Done.")
-    run_with_retry(_run)
+        return df
+    df = run_with_retry(_run)
+    if df is not None:
+        try:
+            generate_exam_reports(df)
+        except Exception as e:
+            print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] PDF generation failed: {e}")
+    print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] ✅ Done.")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# EXAM SCORE REPORT — Weekly PDF generation per team
+# ─────────────────────────────────────────────────────────────────────────────
+

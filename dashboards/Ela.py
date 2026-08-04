@@ -6325,6 +6325,24 @@ def render_app(config):
 
     if page == "Test Prep & Exams":
         st.markdown('<div class="main-title">Test Prep & Exams 📝</div>', unsafe_allow_html=True)
+
+        # ── Weekly Exam Score Report download ─────────────────────────
+        try:
+            _report_path = "data/exam_reports/Ela_Cross_exam_report.pdf"
+            _report_url = f"https://raw.githubusercontent.com/{st.secrets['github']['repo']}/main/{_report_path}?cb={int(pd.Timestamp.now().timestamp())}"
+            _report_resp = _requests.get(_report_url, headers={"Authorization": f"token {st.secrets['github']['token']}"}, timeout=15)
+            if _report_resp.status_code == 200 and len(_report_resp.content) > 100:
+                st.download_button(
+                    label="📄 Download Weekly Exam Score Report (PDF)",
+                    data=_report_resp.content,
+                    file_name=f"Exam_Score_Report_{pd.Timestamp.now().strftime('%Y-%m-%d')}.pdf",
+                    mime="application/pdf",
+                    key="exam_report_download"
+                )
+            else:
+                st.caption("📄 Weekly exam report not yet available — runs with daily exam sync.")
+        except Exception:
+            pass
         with st.expander("ℹ️ About this data"):
             st.markdown("""
 **For a student to show:**
