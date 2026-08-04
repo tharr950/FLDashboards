@@ -10018,6 +10018,7 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                         f'</style>'
                         f'<table id="{_uid}"><tr><th>Sun</th><th>Mon</th><th>Tue</th><th>Wed</th><th>Thu</th><th>Fri</th><th>Sat</th></tr>'
                     )
+                    _cal.setfirstweekday(6)  # Sunday start
                     for _week in _cal.monthcalendar(_yr, _mo):
                         _html += '<tr>'
                         for _day in _week:
