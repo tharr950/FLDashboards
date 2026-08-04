@@ -9832,21 +9832,27 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
     # PAGE: SESSION CANCELLATION PATTERNS
     # ─────────────────────────────────────────────
     if page == "🚫 Session Cancellation Patterns":
-        st.markdown('<div class="main-title">🚫 Session Cancellation Patterns</div>', unsafe_allow_html=True)
-        st.caption("Tutors who cancelled sessions within the past 30 days or next 4 weeks. 'All Cleared' = no sessions remain on that day after cancellations.")
+        st.markdown('<div class="main-title">🚫 Cancellation & Availability Patterns</div>', unsafe_allow_html=True)
+        st.caption("Days where tutors cancelled sessions or removed availability. Defaults to fully cleared days only.")
 
         try:
             import json as _json
+            import calendar as _cal
+            import datetime as _dt2
             from datetime import timedelta as _td
+
+            _today = pd.Timestamp.today().date()
+            _date_min = _today - _td(days=30)
+            _date_max = _today + _td(days=28)
 
             conn_cp = get_redshift_connection()
             cur_cp = conn_cp.cursor()
+
+            # ── Session cancellations ──────────────────────────────────
             cur_cp.execute("""
-                SELECT
-                    h.updated_by_id AS tutor_id,
+                SELECT h.updated_by_id AS tutor_id,
                     eu.first_name||' '||eu.last_name AS tutor_name,
-                    h.value,
-                    h.created_at AS cancelled_at
+                    h.value, h.created_at AS cancelled_at
                 FROM dw.histories h
                 JOIN dw.employees e ON h.updated_by_id = e.id AND h.updated_by_type = 'Employee'
                 JOIN dw.users eu ON e.user_id = eu.id
@@ -9854,205 +9860,226 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                 JOIN dw.teams t ON tm.team_id = t.id
                 JOIN dw.employees mgr ON t.manager_id = mgr.id
                 JOIN dw.users flu ON mgr.user_id = flu.id
-                WHERE h.item_type = 'Session'
-                  AND h.event = 'destroy'
+                WHERE h.item_type = 'Session' AND h.event = 'destroy'
                   AND LEFT(h.value, 6) = '{"id":'
-                  AND flu.first_name||' '||flu.last_name = 'Ela Cross'
+                  AND flu.first_name||' '||flu.last_name = 'FL_NAME_PLACEHOLDER'
                   AND h.created_at >= CURRENT_DATE - 60
-            """)
-            _cp_rows = cur_cp.fetchall()
-            _cp_cols = [d[0] for d in cur_cp.description]
-            _cp_df = pd.DataFrame(_cp_rows, columns=_cp_cols)
+            """.replace('FL_NAME_PLACEHOLDER', faculty_leader_name))
+            _sess_df = pd.DataFrame(cur_cp.fetchall(), columns=[d[0] for d in cur_cp.description])
 
-            # Parse JSON in Python to avoid Redshift timestamp cast issues
-            def _parse_hist(row):
+            def _parse_sess(row):
                 try:
                     v = _json.loads(row['value'])
                     starts = pd.to_datetime(v.get('starts_at'), utc=True).tz_localize(None)
-                    dur = v.get('duration', 0)
-                    return starts, dur
-                except:
-                    return None, None
+                    return starts, v.get('duration', 0)
+                except: return None, None
 
-            if not _cp_df.empty:
-                _cp_df[['session_starts_at','duration']] = _cp_df.apply(
-                    lambda r: pd.Series(_parse_hist(r)), axis=1)
-                _cp_df = _cp_df.dropna(subset=['session_starts_at'])
-                _cp_df['session_date'] = _cp_df['session_starts_at'].dt.date
+            if not _sess_df.empty:
+                _sess_df[['session_starts_at','duration']] = _sess_df.apply(lambda r: pd.Series(_parse_sess(r)), axis=1)
+                _sess_df = _sess_df.dropna(subset=['session_starts_at'])
+                _sess_df['session_date'] = _sess_df['session_starts_at'].dt.date
+                _sess_df = _sess_df[(_sess_df['session_date'] >= _date_min) & (_sess_df['session_date'] <= _date_max) & (_sess_df['tutor_name'].isin(set(annelies_tutors)))]
 
-                _today = pd.Timestamp.today().date()
-                _cp_df = _cp_df[
-                    (_cp_df['session_date'] >= _today - _td(days=30)) &
-                    (_cp_df['session_date'] <= _today + _td(days=28))
-                ]
-                # Filter out FLs
-                _cp_df = _cp_df[_cp_df['tutor_name'].isin(set(annelies_tutors))]
-
-            # Get remaining sessions
+            # ── Availability removals ──────────────────────────────────
             cur_cp.execute("""
-                SELECT supervisor_id AS tutor_id, starts_at::date AS session_date,
-                       COUNT(*) AS sessions_remaining
-                FROM dw.sessions
-                WHERE starts_at::date BETWEEN CURRENT_DATE - 30 AND CURRENT_DATE + 28
+                SELECT h.updated_by_id AS tutor_id,
+                    eu.first_name||' '||eu.last_name AS tutor_name,
+                    h.value, h.created_at AS deleted_at
+                FROM dw.histories h
+                JOIN dw.employees e ON h.updated_by_id = e.id AND h.updated_by_type = 'Employee'
+                JOIN dw.users eu ON e.user_id = eu.id
+                JOIN dw.team_members tm ON e.id = tm.member_id
+                JOIN dw.teams t ON tm.team_id = t.id
+                JOIN dw.employees mgr ON t.manager_id = mgr.id
+                JOIN dw.users flu ON mgr.user_id = flu.id
+                WHERE h.item_type = 'Availability' AND h.event = 'destroy'
+                  AND h.updated_by_type = 'Employee'
+                  AND flu.first_name||' '||flu.last_name = 'FL_NAME_PLACEHOLDER'
+                  AND h.created_at >= CURRENT_DATE - 60
+            """.replace('FL_NAME_PLACEHOLDER', faculty_leader_name))
+            _av_df = pd.DataFrame(cur_cp.fetchall(), columns=[d[0] for d in cur_cp.description])
+
+            def _parse_av(row):
+                try:
+                    v = _json.loads(row['value'])
+                    starts = pd.to_datetime(v.get('starts_at'), utc=True).tz_localize(None)
+                    return starts, int(v.get('duration', 0))
+                except: return None, None
+
+            if not _av_df.empty:
+                _av_df[['starts_at','duration']] = _av_df.apply(lambda r: pd.Series(_parse_av(r)), axis=1)
+                _av_df = _av_df.dropna(subset=['starts_at'])
+                _av_df['duration'] = pd.to_numeric(_av_df['duration'], errors='coerce').fillna(0)
+                _av_df['session_date'] = _av_df['starts_at'].dt.date
+                _av_df = _av_df[(_av_df['session_date'] >= _date_min) & (_av_df['session_date'] <= _date_max) & (_av_df['tutor_name'].isin(set(annelies_tutors)))]
+
+            # ── Remaining sessions ─────────────────────────────────────
+            cur_cp.execute("""
+                SELECT supervisor_id AS tutor_id, starts_at::date AS session_date, COUNT(*) AS sessions_remaining
+                FROM dw.sessions WHERE starts_at::date BETWEEN CURRENT_DATE - 30 AND CURRENT_DATE + 28
                 GROUP BY supervisor_id, starts_at::date
             """)
-            _rem_rows = cur_cp.fetchall()
-            _rem_df = pd.DataFrame(_rem_rows, columns=['tutor_id','session_date','sessions_remaining'])
-            _rem_df['session_date'] = pd.to_datetime(_rem_df['session_date']).dt.date
+            _rem_sess = pd.DataFrame(cur_cp.fetchall(), columns=['tutor_id','session_date','sessions_remaining'])
+            _rem_sess['session_date'] = pd.to_datetime(_rem_sess['session_date']).dt.date
+
+            # ── Remaining availability ─────────────────────────────────
+            cur_cp.execute("""
+                SELECT e.id AS tutor_id, a.starts_at::date AS session_date, COUNT(*) AS blocks_remaining
+                FROM dw.availabilities a JOIN dw.employees e ON a.employee_id = e.id
+                WHERE a.starts_at::date BETWEEN CURRENT_DATE - 30 AND CURRENT_DATE + 28
+                GROUP BY e.id, a.starts_at::date
+            """)
+            _rem_av = pd.DataFrame(cur_cp.fetchall(), columns=['tutor_id','session_date','blocks_remaining'])
+            _rem_av['session_date'] = pd.to_datetime(_rem_av['session_date']).dt.date
             conn_cp.close()
 
-            if _cp_df.empty:
-                st.success("✅ No session cancellation patterns found in the selected window.")
-            else:
-                # Group by tutor + day
-                _summary_cp = _cp_df.groupby(['tutor_id','tutor_name','session_date']).agg(
+            # ── Build summaries ────────────────────────────────────────
+            if not _sess_df.empty:
+                _sess_summary = _sess_df.groupby(['tutor_id','tutor_name','session_date']).agg(
                     sessions_cancelled=('session_starts_at','count'),
                     hours_cancelled=('duration', lambda x: round(sum(x)/60, 1)),
                     first_cancelled_at=('cancelled_at','min'),
                     last_cancelled_at=('cancelled_at','max')
                 ).reset_index()
+                _sess_summary = _sess_summary.merge(_rem_sess, on=['tutor_id','session_date'], how='left')
+                _sess_summary['sessions_remaining'] = _sess_summary['sessions_remaining'].fillna(0).astype(int)
+                _sess_summary['status'] = _sess_summary['sessions_remaining'].apply(lambda x: '🔴 All Cleared' if x == 0 else '🟡 Partial')
+            else:
+                _sess_summary = pd.DataFrame()
 
-                _summary_cp = _summary_cp.merge(_rem_df, on=['tutor_id','session_date'], how='left')
-                _summary_cp['sessions_remaining'] = _summary_cp['sessions_remaining'].fillna(0).astype(int)
-                _summary_cp['status'] = _summary_cp['sessions_remaining'].apply(
-                    lambda x: '🔴 All Cleared' if x == 0 else '🟡 Partial')
-                _summary_cp = _summary_cp.sort_values(['session_date','sessions_cancelled'],
-                                                       ascending=[False, False])
+            if not _av_df.empty:
+                _av_summary = _av_df.groupby(['tutor_id','tutor_name','session_date']).agg(
+                    blocks_deleted=('starts_at','count'),
+                    hours_deleted=('duration', lambda x: round(sum(x)/60, 1)),
+                    first_deleted_at=('deleted_at','min'),
+                    last_deleted_at=('deleted_at','max')
+                ).reset_index()
+                _av_summary = _av_summary.merge(_rem_av, on=['tutor_id','session_date'], how='left')
+                _av_summary['blocks_remaining'] = _av_summary['blocks_remaining'].fillna(0).astype(int)
+                _av_summary['status'] = _av_summary['blocks_remaining'].apply(lambda x: '🔴 All Cleared' if x == 0 else '🟡 Partial')
+            else:
+                _av_summary = pd.DataFrame()
 
-                # Filters
-                _cp_col1, _cp_col2, _cp_col3 = st.columns(3)
-                with _cp_col1:
-                    _cp_tutor_filter = st.multiselect(
-                        "Filter by Tutor",
-                        options=sorted(_summary_cp['tutor_name'].unique()),
-                        default=[],
-                        key="cp_tutor_filter",
-                        placeholder="All tutors"
-                    )
-                with _cp_col2:
-                    _cp_status_filter = st.radio(
-                        "Status",
-                        ["All", "All Cleared Only"],
-                        horizontal=True,
-                        key="cp_status_filter"
-                    )
-                with _cp_col3:
-                    _cp_window_filter = st.radio(
-                        "Time Window",
-                        ["All", "Past 30 Days", "Next 4 Weeks"],
-                        horizontal=True,
-                        key="cp_window_filter"
-                    )
+            # ── Filters ────────────────────────────────────────────────
+            _cp_f1, _cp_f2, _cp_f3 = st.columns(3)
+            with _cp_f1:
+                _all_tutors = sorted(set(
+                    list(_sess_summary['tutor_name'].unique() if not _sess_summary.empty else []) +
+                    list(_av_summary['tutor_name'].unique() if not _av_summary.empty else [])
+                ))
+                _cp_tutor_filter = st.multiselect("Filter by Tutor", options=_all_tutors,
+                    default=[], key="cp_tutor_filter", placeholder="All tutors")
+            with _cp_f2:
+                _cp_status_filter = st.radio("Status", ["All Cleared Only", "All"],
+                    horizontal=True, key="cp_status_filter")
+            with _cp_f3:
+                _cp_window_filter = st.radio("Time Window", ["All", "Past 30 Days", "Next 4 Weeks"],
+                    horizontal=True, key="cp_window_filter")
 
-                _filtered_cp = _summary_cp.copy()
+            def _apply_cp_filters(df, status_col):
+                if df.empty: return df
                 if _cp_tutor_filter:
-                    _filtered_cp = _filtered_cp[_filtered_cp['tutor_name'].isin(_cp_tutor_filter)]
+                    df = df[df['tutor_name'].isin(_cp_tutor_filter)]
                 if _cp_status_filter == "All Cleared Only":
-                    _filtered_cp = _filtered_cp[_filtered_cp['status'] == '🔴 All Cleared']
+                    df = df[df[status_col] == '🔴 All Cleared']
                 if _cp_window_filter == "Past 30 Days":
-                    _filtered_cp = _filtered_cp[_filtered_cp['session_date'] < _today]
+                    df = df[df['session_date'] < _today]
                 elif _cp_window_filter == "Next 4 Weeks":
-                    _filtered_cp = _filtered_cp[_filtered_cp['session_date'] >= _today]
+                    df = df[df['session_date'] >= _today]
+                return df.sort_values(['session_date','tutor_name'], ascending=[False,True])
 
-                st.caption(f"{len(_filtered_cp)} cancellation day(s) · {_filtered_cp['tutor_name'].nunique()} tutor(s)")
+            _sess_filtered = _apply_cp_filters(_sess_summary.copy(), 'status')
+            _av_filtered   = _apply_cp_filters(_av_summary.copy(), 'status')
 
-                # ── Calendar View ──────────────────────────────────────────
-                import calendar as _cal
-                _today = pd.Timestamp.today().date()
-                _all_dates = sorted(_filtered_cp['session_date'].unique())
+            # ── Calendar renderer ──────────────────────────────────────
+            def _render_cp_calendar(date_lookup):
+                all_dates = sorted(date_lookup.keys())
+                if not all_dates: return
+                _months = []
+                _y, _m = min(all_dates).year, min(all_dates).month
+                while (_y, _m) <= (max(all_dates).year, max(all_dates).month):
+                    _months.append((_y, _m))
+                    _m += 1
+                    if _m > 12: _m = 1; _y += 1
+                for (_yr, _mo) in _months:
+                    _month_name = _dt2.date(_yr, _mo, 1).strftime('%B %Y')
+                    st.markdown(f"**{_month_name}**")
+                    _html = ('<style>.rpc{{width:100%;border-collapse:collapse;margin-bottom:1rem;}}'
+                             '.rpc th{{text-align:center;font-size:11px;color:#888;padding:4px 2px;font-weight:500;}}'
+                             '.rpc td{{vertical-align:top;border:0.5px solid #e5e5e5;border-radius:4px;padding:4px;min-height:60px;width:14.28%;font-size:11px;}}'
+                             '.rpc td.empty{{background:#fafafa;}}.rpc td.tod{{border-color:#4A90D9;}}'
+                             '.rpc-dn{{color:#aaa;font-size:10px;margin-bottom:3px;}}'
+                             '.rpc-cl{{background:#fde8e8;color:#c62828;border-radius:3px;padding:1px 4px;margin:1px 0;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:10px;}}'
+                             '.rpc-pt{{background:#fff3cd;color:#856404;border-radius:3px;padding:1px 4px;margin:1px 0;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:10px;}}'
+                             '</style><table class="rpc"><tr><th>Sun</th><th>Mon</th><th>Tue</th><th>Wed</th><th>Thu</th><th>Fri</th><th>Sat</th></tr>')
+                    for _week in _cal.monthcalendar(_yr, _mo):
+                        _html += '<tr>'
+                        for _day in _week:
+                            if _day == 0:
+                                _html += '<td class="empty"></td>'
+                            else:
+                                _d = _dt2.date(_yr, _mo, _day)
+                                _cls = 'tod' if _d == _today else ''
+                                _html += f'<td class="{_cls}"><div class="rpc-dn">{_day}</div>'
+                                if _d in date_lookup:
+                                    for (_tname, _tstatus) in date_lookup[_d]:
+                                        _short = _tname.split()[0][0] + '. ' + _tname.split()[-1]
+                                        _css = 'rpc-cl' if 'Cleared' in _tstatus else 'rpc-pt'
+                                        _html += f'<span class="{_css}" title="{_tname}">{_short}</span>'
+                                _html += '</td>'
+                        _html += '</tr>'
+                    _html += '</table>'
+                    st.markdown(_html, unsafe_allow_html=True)
+                st.markdown("🔴 Red = fully cleared &nbsp;&nbsp; 🟡 Yellow = partial", unsafe_allow_html=True)
 
-                # Build lookup: date -> list of (tutor_name, status)
-                _date_lookup = {}
-                for _, _row in _filtered_cp.iterrows():
-                    _d = _row['session_date']
-                    if _d not in _date_lookup:
-                        _date_lookup[_d] = []
-                    _date_lookup[_d].append((_row['tutor_name'], _row['status']))
+            def _build_date_lookup(df, status_col):
+                lookup = {}
+                for _, _r in df.iterrows():
+                    _d = _r['session_date']
+                    if _d not in lookup: lookup[_d] = []
+                    lookup[_d].append((_r['tutor_name'], _r[status_col]))
+                return lookup
 
-                # Show calendar for each month in range
-                if _all_dates:
-                    _min_date = min(_all_dates)
-                    _max_date = max(_all_dates)
-                    _months = []
-                    _y, _m = _min_date.year, _min_date.month
-                    while (_y, _m) <= (_max_date.year, _max_date.month):
-                        _months.append((_y, _m))
-                        _m += 1
-                        if _m > 12:
-                            _m = 1
-                            _y += 1
+            def _color_status(val):
+                if '🔴' in str(val): return 'color:#c62828;font-weight:bold'
+                if '🟡' in str(val): return 'color:#f57f17;font-weight:bold'
+                return ''
 
-                    for (_yr, _mo) in _months:
-                        import datetime as _dt
-                        _month_name = _dt.date(_yr, _mo, 1).strftime('%B %Y')
-                        st.markdown(f"**{_month_name}**")
-
-                        _cal_html = """
-                        <style>
-                        .rp-cal { width:100%; border-collapse:collapse; margin-bottom:1rem; }
-                        .rp-cal th { text-align:center; font-size:11px; color:#888; padding:4px 2px; font-weight:500; }
-                        .rp-cal td { vertical-align:top; border:0.5px solid #e5e5e5; border-radius:4px; padding:4px; min-height:60px; width:14.28%; font-size:11px; }
-                        .rp-cal td.empty { background:#fafafa; }
-                        .rp-cal td.today { border-color:#4A90D9; }
-                        .rp-daynum { color:#aaa; font-size:10px; margin-bottom:3px; }
-                        .rp-cleared { background:#fde8e8; color:#c62828; border-radius:3px; padding:1px 4px; margin:1px 0; display:block; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-size:10px; }
-                        .rp-partial { background:#fff3cd; color:#856404; border-radius:3px; padding:1px 4px; margin:1px 0; display:block; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-size:10px; }
-                        </style>
-                        <table class="rp-cal">
-                        <tr><th>Sun</th><th>Mon</th><th>Tue</th><th>Wed</th><th>Thu</th><th>Fri</th><th>Sat</th></tr>
-                        """
-
-                        _month_cal = _cal.monthcalendar(_yr, _mo)
-                        for _week in _month_cal:
-                            _cal_html += "<tr>"
-                            for _day in _week:
-                                if _day == 0:
-                                    _cal_html += '<td class="empty"></td>'
-                                else:
-                                    import datetime as _dt2
-                                    _d = _dt2.date(_yr, _mo, _day)
-                                    _is_today = ' today' if _d == _today else ''
-                                    _cal_html += f'<td class="{_is_today}"><div class="rp-daynum">{_day}</div>'
-                                    if _d in _date_lookup:
-                                        for (_tname, _tstatus) in _date_lookup[_d]:
-                                            _initials = ' '.join([p[0]+'.' for p in _tname.split()])
-                                            _short = _tname.split()[0][0]+'. '+_tname.split()[-1]
-                                            _css = 'rp-cleared' if 'Cleared' in _tstatus else 'rp-partial'
-                                            _cal_html += f'<span class="{_css}" title="{_tname}">{_short}</span>'
-                                    _cal_html += '</td>'
-                            _cal_html += "</tr>"
-                        _cal_html += "</table>"
-                        st.markdown(_cal_html, unsafe_allow_html=True)
-
-                    st.markdown("🔴 Red = all sessions cleared &nbsp;&nbsp; 🟡 Yellow = partial cancellations", unsafe_allow_html=True)
-                    st.divider()
-
-                # ── Detail Table ───────────────────────────────────────────
+            # ── Section 1: Sessions ────────────────────────────────────
+            st.divider()
+            st.markdown("### 📅 Sessions Cancelled")
+            if not _sess_filtered.empty:
+                st.caption(f"{len(_sess_filtered)} day(s) · {_sess_filtered['tutor_name'].nunique()} tutor(s)")
+                _render_cp_calendar(_build_date_lookup(_sess_filtered, 'status'))
                 st.markdown("#### Detail")
-                _disp_cp = _filtered_cp.rename(columns={
-                    'tutor_name': 'Tutor',
-                    'session_date': 'Date',
-                    'sessions_cancelled': 'Sessions Cancelled',
-                    'hours_cancelled': 'Hours Cancelled',
-                    'sessions_remaining': 'Sessions Remaining',
-                    'status': 'Status',
-                    'first_cancelled_at': 'First Cancelled At',
-                    'last_cancelled_at': 'Last Cancelled At',
-                })[['Tutor','Date','Sessions Cancelled','Hours Cancelled',
-                      'Sessions Remaining','Status','First Cancelled At','Last Cancelled At']]
+                _sd = _sess_filtered.rename(columns={'tutor_name':'Tutor','session_date':'Date',
+                    'sessions_cancelled':'Sessions Cancelled','hours_cancelled':'Hours Cancelled',
+                    'sessions_remaining':'Sessions Remaining','status':'Status',
+                    'first_cancelled_at':'First Cancelled At','last_cancelled_at':'Last Cancelled At'
+                })[['Tutor','Date','Sessions Cancelled','Hours Cancelled','Sessions Remaining','Status','First Cancelled At','Last Cancelled At']]
+                st.dataframe(_sd.style.map(_color_status, subset=['Status']), use_container_width=True, hide_index=True)
+            else:
+                st.info("No session cancellations found for the selected filters.")
 
-                def _color_status(val):
-                    if '🔴' in str(val): return 'color: #c62828; font-weight: bold'
-                    if '🟡' in str(val): return 'color: #f57f17; font-weight: bold'
-                    return ''
-
-                st.dataframe(
-                    _disp_cp.style.map(_color_status, subset=['Status']),
-                    use_container_width=True, hide_index=True
-                )
+            # ── Section 2: Availability ────────────────────────────────
+            st.divider()
+            st.markdown("### 🗓️ Availability Removed")
+            if not _av_filtered.empty:
+                st.caption(f"{len(_av_filtered)} day(s) · {_av_filtered['tutor_name'].nunique()} tutor(s)")
+                _render_cp_calendar(_build_date_lookup(_av_filtered, 'status'))
+                st.markdown("#### Detail")
+                _ad = _av_filtered.rename(columns={'tutor_name':'Tutor','session_date':'Date',
+                    'blocks_deleted':'Blocks Removed','hours_deleted':'Hours Removed',
+                    'blocks_remaining':'Blocks Remaining','status':'Status',
+                    'first_deleted_at':'First Removed At','last_deleted_at':'Last Removed At'
+                })[['Tutor','Date','Blocks Removed','Hours Removed','Blocks Remaining','Status','First Removed At','Last Removed At']]
+                st.dataframe(_ad.style.map(_color_status, subset=['Status']), use_container_width=True, hide_index=True)
+            else:
+                st.info("No availability removals found for the selected filters.")
 
         except Exception as _e:
             st.error(f"Could not load cancellation data: {_e}")
+
 
     if page == "📋 Annual Reviews":
         st.markdown('<div class="main-title">📋 Annual Reviews</div>', unsafe_allow_html=True)
