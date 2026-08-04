@@ -10004,40 +10004,48 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                 for (_yr, _mo) in _months:
                     _month_name = _dt2.date(_yr, _mo, 1).strftime('%B %Y')
                     st.markdown(f"**{_month_name}**")
-                    _html = ('<style>.rpc{{width:100%;border-collapse:collapse;margin-bottom:1rem;}}'
-                             '.rpc th{{text-align:center;font-size:11px;color:#888;padding:4px 2px;font-weight:500;}}'
-                             '.rpc td{{vertical-align:top;border:0.5px solid #e5e5e5;border-radius:4px;padding:4px;min-height:60px;width:14.28%;font-size:11px;}}'
-                             '.rpc td.empty{{background:#fafafa;}}.rpc td.tod{{border-color:#4A90D9;}}'
-                             '.rpc-dn{{color:#aaa;font-size:10px;margin-bottom:3px;}}'
-                             '.rpc-cl{{background:#fde8e8;color:#c62828;border-radius:3px;padding:1px 4px;margin:1px 0;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:10px;}}'
-                             '.rpc-pt{{background:#fff3cd;color:#856404;border-radius:3px;padding:1px 4px;margin:1px 0;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:10px;}}'
-                             '</style><table class="rpc"><tr><th>Sun</th><th>Mon</th><th>Tue</th><th>Wed</th><th>Thu</th><th>Fri</th><th>Sat</th></tr>')
+                    _uid = f"cal_{_yr}_{_mo}_{id(date_lookup)}"
+                    _html = (
+                        f'<style>'
+                        f'#{_uid} {{width:100%;border-collapse:separate;border-spacing:2px;margin-bottom:1rem;}}'
+                        f'#{_uid} th {{text-align:center;font-size:11px;color:#888;padding:4px 0;font-weight:500;background:transparent;}}'
+                        f'#{_uid} td {{vertical-align:top;border:1px solid #e0e0e0;border-radius:6px;padding:5px 6px;min-height:70px;width:14.28%;background:white;}}'
+                        f'#{_uid} td.emp {{background:#f8f8f8;border-color:#f0f0f0;}}'
+                        f'#{_uid} td.tod {{border:2px solid #4A90D9;background:#f0f6ff;}}'
+                        f'#{_uid} .dn {{color:#bbb;font-size:10px;margin-bottom:4px;display:block;}}'
+                        f'#{_uid} .cl {{background:#fde8e8;color:#c62828;border-radius:4px;padding:2px 5px;margin:2px 0;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:10px;font-weight:500;}}'
+                        f'#{_uid} .pt {{background:#fff3cd;color:#856404;border-radius:4px;padding:2px 5px;margin:2px 0;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:10px;font-weight:500;}}'
+                        f'</style>'
+                        f'<table id="{_uid}"><tr><th>Sun</th><th>Mon</th><th>Tue</th><th>Wed</th><th>Thu</th><th>Fri</th><th>Sat</th></tr>'
+                    )
                     for _week in _cal.monthcalendar(_yr, _mo):
                         _html += '<tr>'
                         for _day in _week:
                             if _day == 0:
-                                _html += '<td class="empty"></td>'
+                                _html += '<td class="emp"></td>'
                             else:
                                 _d = _dt2.date(_yr, _mo, _day)
                                 _cls = 'tod' if _d == _today else ''
-                                _html += f'<td class="{_cls}"><div class="rpc-dn">{_day}</div>'
+                                _html += f'<td class="{_cls}"><span class="dn">{_day}</span>'
                                 if _d in date_lookup:
-                                    for (_tname, _tstatus) in date_lookup[_d]:
+                                    for (_tname, _tstatus, _hrs) in date_lookup[_d]:
                                         _short = _tname.split()[0][0] + '. ' + _tname.split()[-1]
-                                        _css = 'rpc-cl' if 'Cleared' in _tstatus else 'rpc-pt'
-                                        _html += f'<span class="{_css}" title="{_tname}">{_short}</span>'
+                                        _css = 'cl' if 'Cleared' in _tstatus else 'pt'
+                                        _hrs_str = f" {_hrs}h" if _hrs else ""
+                                        _html += f'<span class="{_css}" title="{_tname}">{_short}{_hrs_str}</span>'
                                 _html += '</td>'
                         _html += '</tr>'
                     _html += '</table>'
                     st.markdown(_html, unsafe_allow_html=True)
                 st.markdown("🔴 Red = fully cleared &nbsp;&nbsp; 🟡 Yellow = partial", unsafe_allow_html=True)
 
-            def _build_date_lookup(df, status_col):
+            def _build_date_lookup(df, status_col, hours_col):
                 lookup = {}
                 for _, _r in df.iterrows():
                     _d = _r['session_date']
                     if _d not in lookup: lookup[_d] = []
-                    lookup[_d].append((_r['tutor_name'], _r[status_col]))
+                    _hrs = _r.get(hours_col, 0)
+                    lookup[_d].append((_r['tutor_name'], _r[status_col], _hrs))
                 return lookup
 
             def _color_status(val):
@@ -10050,7 +10058,7 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
             st.markdown("### 📅 Sessions Cancelled")
             if not _sess_filtered.empty:
                 st.caption(f"{len(_sess_filtered)} day(s) · {_sess_filtered['tutor_name'].nunique()} tutor(s)")
-                _render_cp_calendar(_build_date_lookup(_sess_filtered, 'status'))
+                _render_cp_calendar(_build_date_lookup(_sess_filtered, 'status', 'hours_cancelled'))
                 st.markdown("#### Detail")
                 _sd = _sess_filtered.rename(columns={'tutor_name':'Tutor','session_date':'Date',
                     'sessions_cancelled':'Sessions Cancelled','hours_cancelled':'Hours Cancelled',
@@ -10066,7 +10074,7 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
             st.markdown("### 🗓️ Availability Removed")
             if not _av_filtered.empty:
                 st.caption(f"{len(_av_filtered)} day(s) · {_av_filtered['tutor_name'].nunique()} tutor(s)")
-                _render_cp_calendar(_build_date_lookup(_av_filtered, 'status'))
+                _render_cp_calendar(_build_date_lookup(_av_filtered, 'status', 'hours_deleted'))
                 st.markdown("#### Detail")
                 _ad = _av_filtered.rename(columns={'tutor_name':'Tutor','session_date':'Date',
                     'blocks_deleted':'Blocks Removed','hours_deleted':'Hours Removed',
