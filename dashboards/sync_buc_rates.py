@@ -72,7 +72,11 @@ SELECT
     MAX(CASE WHEN tags.name LIKE 'buc%%'
         THEN 1
         ELSE 0
-        END) AS buc_tag
+        END) AS buc_tag,
+    MAX(CASE WHEN tags.name = 'departing'
+        THEN 1
+        ELSE 0
+        END) AS departing
 FROM orbit_production.employees e1
     LEFT JOIN orbit_production.pay_rates
         ON (pay_rates.employee_id = e1.id

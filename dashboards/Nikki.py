@@ -7970,11 +7970,23 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
 
             if len(currently_restricted) > 0:
                 currently_restricted["days_restricted"] = (pd.Timestamp.now() - currently_restricted["status_starts_at"]).dt.days
-                curr_display = currently_restricted[["tutor", "status_starts_at", "days_restricted", "update_type"]].copy()
+                # Join departing flag from buc_rates
+                try:
+                    _buc_df = load_buc_rates()
+                    if not _buc_df.empty and "departing" in _buc_df.columns:
+                        _dep_lookup = _buc_df.set_index("tutor")["departing"].to_dict()
+                        currently_restricted["departing"] = currently_restricted["tutor"].map(_dep_lookup).fillna(0).astype(int)
+                    else:
+                        currently_restricted["departing"] = 0
+                except Exception:
+                    currently_restricted["departing"] = 0
+                curr_display = currently_restricted[["tutor", "status_starts_at", "days_restricted", "update_type", "departing"]].copy()
                 curr_display["status_starts_at"] = curr_display["status_starts_at"].dt.strftime("%Y-%m-%d")
+                curr_display["departing"] = curr_display["departing"].apply(lambda x: "⚠️ Departing" if x == 1 else "")
                 curr_display = curr_display.rename(columns={
                     "tutor": "Tutor", "status_starts_at": "Restricted Since",
                     "days_restricted": "Days Restricted", "update_type": "Changed By",
+                    "departing": "Departing",
                 }).sort_values("Days Restricted", ascending=False)
                 st.dataframe(curr_display, hide_index=True, use_container_width=True,
                              height=min(500, len(curr_display) * 35 + 60))
