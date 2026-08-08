@@ -1264,7 +1264,17 @@ def load_ppw_data(start_date: str, end_date: str, team_name: str):
     """Load PPW (first session attachment) data for a given date range and team."""
     conn = get_redshift_connection()
     query = f"""
-        WITH first_course AS (
+        WITH first_ever AS (
+            SELECT
+                enrollments.enrollee_id AS student_id,
+                MIN(sessions.starts_at) AS first_session_ever
+            FROM dw.sessions
+            JOIN dw.courses ON (courses.id = sessions.course_id
+                AND courses.brand_id IN (2,36,41,42,43,47,48))
+            JOIN dw.enrollments ON sessions.course_id = enrollments.course_id
+            GROUP BY enrollments.enrollee_id
+        ),
+        first_course AS (
             SELECT
                 enrollments.enrollee_id AS student_id,
                 sessions.id AS session_id,
@@ -1275,6 +1285,8 @@ def load_ppw_data(start_date: str, end_date: str, team_name: str):
             JOIN dw.courses ON (courses.id = sessions.course_id
                 AND courses.brand_id IN (2,36,41,42,43,47,48))
             JOIN dw.enrollments ON sessions.course_id = enrollments.course_id
+            JOIN first_ever ON (first_ever.student_id = enrollments.enrollee_id
+                AND first_ever.first_session_ever = sessions.starts_at)
             WHERE sessions.starts_at::DATE >= '{start_date}'
               AND sessions.starts_at::DATE <= '{end_date}'
             QUALIFY ROW_NUMBER() OVER (
@@ -1310,6 +1322,7 @@ def load_ppw_data(start_date: str, end_date: str, team_name: str):
         )
         WHERE teams.name = '{team_name}'
         ORDER BY tutor_name, first_course.session_start
+    
     """
     try:
         df = pd.read_sql(query, conn)
