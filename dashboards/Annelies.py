@@ -267,7 +267,7 @@ def load_fl_meeting_data(lookback_months=24):
             JOIN dw.enrollments e2 ON e2.id = a2.enrollment_id
             JOIN dw.employees e_t2 ON e2.enrollee_id = e_t2.id
         WHERE c2.brand_id = 25
-            AND s2.starts_at > GETDATE()
+            AND s2.starts_at >= CURRENT_DATE
         GROUP BY s2.supervisor_id, e_t2.id
     )
     SELECT
@@ -9972,6 +9972,47 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
             _rem_av['session_date'] = pd.to_datetime(_rem_av['session_date']).dt.date
             conn_cp.close()
 
+            # ── Student names per course (for session cancellation detail) ──────────
+            _all_course_ids = []
+            if not _cp_df.empty and 'value' in _cp_df.columns:
+                import json as _jmod
+                def _get_cid(row):
+                    try: return _jmod.loads(row['value']).get('course_id')
+                    except: return None
+                _cp_df['course_id'] = _cp_df.apply(_get_cid, axis=1)
+                _all_course_ids = _cp_df['course_id'].dropna().unique().tolist()
+            _student_by_course = {}
+            if _all_course_ids:
+                _cids_str = ','.join(str(int(c)) for c in _all_course_ids)
+                conn_cp2 = get_redshift_connection()
+                cur_cp2 = conn_cp2.cursor()
+                cur_cp2.execute(f"""
+                    SELECT en.course_id, su.first_name||' '||su.last_name AS student_name
+                    FROM dw.enrollments en
+                    JOIN dw.students st ON en.enrollee_id = st.id
+                    JOIN dw.users su ON st.user_id = su.id
+                    WHERE en.course_id IN ({_cids_str})
+                """)
+                for _cid, _sname in cur_cp2.fetchall():
+                    _student_by_course.setdefault(_cid, []).append(_sname)
+                conn_cp2.close()
+
+            # ── Scheduled delivery hours per tutor per week (for avail detail) ──────
+            conn_cp3 = get_redshift_connection()
+            cur_cp3 = conn_cp3.cursor()
+            cur_cp3.execute("""
+                SELECT supervisor_id AS tutor_id,
+                    DATEADD(day, -1, DATE_TRUNC('week', starts_at)::date) AS week_start,
+                    ROUND(SUM(duration)/60.0, 1) AS scheduled_hours
+                FROM dw.sessions
+                WHERE starts_at::date BETWEEN CURRENT_DATE - 30 AND CURRENT_DATE + 28
+                GROUP BY supervisor_id, DATEADD(day, -1, DATE_TRUNC('week', starts_at)::date)
+            """)
+            _sched_hours = pd.DataFrame(cur_cp3.fetchall(), columns=['tutor_id','week_start','scheduled_hours'])
+            _sched_hours['week_start'] = pd.to_datetime(_sched_hours['week_start']).dt.date
+            _sched_hours['session_date'] = _sched_hours['week_start']
+            conn_cp3.close()
+
             # ── Build summaries ────────────────────────────────────────
             if not _sess_df.empty:
                 _sess_summary = _sess_df.groupby(['tutor_id','tutor_name','session_date']).agg(
@@ -9980,6 +10021,19 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                     first_cancelled_at=('cancelled_at','min'),
                     last_cancelled_at=('cancelled_at','max')
                 ).reset_index()
+                # Build per-row detail with session time and student names
+                _sess_detail_rows = []
+                for _, _r in _cp_df[_cp_df['tutor_name'].isin(set(annelies_tutors))].iterrows():
+                    _cid = _r.get('course_id')
+                    _students = ', '.join(_student_by_course.get(_cid, ['—'])) if _cid else '—'
+                    _sess_detail_rows.append({
+                        'tutor_name': _r['tutor_name'],
+                        'session_date': _r['session_date'],
+                        'session_time': _r['session_starts_at'].strftime('%I:%M %p') if pd.notna(_r['session_starts_at']) else '—',
+                        'students': _students,
+                        'cancelled_at': _r['cancelled_at'],
+                    })
+                _sess_detail_df = pd.DataFrame(_sess_detail_rows) if _sess_detail_rows else pd.DataFrame()
                 _sess_summary = _sess_summary.merge(_rem_sess, on=['tutor_id','session_date'], how='left')
                 _sess_summary['sessions_remaining'] = _sess_summary['sessions_remaining'].fillna(0).astype(int)
                 _sess_summary['status'] = _sess_summary['sessions_remaining'].apply(lambda x: '🔴 All Cleared' if x == 0 else '🟡 Partial')
@@ -9996,6 +10050,11 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                 _av_summary = _av_summary.merge(_rem_av, on=['tutor_id','session_date'], how='left')
                 _av_summary['blocks_remaining'] = _av_summary['blocks_remaining'].fillna(0).astype(int)
                 _av_summary['status'] = _av_summary['blocks_remaining'].apply(lambda x: '🔴 All Cleared' if x == 0 else '🟡 Partial')
+                # Add scheduled delivery hours for that week
+                _sched_hours['session_date'] = pd.to_datetime(_sched_hours['week_start']).dt.date
+                _av_summary = _av_summary.merge(_sched_hours[['tutor_id','session_date','scheduled_hours']],
+                                                on=['tutor_id','session_date'], how='left')
+                _av_summary['scheduled_hours'] = _av_summary['scheduled_hours'].fillna(0).round(1)
             else:
                 _av_summary = pd.DataFrame()
 
@@ -10106,6 +10165,26 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                     'first_cancelled_at':'First Cancelled At','last_cancelled_at':'Last Cancelled At'
                 })[['Tutor','Date','Sessions Cancelled','Hours Cancelled','Sessions Remaining','Status','First Cancelled At','Last Cancelled At']]
                 st.dataframe(_sd.style.map(_color_status, subset=['Status']), use_container_width=True, hide_index=True)
+                # Per-session detail with student names and times
+                if '_sess_detail_df' in dir() and not _sess_detail_df.empty:
+                    _filt_detail = _sess_detail_df[_sess_detail_df['tutor_name'].isin(
+                        _sess_filtered['tutor_name'].unique())].copy()
+                    if _cp_tutor_filter:
+                        _filt_detail = _filt_detail[_filt_detail['tutor_name'].isin(_cp_tutor_filter)]
+                    if _cp_window_filter == "Past 30 Days":
+                        _filt_detail = _filt_detail[_filt_detail['session_date'] < _today]
+                    elif _cp_window_filter == "Next 4 Weeks":
+                        _filt_detail = _filt_detail[_filt_detail['session_date'] >= _today]
+                    with st.expander("🔍 Session-Level Detail (with student names)", expanded=False):
+                        st.dataframe(
+                            _filt_detail.rename(columns={
+                                'tutor_name':'Tutor','session_date':'Date',
+                                'session_time':'Session Time (PST)',
+                                'students':'Student(s)','cancelled_at':'Cancelled At'
+                            })[['Tutor','Date','Session Time (PST)','Student(s)','Cancelled At']]
+                            .sort_values(['Date','Session Time (PST)']),
+                            use_container_width=True, hide_index=True
+                        )
             else:
                 st.info("No session cancellations found for the selected filters.")
 
@@ -10119,8 +10198,11 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                 _ad = _av_filtered.rename(columns={'tutor_name':'Tutor','session_date':'Date',
                     'blocks_deleted':'Blocks Removed','hours_deleted':'Hours Removed',
                     'blocks_remaining':'Blocks Remaining','status':'Status',
-                    'first_deleted_at':'First Removed At','last_deleted_at':'Last Removed At'
-                })[['Tutor','Date','Blocks Removed','Hours Removed','Blocks Remaining','Status','First Removed At','Last Removed At']]
+                    'first_deleted_at':'First Removed At','last_deleted_at':'Last Removed At',
+                    'scheduled_hours':'Scheduled Hrs That Week'
+                })
+                _ad_cols = ['Tutor','Date','Blocks Removed','Hours Removed','Blocks Remaining','Scheduled Hrs That Week','Status','First Removed At','Last Removed At']
+                _ad = _ad[[c for c in _ad_cols if c in _ad.columns]]
                 st.dataframe(_ad.style.map(_color_status, subset=['Status']), use_container_width=True, hide_index=True)
             else:
                 st.info("No availability removals found for the selected filters.")
