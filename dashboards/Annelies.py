@@ -9939,8 +9939,8 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                 _cur_hm = _conn_hm.cursor()
                 _cur_hm.execute(f"""
                     SELECT
-                        EXTRACT(DOW FROM CONVERT_TIMEZONE('US/Eastern', s.starts_at))::INT AS dow,
-                        EXTRACT(HOUR FROM CONVERT_TIMEZONE('US/Eastern', s.starts_at))::INT AS hour,
+                        EXTRACT(DOW FROM s.starts_at)::INT AS dow,
+                        EXTRACT(HOUR FROM s.starts_at)::INT AS hour,
                         COUNT(*) AS cnt
                     FROM dw.sessions s
                     JOIN dw.courses c ON s.course_id = c.id
@@ -10003,8 +10003,8 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                 _cur_av = _conn_av.cursor()
                 _cur_av.execute(f"""
                     SELECT
-                        EXTRACT(DOW FROM CONVERT_TIMEZONE('US/Eastern', a.starts_at))::INT AS dow,
-                        EXTRACT(HOUR FROM CONVERT_TIMEZONE('US/Eastern', a.starts_at))::INT AS hour,
+                        EXTRACT(DOW FROM a.starts_at)::INT AS dow,
+                        EXTRACT(HOUR FROM a.starts_at)::INT AS hour,
                         COUNT(DISTINCT e.id) AS tutor_count,
                         COUNT(*) AS block_count
                     FROM dw.availabilities a
