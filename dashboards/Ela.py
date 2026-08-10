@@ -9891,7 +9891,7 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
         # ── Filters ───────────────────────────────────────────────────────
         _hm_col1, _hm_col2, _hm_col3 = st.columns(3)
         with _hm_col1:
-            _hm_scope = st.radio("Team Scope", ["My Team Only", "All Teams"], horizontal=True, key="hm_scope")
+            _hm_scope = st.radio("Team Scope", ["All Teams", "My Team Only"], horizontal=True, key="hm_scope")
         with _hm_col2:
             _hm_tutor = st.multiselect("Filter by Tutor", options=sorted(annelies_tutors),
                 default=[], key="hm_tutor", placeholder="All tutors")
@@ -9932,9 +9932,11 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                 _brands_sql = ','.join(str(b) for b in _brand_filter)
 
                 _sess_where = f"c.brand_id IN ({_brands_sql})"
-                if _hm_scope == "My Team Only" or _hm_tutor:
-                    _team_tutors = _hm_tutor if _hm_tutor else annelies_tutors
-                    _tutor_names_sql = "','".join(_team_tutors)
+                if _hm_tutor:
+                    _tutor_names_sql = "','".join(_hm_tutor)
+                    _sess_where += f" AND u.first_name||' '||u.last_name IN ('{_tutor_names_sql}')"
+                elif _hm_scope == "My Team Only":
+                    _tutor_names_sql = "','".join(annelies_tutors)
                     _sess_where += f" AND u.first_name||' '||u.last_name IN ('{_tutor_names_sql}')"
 
                 _conn_hm = get_redshift_connection()
@@ -9994,9 +9996,11 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
         with _hm_tab3:
             try:
                 _av_where = "a.starts_at::date BETWEEN CURRENT_DATE AND CURRENT_DATE + 28"
-                if _hm_scope == "My Team Only" or _hm_tutor:
-                    _team_tutors = _hm_tutor if _hm_tutor else annelies_tutors
-                    _tutor_names_sql = "','".join(_team_tutors)
+                if _hm_tutor:
+                    _tutor_names_sql = "','".join(_hm_tutor)
+                    _av_where += f" AND u.first_name||' '||u.last_name IN ('{_tutor_names_sql}')"
+                elif _hm_scope == "My Team Only":
+                    _tutor_names_sql = "','".join(annelies_tutors)
                     _av_where += f" AND u.first_name||' '||u.last_name IN ('{_tutor_names_sql}')"
 
                 _conn_av = get_redshift_connection()
@@ -10022,26 +10026,24 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                     _day_name = _DOW[int(_dow)]
                     _av_pivot.setdefault(_day_name, {})[int(_hr)] = int(_tcnt)
 
-                _col_av1, _col_av2 = st.columns(2)
-                with _col_av1:
-                    st.plotly_chart(_make_heatmap(_av_pivot, "Tutors Available (Next 4 Weeks) — ET", colorscale='Greens'),
-                                    use_container_width=True)
-                    st.caption("Count of tutors with posted availability per hour slot.")
+                st.plotly_chart(_make_heatmap(_av_pivot, "Tutors Available (Next 4 Weeks) — ET", colorscale='Greens'),
+                                use_container_width=True)
+                st.caption("Count of tutors with posted availability per hour slot.")
 
-                with _col_av2:
-                    # Gap: family demand minus tutor supply
-                    _gap_pivot = {}
-                    for _day in _DOW:
-                        for _hr in _HOURS:
-                            _fam_cnt = _fam_pivot.get(_day, {}).get(_hr, 0) if '_fam_pivot' in dir() else 0
-                            _tut_cnt = _av_pivot.get(_day, {}).get(_hr, 0)
-                            # Normalize: family demand per tutor available
-                            _gap_pivot.setdefault(_day, {})[_hr] = round(_fam_cnt / max(_tut_cnt, 1), 1)
+                st.divider()
 
-                    st.plotly_chart(_make_heatmap(_gap_pivot, "Demand/Supply Ratio (Families per Available Tutor)", 
-                                                  colorscale='RdYlGn_r', text_fmt=True),
-                                    use_container_width=True)
-                    st.caption("Higher = more family demand relative to tutor availability. Red = understaffed slots.")
+                # Gap: family demand per tutor available
+                _gap_pivot = {}
+                for _day in _DOW:
+                    for _hr in _HOURS:
+                        _fam_cnt = _fam_pivot.get(_day, {}).get(_hr, 0) if '_fam_pivot' in dir() else 0
+                        _tut_cnt = _av_pivot.get(_day, {}).get(_hr, 0)
+                        _gap_pivot.setdefault(_day, {})[_hr] = round(_fam_cnt / max(_tut_cnt, 1), 1)
+
+                st.plotly_chart(_make_heatmap(_gap_pivot, "Demand/Supply Ratio (Families per Available Tutor)",
+                                              colorscale='RdYlGn_r', text_fmt=True),
+                                use_container_width=True)
+                st.caption("Higher = more family demand relative to tutor availability. Red = understaffed slots.")
 
             except Exception as _e:
                 st.error(f"Could not load tutor availability: {_e}")
