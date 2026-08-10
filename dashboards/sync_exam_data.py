@@ -360,7 +360,7 @@ def push_to_github(df):
 
 TEAM_MAP = {
     "Team Cross":        "Ela_Cross",
-    "Team de Groot":     "Annelies_de_Groot",
+    "Team De Groot":     "Annelies_de_Groot",
     "Team Plamondon":    "Ian_Plamondon",
     "Team St. Marie":    "Geoff_St_Marie",
     "Team Haase-Alvey":  "Kristin_Haase_Alvey",
