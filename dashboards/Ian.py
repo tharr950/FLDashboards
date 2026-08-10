@@ -2666,6 +2666,7 @@ def render_app(config):
         "📝 Progress Update Quality Scores",
         "Archivable Students & Unscheduled Hours",
         "📅 30-Min Availability",
+        "🌡️ Demand Heatmap",
         "🚫 Session Cancellation Patterns",
         "📋 Annual Reviews",
         "🔰 90-Day Review",
@@ -9870,6 +9871,177 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
     # ─────────────────────────────────────────────
     # PAGE: SESSION CANCELLATION PATTERNS
     # ─────────────────────────────────────────────
+    # ─────────────────────────────────────────────
+    # PAGE: DEMAND HEATMAP
+    # ─────────────────────────────────────────────
+    if page == "🌡️ Demand Heatmap":
+        st.markdown('<div class="main-title">🌡️ Demand Heatmap</div>', unsafe_allow_html=True)
+        st.caption("Compare when sessions are scheduled, when families are available, and when tutors have posted availability.")
+
+        import plotly.graph_objects as go
+
+        _DOW = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"]
+        _HOURS = list(range(7, 24))  # 7am-11pm ET
+        _HOUR_LABELS = [f"{h%12 or 12}{'am' if h<12 else 'pm'}" for h in _HOURS]
+
+        # ── Filters ───────────────────────────────────────────────────────
+        _hm_col1, _hm_col2, _hm_col3 = st.columns(3)
+        with _hm_col1:
+            _hm_scope = st.radio("Team Scope", ["My Team Only", "All Teams"], horizontal=True, key="hm_scope")
+        with _hm_col2:
+            _hm_tutor = st.multiselect("Filter by Tutor", options=sorted(annelies_tutors),
+                default=[], key="hm_tutor", placeholder="All tutors")
+        with _hm_col3:
+            _brand_map = {2:"Private Tutoring",41:"Academics",42:"BUC",43:"Small Group",47:"School Pay PT",48:"School Pay Group"}
+            _hm_brand = st.multiselect("Filter by Brand (Sessions tab)", 
+                options=list(_brand_map.keys()),
+                format_func=lambda x: _brand_map[x],
+                default=list(_brand_map.keys()), key="hm_brand")
+
+        _hm_tab1, _hm_tab2, _hm_tab3 = st.tabs(["📅 Sessions Scheduled", "👨‍👩‍👧 Family Availability", "📆 Tutor Availability"])
+
+        # ── Helper: build heatmap figure ───────────────────────────────────
+        def _make_heatmap(pivot_df, title, colorscale='Blues', text_fmt=True):
+            z = [[pivot_df.get(dow, {}).get(h, 0) for dow in _DOW] for h in _HOURS]
+            text = [[str(int(pivot_df.get(dow, {}).get(h, 0))) if pivot_df.get(dow, {}).get(h, 0) > 0 else ''
+                     for dow in _DOW] for h in _HOURS] if text_fmt else None
+            fig = go.Figure(go.Heatmap(
+                z=z, x=_DOW, y=_HOUR_LABELS,
+                text=text, texttemplate="%{text}",
+                colorscale=colorscale,
+                hoverongaps=False,
+                hovertemplate="%{x} %{y}: %{z}<extra></extra>",
+            ))
+            fig.update_layout(
+                title=title, height=520,
+                margin=dict(l=60,r=20,t=40,b=20),
+                yaxis=dict(autorange='reversed'),
+                xaxis=dict(side='top'),
+                font=dict(size=11),
+            )
+            return fig
+
+        # ── Tab 1: Sessions Scheduled ──────────────────────────────────────
+        with _hm_tab1:
+            try:
+                _brand_filter = tuple(_hm_brand) if _hm_brand else (2,41,42,43,47,48)
+                _brands_sql = ','.join(str(b) for b in _brand_filter)
+
+                _sess_where = f"c.brand_id IN ({_brands_sql})"
+                if _hm_scope == "My Team Only" or _hm_tutor:
+                    _team_tutors = _hm_tutor if _hm_tutor else annelies_tutors
+                    _tutor_names_sql = "','".join(_team_tutors)
+                    _sess_where += f" AND u.first_name||' '||u.last_name IN ('{_tutor_names_sql}')"
+
+                _conn_hm = get_redshift_connection()
+                _cur_hm = _conn_hm.cursor()
+                _cur_hm.execute(f"""
+                    SELECT
+                        EXTRACT(DOW FROM CONVERT_TIMEZONE('US/Eastern', s.starts_at))::INT AS dow,
+                        EXTRACT(HOUR FROM CONVERT_TIMEZONE('US/Eastern', s.starts_at))::INT AS hour,
+                        COUNT(*) AS cnt
+                    FROM dw.sessions s
+                    JOIN dw.courses c ON s.course_id = c.id
+                    JOIN dw.employees e ON s.supervisor_id = e.id
+                    JOIN dw.users u ON e.user_id = u.id
+                    WHERE s.starts_at::date BETWEEN CURRENT_DATE AND CURRENT_DATE + 28
+                      AND {_sess_where}
+                    GROUP BY dow, hour
+                    ORDER BY dow, hour
+                """)
+                _sess_rows = _cur_hm.fetchall()
+                _conn_hm.close()
+
+                # Build pivot
+                _sess_pivot = {}
+                for _dow, _hr, _cnt in _sess_rows:
+                    _day_name = _DOW[int(_dow)]
+                    _sess_pivot.setdefault(_day_name, {})[int(_hr)] = int(_cnt)
+
+                st.plotly_chart(_make_heatmap(_sess_pivot, "Sessions Scheduled (Next 4 Weeks) — ET", colorscale='Blues'),
+                                use_container_width=True)
+                st.caption("Count of sessions per hour slot per day of week, Eastern Time.")
+            except Exception as _e:
+                st.error(f"Could not load session data: {_e}")
+
+        # ── Tab 2: Family Availability ─────────────────────────────────────
+        with _hm_tab2:
+            try:
+                _fam_df = _gh_read_cache("data/cache/family_availability.csv")
+                if _fam_df.empty:
+                    st.info("Family availability data not yet synced.")
+                else:
+                    # Build pivot from pre-aggregated data
+                    _fam_pivot = {}
+                    for _, _row in _fam_df.iterrows():
+                        _day = _row['day_et']
+                        _hr  = int(_row['hour_et'])
+                        _cnt = int(_row['student_count'])
+                        _fam_pivot.setdefault(_day, {})[_hr] = _cnt
+
+                    st.plotly_chart(_make_heatmap(_fam_pivot, "Family Availability — ET", colorscale='Reds'),
+                                    use_container_width=True)
+                    _fetched = _fam_df['fetched_at'].iloc[0] if 'fetched_at' in _fam_df.columns else 'unknown'
+                    st.caption(f"Unique students available per hour slot. Data as of {_fetched}. All active families with posted availability.")
+            except Exception as _e:
+                st.error(f"Could not load family availability: {_e}")
+
+        # ── Tab 3: Tutor Availability ──────────────────────────────────────
+        with _hm_tab3:
+            try:
+                _av_where = "a.starts_at::date BETWEEN CURRENT_DATE AND CURRENT_DATE + 28"
+                if _hm_scope == "My Team Only" or _hm_tutor:
+                    _team_tutors = _hm_tutor if _hm_tutor else annelies_tutors
+                    _tutor_names_sql = "','".join(_team_tutors)
+                    _av_where += f" AND u.first_name||' '||u.last_name IN ('{_tutor_names_sql}')"
+
+                _conn_av = get_redshift_connection()
+                _cur_av = _conn_av.cursor()
+                _cur_av.execute(f"""
+                    SELECT
+                        EXTRACT(DOW FROM CONVERT_TIMEZONE('US/Eastern', a.starts_at))::INT AS dow,
+                        EXTRACT(HOUR FROM CONVERT_TIMEZONE('US/Eastern', a.starts_at))::INT AS hour,
+                        COUNT(DISTINCT e.id) AS tutor_count,
+                        COUNT(*) AS block_count
+                    FROM dw.availabilities a
+                    JOIN dw.employees e ON a.employee_id = e.id
+                    JOIN dw.users u ON e.user_id = u.id
+                    WHERE {_av_where}
+                    GROUP BY dow, hour
+                    ORDER BY dow, hour
+                """)
+                _av_rows = _cur_av.fetchall()
+                _conn_av.close()
+
+                _av_pivot = {}
+                for _dow, _hr, _tcnt, _bcnt in _av_rows:
+                    _day_name = _DOW[int(_dow)]
+                    _av_pivot.setdefault(_day_name, {})[int(_hr)] = int(_tcnt)
+
+                _col_av1, _col_av2 = st.columns(2)
+                with _col_av1:
+                    st.plotly_chart(_make_heatmap(_av_pivot, "Tutors Available (Next 4 Weeks) — ET", colorscale='Greens'),
+                                    use_container_width=True)
+                    st.caption("Count of tutors with posted availability per hour slot.")
+
+                with _col_av2:
+                    # Gap: family demand minus tutor supply
+                    _gap_pivot = {}
+                    for _day in _DOW:
+                        for _hr in _HOURS:
+                            _fam_cnt = _fam_pivot.get(_day, {}).get(_hr, 0) if '_fam_pivot' in dir() else 0
+                            _tut_cnt = _av_pivot.get(_day, {}).get(_hr, 0)
+                            # Normalize: family demand per tutor available
+                            _gap_pivot.setdefault(_day, {})[_hr] = round(_fam_cnt / max(_tut_cnt, 1), 1)
+
+                    st.plotly_chart(_make_heatmap(_gap_pivot, "Demand/Supply Ratio (Families per Available Tutor)", 
+                                                  colorscale='RdYlGn_r', text_fmt=True),
+                                    use_container_width=True)
+                    st.caption("Higher = more family demand relative to tutor availability. Red = understaffed slots.")
+
+            except Exception as _e:
+                st.error(f"Could not load tutor availability: {_e}")
+
     if page == "🚫 Session Cancellation Patterns":
         st.markdown('<div class="main-title">🚫 Cancellation & Availability Patterns</div>', unsafe_allow_html=True)
         st.caption("Days where tutors cancelled sessions or removed availability. Defaults to fully cleared days only.")
