@@ -10032,7 +10032,7 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                 ).reset_index()
                 # Build per-row detail with session time and student names
                 _sess_detail_rows = []
-                for _, _r in _cp_df[_cp_df['tutor_name'].isin(set(annelies_tutors))].iterrows():
+                for _, _r in _sess_df[_sess_df['tutor_name'].isin(set(annelies_tutors))].iterrows():
                     _cid = _r.get('course_id')
                     _students = ', '.join(_student_by_course.get(_cid, ['—'])) if _cid else '—'
                     _sess_detail_rows.append({
