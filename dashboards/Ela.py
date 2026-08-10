@@ -9922,6 +9922,51 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                 _sess_df = _sess_df.dropna(subset=['session_starts_at'])
                 _sess_df['session_date'] = _sess_df['session_starts_at'].dt.date
                 _sess_df = _sess_df[(_sess_df['session_date'] >= _date_min) & (_sess_df['session_date'] <= _date_max) & (_sess_df['tutor_name'].isin(set(annelies_tutors)))]
+                # Extract course_id from JSON value for student name lookup
+                import json as _jmod
+                def _get_cid(row):
+                    try: return _jmod.loads(row['value']).get('course_id')
+                    except: return None
+                _sess_df['course_id'] = _sess_df.apply(_get_cid, axis=1)
+
+            # ── Student names per course ───────────────────────────────────────────
+            _student_by_course = {}
+            _all_course_ids = _sess_df['course_id'].dropna().unique().tolist() if not _sess_df.empty else []
+            if _all_course_ids:
+                try:
+                    _cids_str = ','.join(str(int(c)) for c in _all_course_ids)
+                    _conn2 = get_redshift_connection()
+                    _cur2 = _conn2.cursor()
+                    _cur2.execute(f"""
+                        SELECT en.course_id, su.first_name||' '||su.last_name AS student_name
+                        FROM dw.enrollments en
+                        JOIN dw.students st ON en.enrollee_id = st.id
+                        JOIN dw.users su ON st.user_id = su.id
+                        WHERE en.course_id IN ({_cids_str})
+                    """)
+                    for _cid, _sname in _cur2.fetchall():
+                        _student_by_course.setdefault(_cid, []).append(_sname)
+                    _conn2.close()
+                except Exception: pass
+
+            # ── Scheduled delivery hours per tutor per week ────────────────────────
+            _sched_hours = pd.DataFrame()
+            try:
+                _conn3 = get_redshift_connection()
+                _cur3 = _conn3.cursor()
+                _cur3.execute("""
+                    SELECT supervisor_id AS tutor_id,
+                        DATEADD(day, -1, DATE_TRUNC('week', starts_at)::date) AS week_start,
+                        ROUND(SUM(duration)/60.0, 1) AS scheduled_hours
+                    FROM dw.sessions
+                    WHERE starts_at::date BETWEEN CURRENT_DATE - 30 AND CURRENT_DATE + 28
+                    GROUP BY supervisor_id, DATEADD(day, -1, DATE_TRUNC('week', starts_at)::date)
+                """)
+                _sched_hours = pd.DataFrame(_cur3.fetchall(), columns=['tutor_id','week_start','scheduled_hours'])
+                _sched_hours['week_start'] = pd.to_datetime(_sched_hours['week_start']).dt.date
+                _sched_hours['session_date'] = _sched_hours['week_start']
+                _conn3.close()
+            except Exception: pass
 
             # ── Availability removals ──────────────────────────────────
             cur_cp.execute("""
@@ -9976,46 +10021,6 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
             _rem_av['session_date'] = pd.to_datetime(_rem_av['session_date']).dt.date
             conn_cp.close()
 
-            # ── Student names per course (for session cancellation detail) ──────────
-            _all_course_ids = []
-            if not _cp_df.empty and 'value' in _cp_df.columns:
-                import json as _jmod
-                def _get_cid(row):
-                    try: return _jmod.loads(row['value']).get('course_id')
-                    except: return None
-                _cp_df['course_id'] = _cp_df.apply(_get_cid, axis=1)
-                _all_course_ids = _cp_df['course_id'].dropna().unique().tolist()
-            _student_by_course = {}
-            if _all_course_ids:
-                _cids_str = ','.join(str(int(c)) for c in _all_course_ids)
-                conn_cp2 = get_redshift_connection()
-                cur_cp2 = conn_cp2.cursor()
-                cur_cp2.execute(f"""
-                    SELECT en.course_id, su.first_name||' '||su.last_name AS student_name
-                    FROM dw.enrollments en
-                    JOIN dw.students st ON en.enrollee_id = st.id
-                    JOIN dw.users su ON st.user_id = su.id
-                    WHERE en.course_id IN ({_cids_str})
-                """)
-                for _cid, _sname in cur_cp2.fetchall():
-                    _student_by_course.setdefault(_cid, []).append(_sname)
-                conn_cp2.close()
-
-            # ── Scheduled delivery hours per tutor per week (for avail detail) ──────
-            conn_cp3 = get_redshift_connection()
-            cur_cp3 = conn_cp3.cursor()
-            cur_cp3.execute("""
-                SELECT supervisor_id AS tutor_id,
-                    DATEADD(day, -1, DATE_TRUNC('week', starts_at)::date) AS week_start,
-                    ROUND(SUM(duration)/60.0, 1) AS scheduled_hours
-                FROM dw.sessions
-                WHERE starts_at::date BETWEEN CURRENT_DATE - 30 AND CURRENT_DATE + 28
-                GROUP BY supervisor_id, DATEADD(day, -1, DATE_TRUNC('week', starts_at)::date)
-            """)
-            _sched_hours = pd.DataFrame(cur_cp3.fetchall(), columns=['tutor_id','week_start','scheduled_hours'])
-            _sched_hours['week_start'] = pd.to_datetime(_sched_hours['week_start']).dt.date
-            _sched_hours['session_date'] = _sched_hours['week_start']
-            conn_cp3.close()
 
             # ── Build summaries ────────────────────────────────────────
             if not _sess_df.empty:
