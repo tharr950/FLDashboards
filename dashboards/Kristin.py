@@ -9885,7 +9885,7 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
         _HOUR_LABELS = [f"{h%12 or 12}{'am' if h<12 else 'pm'}" for h in _HOURS]
 
         # ── Filters ───────────────────────────────────────────────────────
-        _hm_col1, _hm_col2, _hm_col3 = st.columns(3)
+        _hm_col1, _hm_col2, _hm_col3, _hm_col4 = st.columns(4)
         with _hm_col1:
             _hm_scope = st.radio("Team Scope", ["All Teams", "My Team Only"], horizontal=True, key="hm_scope")
         with _hm_col2:
@@ -9893,15 +9893,24 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                 default=[], key="hm_tutor", placeholder="All tutors")
         with _hm_col3:
             _brand_map = {2:"Private Tutoring",41:"Academics",42:"BUC",43:"Small Group",47:"School Pay PT",48:"School Pay Group"}
-            _hm_brand = st.multiselect("Filter by Brand (Sessions tab)", 
+            _hm_brand = st.multiselect("Filter by Brand (Sessions tab)",
                 options=list(_brand_map.keys()),
                 format_func=lambda x: _brand_map[x],
                 default=list(_brand_map.keys()), key="hm_brand")
+        with _hm_col4:
+            _hm_season = st.radio("Season (Sessions tab)", ["School Year", "Summer"], horizontal=True, key="hm_season")
+            # School year = Sep-May, Summer = Jun-Aug
+            if _hm_season == "Summer":
+                _season_month_filter = "AND EXTRACT(MONTH FROM s.starts_at) IN (6,7,8)"
+                _season_date_filter  = "AND s.starts_at::date BETWEEN CURRENT_DATE - 365 AND CURRENT_DATE + 90"
+            else:
+                _season_month_filter = "AND EXTRACT(MONTH FROM s.starts_at) NOT IN (6,7,8)"
+                _season_date_filter  = "AND s.starts_at::date BETWEEN CURRENT_DATE - 365 AND CURRENT_DATE + 90"
 
         _hm_tab1, _hm_tab2, _hm_tab3 = st.tabs(["📅 Sessions Scheduled", "👨‍👩‍👧 Family Availability", "📆 Tutor Availability"])
 
         # ── Helper: build heatmap figure ───────────────────────────────────
-        def _make_heatmap(pivot_df, title, colorscale='Blues', text_fmt=True):
+        def _make_heatmap(pivot_df, title, colorscale='Blues', text_fmt=True, zmax=None):
             z = [[pivot_df.get(dow, {}).get(h, 0) for dow in _DOW] for h in _HOURS]
             text = [[str(int(pivot_df.get(dow, {}).get(h, 0))) if pivot_df.get(dow, {}).get(h, 0) > 0 else ''
                      for dow in _DOW] for h in _HOURS] if text_fmt else None
@@ -9909,12 +9918,14 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                 z=z, x=_DOW, y=_HOUR_LABELS,
                 text=text, texttemplate="%{text}",
                 colorscale=colorscale,
+                zmin=0, zmax=zmax,
                 hoverongaps=False,
                 hovertemplate="%{x} %{y}: %{z}<extra></extra>",
             ))
             fig.update_layout(
-                title=title, height=520,
-                margin=dict(l=60,r=20,t=40,b=20),
+                title=dict(text=title, pad=dict(t=20)),
+                height=540,
+                margin=dict(l=60,r=20,t=60,b=20),
                 yaxis=dict(autorange='reversed'),
                 xaxis=dict(side='top'),
                 font=dict(size=11),
@@ -9946,7 +9957,9 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                     JOIN dw.courses c ON s.course_id = c.id
                     JOIN dw.employees e ON s.supervisor_id = e.id
                     JOIN dw.users u ON e.user_id = u.id
-                    WHERE s.starts_at::date BETWEEN CURRENT_DATE AND CURRENT_DATE + 28
+                    WHERE 1=1
+                      {_season_date_filter}
+                      {_season_month_filter}
                       AND {_sess_where}
                     GROUP BY dow, hour
                     ORDER BY dow, hour
@@ -10036,8 +10049,10 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                         _tut_cnt = _av_pivot.get(_day, {}).get(_hr, 0)
                         _gap_pivot.setdefault(_day, {})[_hr] = round(_fam_cnt / max(_tut_cnt, 1), 1)
 
+                _gap_vals = [v for row in _gap_pivot.values() for v in row.values() if v > 0]
+                _gap_zmax = sorted(_gap_vals)[int(len(_gap_vals)*0.85)] if _gap_vals else 100
                 st.plotly_chart(_make_heatmap(_gap_pivot, "Demand/Supply Ratio (Families per Available Tutor)",
-                                              colorscale='RdYlGn_r', text_fmt=True),
+                                              colorscale='RdYlGn_r', text_fmt=True, zmax=_gap_zmax),
                                 use_container_width=True)
                 st.caption("Higher = more family demand relative to tutor availability. Red = understaffed slots.")
 
