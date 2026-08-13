@@ -2696,7 +2696,13 @@ def render_app(config):
 
     faculty_leader_name = "Ela Cross"
     master_tutor_df = load_master_tutor()
-    annelies_tutors = master_tutor_df[(master_tutor_df["Faculty Leader"] == faculty_leader_name) & (~master_tutor_df["Full Name"].isin(["Ela Cross', 'Annelies de Groot', 'Ian Plamondon', 'Geoff St. Marie', 'Kristin Haase-Alvey"]))]["Full Name"].sort_values().dropna().unique().tolist()
+    if master_tutor_df.empty or "Faculty Leader" not in master_tutor_df.columns:
+        st.error("⚠️ Could not load tutor roster — please refresh the page.")
+        st.stop()
+    annelies_tutors = master_tutor_df[
+        (master_tutor_df["Faculty Leader"] == faculty_leader_name) &
+        (~master_tutor_df["Full Name"].isin(['Ela Cross', 'Annelies de Groot', 'Ian Plamondon', 'Geoff St. Marie', 'Kristin Haase-Alvey', 'Nikki Pencak', 'Katherine Marino']))
+    ]["Full Name"].sort_values().dropna().unique().tolist()
 
     st.sidebar.markdown("---")
     st.sidebar.markdown("### 📋 Annual Reviews")
