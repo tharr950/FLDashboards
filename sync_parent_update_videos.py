@@ -67,7 +67,7 @@ GITHUB_PATH  = os.environ.get("GITHUB_DATA_PATH", "data/parent_update_videos.csv
 OUTPUT_FILE  = "parent_update_videos.csv"
 
 WORKERS    = int(os.environ.get("SCRAPE_WORKERS", 3))
-CLICK_WAIT = 2
+CLICK_WAIT = 3
 PAGE_WAIT  = 4
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -352,17 +352,24 @@ def get_from_name(driver: webdriver.Chrome):
     match = re.search(r'From:\s*([A-Z][a-z]+ [A-Z][a-z]+)\s*<', html)
     return match.group(1).strip() if match else None
 
-def get_video_info(driver: webdriver.Chrome) -> dict:
-    result = driver.execute_script("""
-        var v = document.querySelector('video');
-        if (!v) return {found: false, duration: null};
-        return {found: true, duration: v.duration};
-    """)
-    if result["found"] and result["duration"]:
-        secs = int(result["duration"])
-        result["duration_fmt"] = f"{secs // 60}:{secs % 60:02d}"
-    else:
-        result["duration_fmt"] = None
+def get_video_info(driver: webdriver.Chrome, max_wait: int = 8) -> dict:
+    """Poll for video element up to max_wait seconds before giving up."""
+    import time as _time
+    deadline = _time.time() + max_wait
+    while _time.time() < deadline:
+        result = driver.execute_script("""
+            var v = document.querySelector('video');
+            if (!v) return {found: false, duration: null};
+            if (!v.duration || v.duration === 0 || isNaN(v.duration)) return {found: false, duration: null};
+            return {found: true, duration: v.duration};
+        """)
+        if result["found"] and result["duration"]:
+            secs = int(result["duration"])
+            result["duration_fmt"] = f"{secs // 60}:{secs % 60:02d}"
+            return result
+        _time.sleep(1)
+    # Timed out — video not found
+    result = {"found": False, "duration": None, "duration_fmt": None}
     return result
 
 def is_logged_out(driver: webdriver.Chrome) -> bool:
@@ -439,6 +446,10 @@ def scrape_course(
                 item_text_lower = item.text.lower()
                 is_parent_update = "parent update" in item_text_lower and "progress update" not in item_text_lower
             video = get_video_info(driver)
+            # If video not found on a parent update, wait and retry once before giving up
+            if not video["found"] and is_parent_update:
+                time.sleep(3)
+                video = get_video_info(driver)
             result = {
                 "video found":    video["found"],
                 "video duration": video["duration_fmt"] if video["found"] else "N/A",
@@ -502,7 +513,25 @@ def worker_scrape_batch(
                 login(driver)
                 log.info(f"[Worker {worker_id}] Browser restarted ✅")
 
-            result = scrape_course(driver, course_id, tutor_name, week_start, week_end)
+            try:
+                result = scrape_course(driver, course_id, tutor_name, week_start, week_end)
+            except Exception as _scrape_ex:
+                _err_str = str(_scrape_ex)
+                # If browser session died, restart and retry once
+                if "invalid session id" in _err_str or "session deleted" in _err_str:
+                    log.warning(f"[Worker {worker_id}] Browser session died — restarting for Course {course_id}")
+                    try: driver.quit()
+                    except: pass
+                    time.sleep(5)
+                    driver = build_driver()
+                    login(driver)
+                    log.info(f"[Worker {worker_id}] Browser restarted after crash ✅")
+                    try:
+                        result = scrape_course(driver, course_id, tutor_name, week_start, week_end)
+                    except Exception as _retry_ex:
+                        result = {"video found": False, "video duration": "N/A", "scrape error": f"Retry failed: {_retry_ex}"}
+                else:
+                    result = {"video found": False, "video duration": "N/A", "scrape error": _err_str}
             results[(course_id, tutor_name)] = result
 
             # Increment shared counter and log progress
@@ -578,6 +607,38 @@ def run() -> pd.DataFrame:
                 log.error(f"Worker {worker_id + 1} raised an exception: {e}")
 
     log.info(f"All workers finished — {len(scrape_cache)} courses scraped")
+
+    # ── Retry pass: re-scrape any courses with scrape errors ─────────────────
+    # Also retry silent failures: video found=False with no scrape error
+    # These happen when page loads slowly and video element wasn't ready
+    _failed = [(cid, tname) for (cid, tname), res in scrape_cache.items()
+               if (res.get("scrape error") and "No message" not in str(res.get("scrape error","")))
+               or (res.get("video found") == False and not res.get("scrape error"))]
+    if _failed:
+        log.info(f"Retrying {len(_failed)} failed courses with a fresh browser...")
+        _retry_driver = build_driver()
+        try:
+            login(_retry_driver)
+            for _cid, _tname in _failed:
+                try:
+                    _res = scrape_course(_retry_driver, _cid, _tname, week_start, week_end)
+                    scrape_cache[(_cid, _tname)] = _res
+                    _icon = "✅" if _res["video found"] else "⚠️"
+                    log.info(f"[Retry] Course {_cid} — {_tname} | {_icon} video={_res['video found']} error={_res['scrape error']}")
+                except Exception as _re:
+                    _estr = str(_re)
+                    if "invalid session id" in _estr or "session deleted" in _estr:
+                        log.warning(f"[Retry] Browser died on Course {_cid} — restarting")
+                        try: _retry_driver.quit()
+                        except: pass
+                        time.sleep(5)
+                        _retry_driver = build_driver()
+                        login(_retry_driver)
+                    log.warning(f"[Retry] Course {_cid} — {_tname} still failed: {_re}")
+        finally:
+            try: _retry_driver.quit()
+            except: pass
+        log.info(f"Retry pass complete")
 
     # Map results back onto every row in the full dataframe
     video_found_col    = []
