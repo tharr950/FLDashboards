@@ -9904,6 +9904,16 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                 format_func=lambda x: _brand_map[x],
                 default=list(_brand_map.keys()), key="hm_brand")
 
+        # ── Pre-load family availability (needed in tabs 2 and 3) ───────────
+        _fam_pivot = {}
+        try:
+            _fam_df = _gh_read_cache("data/cache/family_availability.csv")
+            if not _fam_df.empty:
+                for _, _row in _fam_df.iterrows():
+                    _fam_pivot.setdefault(_row['day_et'], {})[int(_row['hour_et'])] = int(_row['student_count'])
+        except Exception:
+            pass
+
         _hm_tab1, _hm_tab2, _hm_tab3 = st.tabs(["📅 Sessions Scheduled", "👨‍👩‍👧 Family Availability", "📆 Tutor Availability"])
 
         # ── Helper: build heatmap figure ───────────────────────────────────
@@ -9977,21 +9987,13 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
         # ── Tab 2: Family Availability ─────────────────────────────────────
         with _hm_tab2:
             try:
-                _fam_df = _gh_read_cache("data/cache/family_availability.csv")
-                if _fam_df.empty:
+                if not _fam_pivot:
                     st.info("Family availability data not yet synced.")
                 else:
-                    # Build pivot from pre-aggregated data
-                    _fam_pivot = {}
-                    for _, _row in _fam_df.iterrows():
-                        _day = _row['day_et']
-                        _hr  = int(_row['hour_et'])
-                        _cnt = int(_row['student_count'])
-                        _fam_pivot.setdefault(_day, {})[_hr] = _cnt
-
                     st.plotly_chart(_make_heatmap(_fam_pivot, "Family Availability — ET", colorscale='Reds'),
                                     use_container_width=True)
-                    _fetched = _fam_df['fetched_at'].iloc[0] if 'fetched_at' in _fam_df.columns else 'unknown'
+                    _fam_df2 = _gh_read_cache("data/cache/family_availability.csv")
+                    _fetched = _fam_df2['fetched_at'].iloc[0] if not _fam_df2.empty and 'fetched_at' in _fam_df2.columns else 'unknown'
                     st.caption(f"Unique students available per hour slot. Data as of {_fetched}. All active families with posted availability.")
             except Exception as _e:
                 st.error(f"Could not load family availability: {_e}")
@@ -10077,12 +10079,13 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                 st.divider()
 
                 # Demand/supply: family demand vs open (unconsumed) tutor availability
+                _use_open = bool(_av_open_pivot)
                 _gap_pivot = {}
                 for _day in _DOW:
                     for _hr in _HOURS:
-                        _fam_cnt  = _fam_pivot.get(_day, {}).get(_hr, 0) if '_fam_pivot' in dir() else 0
-                        _open_cnt = _av_open_pivot.get(_day, {}).get(_hr, 0)
-                        _gap_pivot.setdefault(_day, {})[_hr] = round(_fam_cnt / max(_open_cnt, 1), 1)
+                        _fam_cnt  = _fam_pivot.get(_day, {}).get(_hr, 0)
+                        _supply   = _av_open_pivot.get(_day, {}).get(_hr, 0) if _use_open else _av_pivot.get(_day, {}).get(_hr, 0)
+                        _gap_pivot.setdefault(_day, {})[_hr] = round(_fam_cnt / max(_supply, 1), 1)
 
                 _gap_vals = [v for row in _gap_pivot.values() for v in row.values() if v > 0]
                 _gap_zmax = sorted(_gap_vals)[int(len(_gap_vals)*0.85)] if _gap_vals else 100
