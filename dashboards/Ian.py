@@ -10051,7 +10051,7 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                 for _, _r in _av_df.iterrows():
                     _block_start = _avpd.Timestamp(_r['starts_et'])
                     _block_end   = _block_start + _avtd(minutes=int(_r['duration']))
-                    _is_open     = _r['consumed_by_id'] is None
+                    _is_open     = _avpd.isna(_r['consumed_by_id'])
                     # Walk through each clock hour that falls within this block
                     # Start from the next full hour if block starts mid-hour
                     _mins_into_hour = _block_start.minute
