@@ -9911,12 +9911,17 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
         # ── Pre-load family availability (needed in tabs 2 and 3) ───────────
         _fam_pivot = {}
         try:
-            _fam_df = _gh_read_cache("data/cache/family_availability.csv")
-            if not _fam_df.empty:
+            import requests as _req, io as _io
+            _fam_token = st.secrets["github"]["token"]
+            _fam_repo  = st.secrets["github"]["repo"]
+            _fam_url   = f"https://raw.githubusercontent.com/{_fam_repo}/main/data/cache/family_availability.csv?cb={int(pd.Timestamp.now().timestamp())}"
+            _fam_resp  = _req.get(_fam_url, headers={"Authorization": f"token {_fam_token}"}, timeout=20)
+            if _fam_resp.status_code == 200 and _fam_resp.text.strip():
+                _fam_df = pd.read_csv(_io.StringIO(_fam_resp.text))
                 for _, _row in _fam_df.iterrows():
                     _fam_pivot.setdefault(_row['day_et'], {})[int(_row['hour_et'])] = int(_row['student_count'])
-        except Exception:
-            pass
+        except Exception as _fe:
+            st.warning(f"Family availability cache error: {_fe}")
 
         _hm_tab1, _hm_tab2, _hm_tab3 = st.tabs(["📅 Sessions Scheduled", "👨‍👩‍👧 Family Availability", "📆 Tutor Availability"])
 
