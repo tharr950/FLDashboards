@@ -10088,10 +10088,11 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                     for _, _r in _open_counts.iterrows():
                         _av_open_pivot.setdefault(_r['day'], {})[int(_r['hour'])] = int(_r['tutor_id'])
 
-                st.plotly_chart(_make_heatmap(_av_pivot, "Tutor Availability Slots (Next 4 Weeks) — ET",
+                _display_pivot = _av_open_pivot if _av_open_pivot else _av_pivot
+                st.plotly_chart(_make_heatmap(_display_pivot, "Open Tutor Availability (Next 4 Weeks) — ET",
                                               colorscale='Greens'),
                                 use_container_width=True)
-                st.caption("Count of distinct tutors with availability in each slot. Accounts for full duration of availability blocks. Filtered by tier if selected.")
+                st.caption("Count of distinct tutors with OPEN (unbooked) availability in each slot. Accounts for full duration of blocks. Filtered by tier if selected.")
 
                 st.divider()
 
