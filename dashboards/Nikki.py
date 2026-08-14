@@ -9891,7 +9891,7 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
         _HOUR_LABELS = [f"{h%12 or 12}{'am' if h<12 else 'pm'}" for h in _HOURS]
 
         # ── Filters ───────────────────────────────────────────────────────
-        _hm_col1, _hm_col2, _hm_col3, _hm_col4 = st.columns(4)
+        _hm_col1, _hm_col2, _hm_col3 = st.columns(3)
         with _hm_col1:
             _hm_scope = st.radio("Team Scope", ["All Teams", "My Team Only"], horizontal=True, key="hm_scope")
         with _hm_col2:
@@ -9903,15 +9903,6 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                 options=list(_brand_map.keys()),
                 format_func=lambda x: _brand_map[x],
                 default=list(_brand_map.keys()), key="hm_brand")
-        with _hm_col4:
-            _hm_season = st.radio("Season (Sessions tab)", ["School Year", "Summer"], horizontal=True, key="hm_season")
-            # School year = Sep-May, Summer = Jun-Aug
-            if _hm_season == "Summer":
-                _season_month_filter = "AND EXTRACT(MONTH FROM s.starts_at) IN (6,7,8)"
-                _season_date_filter  = "AND s.starts_at::date BETWEEN CURRENT_DATE - 365 AND CURRENT_DATE + 90"
-            else:
-                _season_month_filter = "AND EXTRACT(MONTH FROM s.starts_at) NOT IN (6,7,8)"
-                _season_date_filter  = "AND s.starts_at::date BETWEEN CURRENT_DATE - 365 AND CURRENT_DATE + 90"
 
         _hm_tab1, _hm_tab2, _hm_tab3 = st.tabs(["📅 Sessions Scheduled", "👨‍👩‍👧 Family Availability", "📆 Tutor Availability"])
 
@@ -9963,9 +9954,7 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                     JOIN dw.courses c ON s.course_id = c.id
                     JOIN dw.employees e ON s.supervisor_id = e.id
                     JOIN dw.users u ON e.user_id = u.id
-                    WHERE 1=1
-                      {_season_date_filter}
-                      {_season_month_filter}
+                    WHERE s.starts_at::date BETWEEN CURRENT_DATE AND CURRENT_DATE + 28
                       AND {_sess_where}
                     GROUP BY dow, hour
                     ORDER BY dow, hour
@@ -10010,6 +9999,10 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
         # ── Tab 3: Tutor Availability ──────────────────────────────────────
         with _hm_tab3:
             try:
+                # Tier filter
+                _tier_opts = ["All Tiers", "Distinguished", "Premium", "Advanced"]
+                _hm_tier = st.radio("Filter by Tier", _tier_opts, horizontal=True, key="hm_tier")
+
                 _av_where = "a.starts_at::date BETWEEN CURRENT_DATE AND CURRENT_DATE + 28"
                 if _hm_tutor:
                     _tutor_names_sql = "','".join(_hm_tutor)
@@ -10017,50 +10010,85 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                 elif _hm_scope == "My Team Only":
                     _tutor_names_sql = "','".join(annelies_tutors)
                     _av_where += f" AND u.first_name||' '||u.last_name IN ('{_tutor_names_sql}')"
+                if _hm_tier != "All Tiers":
+                    _av_where += f" AND ti.name = '{_hm_tier}'"
 
                 _conn_av = get_redshift_connection()
                 _cur_av = _conn_av.cursor()
+
+                # Pull raw availability with duration so we can expand into hourly slots
                 _cur_av.execute(f"""
                     SELECT
-                        EXTRACT(DOW FROM CONVERT_TIMEZONE('US/Pacific', 'US/Eastern', a.starts_at))::INT AS dow,
-                        EXTRACT(HOUR FROM CONVERT_TIMEZONE('US/Pacific', 'US/Eastern', a.starts_at))::INT AS hour,
-                        COUNT(DISTINCT e.id) AS tutor_count,
-                        COUNT(*) AS block_count
+                        e.id AS tutor_id,
+                        DATE_TRUNC('week', a.starts_at)::date AS week_start,
+                        CONVERT_TIMEZONE('US/Pacific', 'US/Eastern', a.starts_at) AS starts_et,
+                        a.duration,
+                        a.consumed_by_id
                     FROM dw.availabilities a
                     JOIN dw.employees e ON a.employee_id = e.id
                     JOIN dw.users u ON e.user_id = u.id
+                    JOIN dw.tiers ti ON e.tier_id = ti.id
                     WHERE {_av_where}
-                    GROUP BY dow, hour
-                    ORDER BY dow, hour
                 """)
-                _av_rows = _cur_av.fetchall()
+                _av_raw = _cur_av.fetchall()
                 _conn_av.close()
 
-                _av_pivot = {}
-                for _dow, _hr, _tcnt, _bcnt in _av_rows:
-                    _day_name = _DOW[int(_dow)]
-                    _av_pivot.setdefault(_day_name, {})[int(_hr)] = int(_tcnt)
+                import pandas as _avpd
+                from datetime import timedelta as _avtd
+                _av_df = _avpd.DataFrame(_av_raw, columns=['tutor_id','week_start','starts_et','duration','consumed_by_id'])
 
-                st.plotly_chart(_make_heatmap(_av_pivot, "Tutors Available (Next 4 Weeks) — ET", colorscale='Greens'),
+                # Expand each block into hourly slots
+                _av_slots = []
+                _av_open_slots = []
+                for _, _r in _av_df.iterrows():
+                    _slots = max(1, int(_r['duration']) // 60)
+                    for _s in range(_slots):
+                        _slot_dt = _avpd.Timestamp(_r['starts_et']) + _avtd(hours=_s)
+                        _dow_name = _DOW[_slot_dt.dayofweek + 1 if _slot_dt.dayofweek < 6 else 0]
+                        # dayofweek: Mon=0..Sun=6 → Sun=0 in our DOW
+                        _dow_name = _slot_dt.strftime('%A')  # just use name directly
+                        _hr = _slot_dt.hour
+                        _av_slots.append((_r['tutor_id'], str(_r['week_start']), _dow_name, _hr))
+                        if _r['consumed_by_id'] is None:
+                            _av_open_slots.append((_r['tutor_id'], str(_r['week_start']), _dow_name, _hr))
+
+                # Count: distinct weeks each (tutor, dow, hour) slot appears
+                _av_pivot = {}
+                if _av_slots:
+                    _slot_df = _avpd.DataFrame(_av_slots, columns=['tutor_id','week','day','hour'])
+                    _week_counts = _slot_df.groupby(['day','hour'])['week'].nunique().reset_index()
+                    for _, _r in _week_counts.iterrows():
+                        _av_pivot.setdefault(_r['day'], {})[int(_r['hour'])] = int(_r['week'])
+
+                # Open availability pivot (unconsumed slots)
+                _av_open_pivot = {}
+                if _av_open_slots:
+                    _open_df = _avpd.DataFrame(_av_open_slots, columns=['tutor_id','week','day','hour'])
+                    _open_counts = _open_df.groupby(['day','hour'])['week'].nunique().reset_index()
+                    for _, _r in _open_counts.iterrows():
+                        _av_open_pivot.setdefault(_r['day'], {})[int(_r['hour'])] = int(_r['week'])
+
+                st.plotly_chart(_make_heatmap(_av_pivot, "Tutor Availability Slots (Next 4 Weeks) — ET",
+                                              colorscale='Greens'),
                                 use_container_width=True)
-                st.caption("Count of tutors with posted availability per hour slot.")
+                st.caption("Number of weeks (out of 4) tutors have availability in each slot. Accounts for full duration of availability blocks.")
 
                 st.divider()
 
-                # Gap: family demand per tutor available
+                # Demand/supply: family demand vs open (unconsumed) tutor availability
                 _gap_pivot = {}
                 for _day in _DOW:
                     for _hr in _HOURS:
-                        _fam_cnt = _fam_pivot.get(_day, {}).get(_hr, 0) if '_fam_pivot' in dir() else 0
-                        _tut_cnt = _av_pivot.get(_day, {}).get(_hr, 0)
-                        _gap_pivot.setdefault(_day, {})[_hr] = round(_fam_cnt / max(_tut_cnt, 1), 1)
+                        _fam_cnt  = _fam_pivot.get(_day, {}).get(_hr, 0) if '_fam_pivot' in dir() else 0
+                        _open_cnt = _av_open_pivot.get(_day, {}).get(_hr, 0)
+                        _gap_pivot.setdefault(_day, {})[_hr] = round(_fam_cnt / max(_open_cnt, 1), 1)
 
                 _gap_vals = [v for row in _gap_pivot.values() for v in row.values() if v > 0]
                 _gap_zmax = sorted(_gap_vals)[int(len(_gap_vals)*0.85)] if _gap_vals else 100
-                st.plotly_chart(_make_heatmap(_gap_pivot, "Demand/Supply Ratio (Families per Available Tutor)",
+                st.plotly_chart(_make_heatmap(_gap_pivot, "Demand/Supply Ratio (Families per Open Tutor Slot)",
                                               colorscale='RdYlGn_r', text_fmt=True, zmax=_gap_zmax),
                                 use_container_width=True)
-                st.caption("Higher = more family demand relative to tutor availability. Red = understaffed slots.")
+                st.caption("Family demand vs open (unbooked) tutor availability. Higher = more demand than open slots. Red = understaffed.")
 
             except Exception as _e:
                 st.error(f"Could not load tutor availability: {_e}")
