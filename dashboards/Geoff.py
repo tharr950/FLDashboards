@@ -10039,18 +10039,30 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                 from datetime import timedelta as _avtd
                 _av_df = _avpd.DataFrame(_av_raw, columns=['tutor_id','week_start','starts_et','duration','consumed_by_id'])
 
-                # Expand each block into hourly slots
+                # Expand each block into full hourly slots only
+                # A slot counts only if there are >= 60 mins remaining from that hour's start
                 _av_slots = []
                 _av_open_slots = []
                 for _, _r in _av_df.iterrows():
-                    _slots = max(1, int(_r['duration']) // 60)
-                    for _s in range(_slots):
-                        _slot_dt = _avpd.Timestamp(_r['starts_et']) + _avtd(hours=_s)
-                        _dow_name = _slot_dt.strftime('%A')  # Monday, Tuesday etc
-                        _hr = _slot_dt.hour
+                    _block_start = _avpd.Timestamp(_r['starts_et'])
+                    _block_end   = _block_start + _avtd(minutes=int(_r['duration']))
+                    _is_open     = _r['consumed_by_id'] is None
+                    # Walk through each clock hour that falls within this block
+                    # Start from the next full hour if block starts mid-hour
+                    _mins_into_hour = _block_start.minute
+                    if _mins_into_hour == 0:
+                        _first_hour_start = _block_start
+                    else:
+                        # Next full hour
+                        _first_hour_start = _block_start.replace(minute=0, second=0) + _avtd(hours=1)
+                    _cur_hour = _first_hour_start
+                    while _cur_hour + _avtd(hours=1) <= _block_end:
+                        _dow_name = _cur_hour.strftime('%A')
+                        _hr = _cur_hour.hour
                         _av_slots.append((_r['tutor_id'], str(_r['week_start']), _dow_name, _hr))
-                        if _r['consumed_by_id'] is None:
+                        if _is_open:
                             _av_open_slots.append((_r['tutor_id'], str(_r['week_start']), _dow_name, _hr))
+                        _cur_hour += _avtd(hours=1)
 
                 # Count distinct tutors available per (day, hour) slot
                 _av_pivot = {}
