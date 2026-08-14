@@ -10096,20 +10096,31 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                 st.divider()
 
                 # Demand/supply: family demand vs open (unconsumed) tutor availability
+                # Only show ratio where there is meaningful family demand (>= 10th percentile)
                 _use_open = bool(_av_open_pivot)
+                _all_fam_vals = [v for d in _fam_pivot.values() for v in d.values() if v > 0]
+                _fam_threshold = sorted(_all_fam_vals)[int(len(_all_fam_vals)*0.1)] if _all_fam_vals else 0
+
                 _gap_pivot = {}
                 for _day in _DOW:
                     for _hr in _HOURS:
                         _fam_cnt  = _fam_pivot.get(_day, {}).get(_hr, 0)
                         _supply   = _av_open_pivot.get(_day, {}).get(_hr, 0) if _use_open else _av_pivot.get(_day, {}).get(_hr, 0)
-                        _gap_pivot.setdefault(_day, {})[_hr] = round(_fam_cnt / max(_supply, 1), 1)
+                        # Only compute ratio where family demand is meaningful
+                        if _fam_cnt >= _fam_threshold and _supply > 0:
+                            _gap_pivot.setdefault(_day, {})[_hr] = round(_fam_cnt / _supply, 1)
+                        elif _fam_cnt >= _fam_threshold and _supply == 0:
+                            # High demand, no open tutors — show max
+                            _gap_pivot.setdefault(_day, {})[_hr] = 999
+                        else:
+                            _gap_pivot.setdefault(_day, {})[_hr] = 0
 
-                _gap_vals = [v for row in _gap_pivot.values() for v in row.values() if v > 0]
-                _gap_zmax = sorted(_gap_vals)[int(len(_gap_vals)*0.85)] if _gap_vals else 100
+                _gap_vals = [v for row in _gap_pivot.values() for v in row.values() if 0 < v < 999]
+                _gap_zmax = sorted(_gap_vals)[int(len(_gap_vals)*0.90)] if _gap_vals else 100
                 st.plotly_chart(_make_heatmap(_gap_pivot, "Demand/Supply Ratio (Families per Open Tutor Slot)",
                                               colorscale='RdYlGn_r', text_fmt=True, zmax=_gap_zmax),
                                 use_container_width=True)
-                st.caption("Family demand vs open (unbooked) tutor availability. Higher = more demand than open slots. Red = understaffed.")
+                st.caption("Family demand ÷ open tutor slots. Red = high demand relative to open availability. Slots with very low family demand shown as 0.")
 
             except Exception as _e:
                 st.error(f"Could not load tutor availability: {_e}")
