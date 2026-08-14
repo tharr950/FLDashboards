@@ -10048,34 +10048,35 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                     _slots = max(1, int(_r['duration']) // 60)
                     for _s in range(_slots):
                         _slot_dt = _avpd.Timestamp(_r['starts_et']) + _avtd(hours=_s)
-                        _dow_name = _DOW[_slot_dt.dayofweek + 1 if _slot_dt.dayofweek < 6 else 0]
-                        # dayofweek: Mon=0..Sun=6 → Sun=0 in our DOW
-                        _dow_name = _slot_dt.strftime('%A')  # just use name directly
+                        _dow_name = _slot_dt.strftime('%A')  # Monday, Tuesday etc
                         _hr = _slot_dt.hour
                         _av_slots.append((_r['tutor_id'], str(_r['week_start']), _dow_name, _hr))
                         if _r['consumed_by_id'] is None:
                             _av_open_slots.append((_r['tutor_id'], str(_r['week_start']), _dow_name, _hr))
 
-                # Count: distinct weeks each (tutor, dow, hour) slot appears
+                # Count distinct tutors available per (day, hour) slot
                 _av_pivot = {}
                 if _av_slots:
                     _slot_df = _avpd.DataFrame(_av_slots, columns=['tutor_id','week','day','hour'])
-                    _week_counts = _slot_df.groupby(['day','hour'])['week'].nunique().reset_index()
-                    for _, _r in _week_counts.iterrows():
-                        _av_pivot.setdefault(_r['day'], {})[int(_r['hour'])] = int(_r['week'])
+                    # Deduplicate: one entry per tutor per slot per week
+                    _slot_df = _slot_df.drop_duplicates()
+                    _tutor_counts = _slot_df.groupby(['day','hour'])['tutor_id'].nunique().reset_index()
+                    for _, _r in _tutor_counts.iterrows():
+                        _av_pivot.setdefault(_r['day'], {})[int(_r['hour'])] = int(_r['tutor_id'])
 
-                # Open availability pivot (unconsumed slots)
+                # Open availability pivot: distinct tutors with unconsumed slots
                 _av_open_pivot = {}
                 if _av_open_slots:
                     _open_df = _avpd.DataFrame(_av_open_slots, columns=['tutor_id','week','day','hour'])
-                    _open_counts = _open_df.groupby(['day','hour'])['week'].nunique().reset_index()
+                    _open_df = _open_df.drop_duplicates()
+                    _open_counts = _open_df.groupby(['day','hour'])['tutor_id'].nunique().reset_index()
                     for _, _r in _open_counts.iterrows():
-                        _av_open_pivot.setdefault(_r['day'], {})[int(_r['hour'])] = int(_r['week'])
+                        _av_open_pivot.setdefault(_r['day'], {})[int(_r['hour'])] = int(_r['tutor_id'])
 
                 st.plotly_chart(_make_heatmap(_av_pivot, "Tutor Availability Slots (Next 4 Weeks) — ET",
                                               colorscale='Greens'),
                                 use_container_width=True)
-                st.caption("Number of weeks (out of 4) tutors have availability in each slot. Accounts for full duration of availability blocks.")
+                st.caption("Count of distinct tutors with availability in each slot. Accounts for full duration of availability blocks. Filtered by tier if selected.")
 
                 st.divider()
 
