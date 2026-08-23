@@ -8690,10 +8690,38 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
             "% to Availability Target",
             "% Sessions on Time",
             "% Parents Updates Done on Time",
-            "% of Active Students with Progress Updates Completed in last 2 months"
+            "% of Active Students with Progress Updates Completed in last 2 months",
+            "% Parent Updates with Videos",
+            "Ratio of PPW Events with Attached PPWs",
         ]
+        metrics = [m for m in metrics if m in team_df.columns]
         for m in metrics:
             team_df[m] = team_df[m] * 100
+
+        # Metrics that aren't a 0-1 fraction -- shown separately with their
+        # own units instead of "%". Progress Update Quality Score has no
+        # history before 2026-08-23, so it (and any period-over-period
+        # comparison of it) will show "No data"/"N/A" until a second period
+        # of data has accumulated -- expected, not a bug.
+        raw_metric_specs = {
+            "Weighted Repurchases":          {"unit": "hrs", "decimals": 1},
+            "Progress Update Quality Score": {"unit": "/10", "decimals": 1},
+        }
+        raw_metrics = [m for m in raw_metric_specs if m in team_df.columns]
+
+        def fmt_pct(v):
+            return "N/A" if pd.isna(v) else f"{v:.1f}%"
+
+        def fmt_change_pct(v):
+            return "N/A" if pd.isna(v) else f"{v:+.1f} pp"
+
+        def fmt_raw(v, metric):
+            spec = raw_metric_specs[metric]
+            return "N/A" if pd.isna(v) else f"{v:.{spec['decimals']}f} {spec['unit']}"
+
+        def fmt_change_raw(v, metric):
+            spec = raw_metric_specs[metric]
+            return "N/A" if pd.isna(v) else f"{v:+.{spec['decimals']}f} {spec['unit']}"
 
         st.title("Team KPI Overview")
         st.caption(f"Faculty Leader: {leader_name} | Latest Date Range: {latest_range}")
@@ -8709,8 +8737,18 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                 if idx < n_metrics:
                     metric = metrics[idx]
                     avg    = team_df[metric].mean(skipna=True)
-                    color  = "🟢" if avg >= 90 else ("🟡" if avg >= 75 else "🔴")
-                    col.metric(label=f"{color} {metric}", value=f"{avg:.1f}%")
+                    if pd.isna(avg):
+                        col.metric(label=f"⚪ {metric}", value="No data")
+                    else:
+                        color  = "🟢" if avg >= 90 else ("🟡" if avg >= 75 else "🔴")
+                        col.metric(label=f"{color} {metric}", value=f"{avg:.1f}%")
+
+        if raw_metrics:
+            st.markdown("**Additional Team Metrics**")
+            raw_cols = st.columns(len(raw_metrics))
+            for col, metric in zip(raw_cols, raw_metrics):
+                avg = team_df[metric].mean(skipna=True)
+                col.metric(label=metric, value=fmt_raw(avg, metric))
 
         st.divider(); st.divider()
         st.subheader("📊 Team KPI Changes from Previous Period")
@@ -8738,35 +8776,65 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                 change_df[c] = change_df[c] * 100
 
             def style_change(val):
+                if pd.isna(val):
+                    return "background-color: white; text-align: center; color: #999"
                 color = "lightgreen" if val > 0 else ("lightcoral" if val < 0 else "white")
                 return f"background-color: {color}; font-weight: bold; text-align: center"
 
             styled_df = change_df[["Metric",f"{prev_range} Avg",f"{latest_range} Avg","Change (pp)"]].copy()
             styled_df_display = styled_df.style.format({
-                f"{prev_range} Avg":   "{:.1f}%",
-                f"{latest_range} Avg": "{:.1f}%",
-                "Change (pp)":         "{:+.1f} pp"
+                f"{prev_range} Avg":   fmt_pct,
+                f"{latest_range} Avg": fmt_pct,
+                "Change (pp)":         fmt_change_pct
             }).map(style_change, subset=["Change (pp)"])
             st.write(styled_df_display)
 
-            max_abs_change = max(abs(change_df["Change (pp)"].max()),
-                                 abs(change_df["Change (pp)"].min()))
-            col1, col2, col3 = st.columns([1, 12, 1])
-            with col2:
-                fig_change = px.bar(
-                    change_df, x="Metric", y="Change (pp)",
-                    color="Change (pp)",
-                    color_continuous_scale=["red","white","green"],
-                    text=change_df["Change (pp)"].apply(lambda x: f"{x:+.1f} pp"),
-                    title=f"Change in Team Averages: {prev_range} → {latest_range}",
-                    height=600)
-                fig_change.update_layout(
-                    title_x=0.20, xaxis_title="",
-                    yaxis_title="Change (percentage points)",
-                    margin=dict(l=20, r=20, t=60, b=40),
-                    coloraxis_colorbar=dict(title="Change"))
-                fig_change.update_coloraxes(cmin=-max_abs_change, cmax=max_abs_change)
-                st.plotly_chart(fig_change, use_container_width=True)
+            chart_df = change_df.dropna(subset=["Change (pp)"])
+            if chart_df.empty:
+                st.info("No metrics have both a previous and current period value yet to chart.")
+            else:
+                max_abs_change = max(abs(chart_df["Change (pp)"].max()),
+                                     abs(chart_df["Change (pp)"].min()))
+                col1, col2, col3 = st.columns([1, 12, 1])
+                with col2:
+                    fig_change = px.bar(
+                        chart_df, x="Metric", y="Change (pp)",
+                        color="Change (pp)",
+                        color_continuous_scale=["red","white","green"],
+                        text=chart_df["Change (pp)"].apply(lambda x: f"{x:+.1f} pp"),
+                        title=f"Change in Team Averages: {prev_range} → {latest_range}",
+                        height=600)
+                    fig_change.update_layout(
+                        title_x=0.20, xaxis_title="",
+                        yaxis_title="Change (percentage points)",
+                        margin=dict(l=20, r=20, t=60, b=40),
+                        coloraxis_colorbar=dict(title="Change"))
+                    fig_change.update_coloraxes(cmin=-max_abs_change, cmax=max_abs_change)
+                    st.plotly_chart(fig_change, use_container_width=True)
+
+            if raw_metrics:
+                raw_latest_avg = latest_team[raw_metrics].mean()
+                raw_prev_avg   = prev_team[raw_metrics].mean()
+                raw_change_df  = pd.DataFrame({
+                    "Metric":              raw_metrics,
+                    f"{prev_range} Avg":   raw_prev_avg.values,
+                    f"{latest_range} Avg": raw_latest_avg.values,
+                    "Change":              (raw_latest_avg - raw_prev_avg).values
+                })
+                st.markdown("**Additional Team Metrics — Changes from Previous Period**")
+                # Weighted Repurchases (hrs) and Progress Update Quality
+                # Score (/10) use different units, so build display strings
+                # per-row instead of one column-wide format.
+                display_rows = []
+                for _, r in raw_change_df.iterrows():
+                    m = r["Metric"]
+                    display_rows.append({
+                        "Metric": m,
+                        f"{prev_range} Avg":   fmt_raw(r[f"{prev_range} Avg"], m),
+                        f"{latest_range} Avg": fmt_raw(r[f"{latest_range} Avg"], m),
+                        "Change":              fmt_change_raw(r["Change"], m),
+                    })
+                st.table(pd.DataFrame(display_rows))
 
         st.divider(); st.divider()
         st.subheader("Team Metrics Comparison vs Other Teams")
@@ -8800,6 +8868,27 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
             col1, col2, col3 = st.columns([1, 4, 1])
             with col2:
                 st.plotly_chart(fig, use_container_width=True)
+
+        if raw_metrics:
+            raw_leader_group = df_filtered.groupby("Faculty Leader")[raw_metrics].mean()
+            for metric in raw_metrics:
+                spec = raw_metric_specs[metric]
+                st.markdown(f"### {metric}")
+                plot_df = raw_leader_group.reset_index().sort_values(by=metric, ascending=False)
+                color_map = {fl: ("blue" if fl == leader_name else "lightgray")
+                             for fl in plot_df["Faculty Leader"]}
+                fig = px.bar(
+                    plot_df, x="Faculty Leader", y=metric,
+                    color="Faculty Leader", color_discrete_map=color_map,
+                    text=plot_df[metric].apply(
+                        lambda x: f"{x:.{spec['decimals']}f} {spec['unit']}" if pd.notna(x) else ""),
+                    labels={metric: spec["unit"]}, height=400)
+                fig.update_layout(
+                    title=dict(text=f"{title_prefix}: {metric}", x=0.5, xanchor="center"),
+                    showlegend=False, margin=dict(l=20, r=20, t=50, b=40))
+                col1, col2, col3 = st.columns([1, 4, 1])
+                with col2:
+                    st.plotly_chart(fig, use_container_width=True)
 
         st.divider(); st.divider()
         st.subheader("Team KPI Table")
