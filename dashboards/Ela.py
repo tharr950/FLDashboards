@@ -10055,14 +10055,24 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                 _cur_hm = _conn_hm.cursor()
                 _cur_hm.execute(f"""
                     SELECT
-                        EXTRACT(DOW FROM CONVERT_TIMEZONE('US/Pacific', 'US/Eastern', s.starts_at))::INT AS dow,
-                        EXTRACT(HOUR FROM CONVERT_TIMEZONE('US/Pacific', 'US/Eastern', s.starts_at))::INT AS hour,
+                        EXTRACT(DOW FROM CONVERT_TIMEZONE('US/Pacific', 'US/Eastern',
+                            DATEADD(minute, gs.minute_offset, s.starts_at)))::INT AS dow,
+                        EXTRACT(HOUR FROM CONVERT_TIMEZONE('US/Pacific', 'US/Eastern',
+                            DATEADD(minute, gs.minute_offset, s.starts_at)))::INT AS hour,
                         COUNT(*) AS cnt
                     FROM dw.sessions s
                     JOIN dw.courses c ON s.course_id = c.id
                     JOIN dw.employees e ON s.supervisor_id = e.id
                     JOIN dw.users u ON e.user_id = u.id
+                    -- Generate 30-min offsets to cover the full session duration
+                    CROSS JOIN (
+                        SELECT 0 AS minute_offset UNION ALL SELECT 30 UNION ALL
+                        SELECT 60 UNION ALL SELECT 90 UNION ALL SELECT 120 UNION ALL
+                        SELECT 150 UNION ALL SELECT 180 UNION ALL SELECT 210 UNION ALL
+                        SELECT 240 UNION ALL SELECT 270 UNION ALL SELECT 300
+                    ) gs
                     WHERE s.starts_at::date BETWEEN CURRENT_DATE AND CURRENT_DATE + 28
+                      AND gs.minute_offset < s.duration
                       AND {_sess_where}
                     GROUP BY dow, hour
                     ORDER BY dow, hour
@@ -10078,7 +10088,7 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
 
                 st.plotly_chart(_make_heatmap(_sess_pivot, "Sessions Scheduled (Next 4 Weeks) — ET", colorscale='Blues'),
                                 use_container_width=True)
-                st.caption("Count of sessions per hour slot per day of week, Eastern Time.")
+                st.caption("Count of sessions active in each hour slot (30-min resolution — a 90-min session counts in each hour it spans). Eastern Time.")
             except Exception as _e:
                 st.error(f"Could not load session data: {_e}")
 
@@ -10092,7 +10102,7 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                                     use_container_width=True)
                     _fam_df2 = _gh_read_cache("data/cache/family_availability.csv")
                     _fetched = _fam_df2['fetched_at'].iloc[0] if not _fam_df2.empty and 'fetched_at' in _fam_df2.columns else 'unknown'
-                    st.caption(f"Unique students available per hour slot. Data as of {_fetched}. All active families with posted availability.")
+                    st.caption(f"Unique students available per hour slot. Data as of {_fetched}. All active families with posted availability (could include old availability).")
             except Exception as _e:
                 st.error(f"Could not load family availability: {_e}")
 
@@ -10162,30 +10172,32 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                             _av_open_slots.append((_r['tutor_id'], str(_r['week_start']), _dow_name, _hr))
                         _cur_hour += _avtd(hours=1)
 
-                # Count distinct tutors available per (day, hour) slot
+                # Count availability blocks per tutor per slot (max 4 = available all 4 weeks)
                 _av_pivot = {}
                 if _av_slots:
                     _slot_df = _avpd.DataFrame(_av_slots, columns=['tutor_id','week','day','hour'])
-                    # Deduplicate: one entry per tutor per slot per week
                     _slot_df = _slot_df.drop_duplicates()
-                    _tutor_counts = _slot_df.groupby(['day','hour'])['tutor_id'].nunique().reset_index()
-                    for _, _r in _tutor_counts.iterrows():
-                        _av_pivot.setdefault(_r['day'], {})[int(_r['hour'])] = int(_r['tutor_id'])
+                    # Sum of distinct weeks per tutor per slot, then sum across tutors
+                    _week_per_tutor = _slot_df.groupby(['day','hour','tutor_id'])['week'].nunique().reset_index()
+                    _block_counts = _week_per_tutor.groupby(['day','hour'])['week'].sum().reset_index()
+                    for _, _r in _block_counts.iterrows():
+                        _av_pivot.setdefault(_r['day'], {})[int(_r['hour'])] = int(_r['week'])
 
-                # Open availability pivot: distinct tutors with unconsumed slots
+                # Open availability: same but for unconsumed slots only
                 _av_open_pivot = {}
                 if _av_open_slots:
                     _open_df = _avpd.DataFrame(_av_open_slots, columns=['tutor_id','week','day','hour'])
                     _open_df = _open_df.drop_duplicates()
-                    _open_counts = _open_df.groupby(['day','hour'])['tutor_id'].nunique().reset_index()
+                    _open_per_tutor = _open_df.groupby(['day','hour','tutor_id'])['week'].nunique().reset_index()
+                    _open_counts = _open_per_tutor.groupby(['day','hour'])['week'].sum().reset_index()
                     for _, _r in _open_counts.iterrows():
-                        _av_open_pivot.setdefault(_r['day'], {})[int(_r['hour'])] = int(_r['tutor_id'])
+                        _av_open_pivot.setdefault(_r['day'], {})[int(_r['hour'])] = int(_r['week'])
 
                 _display_pivot = _av_open_pivot if _av_open_pivot else _av_pivot
                 st.plotly_chart(_make_heatmap(_display_pivot, "Open Tutor Availability (Next 4 Weeks) — ET",
                                               colorscale='Greens'),
                                 use_container_width=True)
-                st.caption("Count of distinct tutors with OPEN (unbooked) availability in each slot. Accounts for full duration of blocks. Filtered by tier if selected.")
+                st.caption("Total availability blocks across all tutors per slot (sum of weeks each tutor has that slot open, max 4 per tutor). Open/unbooked slots only. Filtered by tier if selected.")
 
                 st.divider()
 
@@ -10214,7 +10226,11 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                 st.plotly_chart(_make_heatmap(_gap_pivot, "Demand/Supply Ratio (Families per Open Tutor Slot)",
                                               colorscale='RdYlGn_r', text_fmt=True, zmax=_gap_zmax),
                                 use_container_width=True)
-                st.caption("Family demand ÷ open tutor slots. Red = high demand relative to open availability. Slots with very low family demand shown as 0.")
+                st.caption(
+                    "Family demand ÷ open tutor slots. Higher = more family demand relative to available tutors. "
+                    "⚠️ Note: family availability data may include outdated preferences and skews toward off-peak times (early morning, late night, weekends). "
+                    "Use the Sessions Scheduled tab as a better signal for when tutoring demand is actually being fulfilled."
+                )
 
             except Exception as _e:
                 st.error(f"Could not load tutor availability: {_e}")
