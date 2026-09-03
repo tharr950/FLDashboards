@@ -544,14 +544,10 @@ if __name__ == "__main__":
         return df
     df = run_with_retry(_run)
     if df is not None:
-        # Only generate exam report on Sundays (when previous week is complete)
-        if datetime.today().weekday() == 6:  # 6 = Sunday
-            try:
-                generate_exam_reports(df)
-            except Exception as e:
-                print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] PDF generation failed: {e}")
-        else:
-            print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] Skipping exam report (runs Sundays only)")
+        try:
+            generate_exam_reports(df)
+        except Exception as e:
+            print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] PDF generation failed: {e}")
     print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] ✅ Done.")
 
 
