@@ -9987,11 +9987,11 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
             _hm_tutor = st.multiselect("Filter by Tutor", options=sorted(annelies_tutors),
                 default=[], key="hm_tutor", placeholder="All tutors")
         with _hm_col3:
-            _brand_map = {2:"Private Tutoring",41:"Academics",42:"BUC",43:"Small Group",47:"School Pay PT",48:"School Pay Group"}
+            _brand_map = {2:"Private Tutoring",7:"Small Group Course",41:"Academics",42:"BUC",43:"Trial",47:"School Pay PT",48:"School Pay Group"}
             _hm_brand = st.multiselect("Filter by Brand (Sessions tab)",
                 options=list(_brand_map.keys()),
                 format_func=lambda x: _brand_map[x],
-                default=list(_brand_map.keys()), key="hm_brand")
+                default=[2,7,41,42,47,48], key="hm_brand")
 
         # ── Pre-load family availability (needed in tabs 2 and 3) ───────────
         _fam_pivot = {}
@@ -10084,7 +10084,9 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
 
                 st.plotly_chart(_make_heatmap(_sess_pivot, "Sessions Scheduled (Next 4 Weeks) — ET", colorscale='Blues'),
                                 use_container_width=True)
-                st.caption("Count of sessions active in each hour slot (30-min resolution — a 90-min session counts in each hour it spans). Eastern Time.")
+                _sess_date_from = pd.Timestamp.today().date()
+                _sess_date_to   = _sess_date_from + pd.Timedelta(days=28)
+                st.caption(f"Count of sessions active in each hour slot ({_sess_date_from.strftime('%b %d')} – {_sess_date_to.strftime('%b %d, %Y')}). 30-min resolution. Eastern Time.")
             except Exception as _e:
                 st.error(f"Could not load session data: {_e}")
 
