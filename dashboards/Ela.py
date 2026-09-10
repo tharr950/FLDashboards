@@ -8947,29 +8947,61 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
             }
 
             _trend_options = list(metrics) + list(raw_metrics)
+
+            def _build_trend_fig(metric_name):
+                _pdf = trend_group.copy()
+                if metric_name in metrics:
+                    _yc = metric_name + "_pct"
+                    _pdf[_yc] = _pdf[metric_name] * 100
+                    _yt = "Percent"
+                else:
+                    _yc = metric_name
+                    _yt = raw_metric_specs[metric_name]["unit"]
+                _f = px.line(
+                    _pdf, x="Date Range", y=_yc, color="Faculty Leader",
+                    category_orders={"Date Range": trend_period_order},
+                    color_discrete_map=trend_color_map, markers=True, height=440)
+                _f.update_layout(
+                    title=dict(text=metric_name, x=0.5, xanchor="center"),
+                    xaxis_title="", yaxis_title=_yt,
+                    margin=dict(l=20, r=20, t=50, b=40))
+                return _f
+
             _sel_trend_metric = st.selectbox(
                 "Select metric to plot", _trend_options, index=0, key="team_trend_metric")
 
-            plot_df = trend_group.copy()
-            if _sel_trend_metric in metrics:
-                _y_col = _sel_trend_metric + "_pct"
-                plot_df[_y_col] = plot_df[_sel_trend_metric] * 100
-                _y_title = "Percent"
-            else:
-                _y_col = _sel_trend_metric
-                _y_title = raw_metric_specs[_sel_trend_metric]["unit"]
-
-            fig = px.line(
-                plot_df, x="Date Range", y=_y_col, color="Faculty Leader",
-                category_orders={"Date Range": trend_period_order},
-                color_discrete_map=trend_color_map, markers=True, height=440)
-            fig.update_layout(
-                title=dict(text=_sel_trend_metric, x=0.5, xanchor="center"),
-                xaxis_title="", yaxis_title=_y_title,
-                margin=dict(l=20, r=20, t=50, b=40))
             col1, col2, col3 = st.columns([1, 4, 1])
             with col2:
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(_build_trend_fig(_sel_trend_metric), use_container_width=True)
+
+            # ── Download charts ────────────────────────────────────────────
+            with st.expander("⬇️ Download trend charts"):
+                st.caption(
+                    "Pick any charts to export. Downloads one HTML file with the selected "
+                    "charts (interactive — open in a browser, or print to PDF). "
+                    "For a quick image of the chart above, use the camera icon on the chart itself."
+                )
+                _dl_pick = st.multiselect(
+                    "Charts to include", _trend_options,
+                    default=[_sel_trend_metric], key="team_trend_dl_pick")
+                if _dl_pick:
+                    _parts = [
+                        "<html><head><meta charset='utf-8'>"
+                        "<title>Team Trends Over Time</title></head><body>"
+                        "<h2 style='font-family:sans-serif'>Team Trends Over Time</h2>"
+                        f"<p style='font-family:sans-serif;color:#555'>Periods from {TEAM_TRENDS_START_PERIOD}</p>"
+                    ]
+                    for _i, _m in enumerate(_dl_pick):
+                        _parts.append(_build_trend_fig(_m).to_html(
+                            full_html=False,
+                            include_plotlyjs=("cdn" if _i == 0 else False)))
+                    _parts.append("</body></html>")
+                    st.download_button(
+                        f"Download {len(_dl_pick)} chart(s) as HTML",
+                        data="\n".join(_parts),
+                        file_name=f"team_trends_{pd.Timestamp.today().strftime('%Y-%m-%d')}.html",
+                        mime="text/html",
+                        key="team_trend_dl_btn")
 
         st.divider(); st.divider()
         st.subheader("Team KPI Table")
