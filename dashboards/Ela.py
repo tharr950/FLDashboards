@@ -8930,41 +8930,46 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
             if len(trend_period_order) < 2:
                 st.caption(f"Only one period so far ({trend_period_order[0]}) -- lines will connect once next period's data comes in.")
 
-            for metric in metrics:
-                st.markdown(f"### {metric}")
-                plot_df = trend_group.copy()
-                plot_df[metric + "_pct"] = plot_df[metric] * 100
-                color_map = {fl: ("blue" if fl == leader_name else "lightgray")
-                             for fl in plot_df["Faculty Leader"].unique()}
-                fig = px.line(
-                    plot_df, x="Date Range", y=metric + "_pct", color="Faculty Leader",
-                    category_orders={"Date Range": trend_period_order},
-                    color_discrete_map=color_map, markers=True, height=400)
-                fig.update_layout(
-                    title=dict(text=metric, x=0.5, xanchor="center"),
-                    xaxis_title="", yaxis_title="Percent",
-                    margin=dict(l=20, r=20, t=50, b=40))
-                col1, col2, col3 = st.columns([1, 4, 1])
-                with col2:
-                    st.plotly_chart(fig, use_container_width=True)
+            # Fixed color per Faculty Leader so a given FL is the same color
+            # on every dashboard and in every trend plot.
+            FL_TREND_COLORS = {
+                "Ela Cross":           "#2ca02c",  # green
+                "Annelies de Groot":   "#e377c2",  # pink
+                "Ian Plamondon":       "#1f77b4",  # blue
+                "Geoff St. Marie":     "#ff7f0e",  # orange
+                "Kristin Haase-Alvey": "#9467bd",  # purple
+                "Nikki Pencak":        "#8c564b",  # brown
+                "Katherine Marino":    "#17becf",  # teal
+            }
+            trend_color_map = {
+                fl: FL_TREND_COLORS.get(fl, "#7f7f7f")
+                for fl in trend_group["Faculty Leader"].unique()
+            }
 
-            for metric in raw_metrics:
-                spec = raw_metric_specs[metric]
-                st.markdown(f"### {metric}")
-                plot_df = trend_group.copy()
-                color_map = {fl: ("blue" if fl == leader_name else "lightgray")
-                             for fl in plot_df["Faculty Leader"].unique()}
-                fig = px.line(
-                    plot_df, x="Date Range", y=metric, color="Faculty Leader",
-                    category_orders={"Date Range": trend_period_order},
-                    color_discrete_map=color_map, markers=True, height=400)
-                fig.update_layout(
-                    title=dict(text=metric, x=0.5, xanchor="center"),
-                    xaxis_title="", yaxis_title=spec["unit"],
-                    margin=dict(l=20, r=20, t=50, b=40))
-                col1, col2, col3 = st.columns([1, 4, 1])
-                with col2:
-                    st.plotly_chart(fig, use_container_width=True)
+            _trend_options = list(metrics) + list(raw_metrics)
+            _sel_trend_metric = st.selectbox(
+                "Select metric to plot", _trend_options, index=0, key="team_trend_metric")
+
+            plot_df = trend_group.copy()
+            if _sel_trend_metric in metrics:
+                _y_col = _sel_trend_metric + "_pct"
+                plot_df[_y_col] = plot_df[_sel_trend_metric] * 100
+                _y_title = "Percent"
+            else:
+                _y_col = _sel_trend_metric
+                _y_title = raw_metric_specs[_sel_trend_metric]["unit"]
+
+            fig = px.line(
+                plot_df, x="Date Range", y=_y_col, color="Faculty Leader",
+                category_orders={"Date Range": trend_period_order},
+                color_discrete_map=trend_color_map, markers=True, height=440)
+            fig.update_layout(
+                title=dict(text=_sel_trend_metric, x=0.5, xanchor="center"),
+                xaxis_title="", yaxis_title=_y_title,
+                margin=dict(l=20, r=20, t=50, b=40))
+            col1, col2, col3 = st.columns([1, 4, 1])
+            with col2:
+                st.plotly_chart(fig, use_container_width=True)
 
         st.divider(); st.divider()
         st.subheader("Team KPI Table")
