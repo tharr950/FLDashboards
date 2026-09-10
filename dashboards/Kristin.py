@@ -8887,6 +8887,82 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                     st.plotly_chart(fig, use_container_width=True)
 
         st.divider(); st.divider()
+        st.subheader("📈 Team Trends Over Time")
+
+        # Requested by Annelies (via Monday.com) -- team-by-team trend lines
+        # across periods, so improvement/decline shows up over time instead
+        # of just one period vs. the previous one. Starts from the period
+        # below (the most recent pull as of when this was added, 2026-09)
+        # rather than the full MonthlyMetric history -- several of these
+        # metrics (Parent Update Videos %, Progress Update Quality Score,
+        # Prep Time %) didn't exist before that period, and Weighted
+        # Repurchases used a different calculation historically, so mixing
+        # in older periods would make the trend misleading. Gains one more
+        # data point each time the pipeline runs from here on.
+        TEAM_TRENDS_START_PERIOD = "7/12/26 - 8/8/26"
+        EXCLUDED_TREND_LEADERS = {"Katherine Marino", "Nikki Pencak"}
+
+        trend_df = df.copy()
+        trend_df["Date Range Parsed"] = pd.to_datetime(
+            trend_df["Date Range"].astype(str).str.split(" - ").str[0], errors="coerce")
+        trend_start_parsed = pd.to_datetime(TEAM_TRENDS_START_PERIOD.split(" - ")[0])
+        trend_df = trend_df[
+            (trend_df["Date Range Parsed"] >= trend_start_parsed) &
+            (~trend_df["Faculty Leader"].isin(EXCLUDED_TREND_LEADERS))
+        ]
+
+        if trend_df.empty:
+            st.info("Not enough periods yet to show trends -- this builds up one data point per pipeline run, starting from "
+                     f"{TEAM_TRENDS_START_PERIOD}.")
+        else:
+            trend_period_order = (
+                trend_df[["Date Range", "Date Range Parsed"]]
+                .dropna().drop_duplicates()
+                .sort_values("Date Range Parsed")["Date Range"].tolist()
+            )
+            trend_metrics = [m for m in (metrics + raw_metrics) if m in trend_df.columns]
+            trend_group = trend_df.groupby(["Date Range", "Faculty Leader"])[trend_metrics].mean().reset_index()
+
+            if len(trend_period_order) < 2:
+                st.caption(f"Only one period so far ({trend_period_order[0]}) -- lines will connect once next period's data comes in.")
+
+            for metric in metrics:
+                st.markdown(f"### {metric}")
+                plot_df = trend_group.copy()
+                plot_df[metric + "_pct"] = plot_df[metric] * 100
+                color_map = {fl: ("blue" if fl == leader_name else "lightgray")
+                             for fl in plot_df["Faculty Leader"].unique()}
+                fig = px.line(
+                    plot_df, x="Date Range", y=metric + "_pct", color="Faculty Leader",
+                    category_orders={"Date Range": trend_period_order},
+                    color_discrete_map=color_map, markers=True, height=400)
+                fig.update_layout(
+                    title=dict(text=metric, x=0.5, xanchor="center"),
+                    xaxis_title="", yaxis_title="Percent",
+                    margin=dict(l=20, r=20, t=50, b=40))
+                col1, col2, col3 = st.columns([1, 4, 1])
+                with col2:
+                    st.plotly_chart(fig, use_container_width=True)
+
+            for metric in raw_metrics:
+                spec = raw_metric_specs[metric]
+                st.markdown(f"### {metric}")
+                plot_df = trend_group.copy()
+                color_map = {fl: ("blue" if fl == leader_name else "lightgray")
+                             for fl in plot_df["Faculty Leader"].unique()}
+                fig = px.line(
+                    plot_df, x="Date Range", y=metric, color="Faculty Leader",
+                    category_orders={"Date Range": trend_period_order},
+                    color_discrete_map=color_map, markers=True, height=400)
+                fig.update_layout(
+                    title=dict(text=metric, x=0.5, xanchor="center"),
+                    xaxis_title="", yaxis_title=spec["unit"],
+                    margin=dict(l=20, r=20, t=50, b=40))
+                col1, col2, col3 = st.columns([1, 4, 1])
+                with col2:
+                    st.plotly_chart(fig, use_container_width=True)
+
+        st.divider(); st.divider()
         st.subheader("Team KPI Table")
         dashboard_df = load_dashboard_metrics()
         if dashboard_df.empty:
