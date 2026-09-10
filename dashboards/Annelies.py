@@ -1883,7 +1883,9 @@ def _gh_read_cache(path):
 
 def load_master_tutor():
     """Load tutor roster live from Redshift."""
-    conn = get_redshift_connection()
+    # Connect lazily -- a refused/timed-out connection must be catchable by the
+    # cache fallback below, not raised before we ever get there.
+    conn = None
     query = """
         SELECT DISTINCT
             e1.id AS user_id,
@@ -1919,6 +1921,7 @@ def load_master_tutor():
         st.error("Cache mode ON but no cached tutor roster found.")
         return pd.DataFrame()
     try:
+        conn = get_redshift_connection()
         df = pd.read_sql(query, conn)
         df["Full Name"]       = df["tutor_name"]
         df["Faculty Leader"]  = df["faculty_leader"]
