@@ -104,18 +104,15 @@ OUTPUT_PATH = os.path.join(SCRIPT_DIR, "fl_dashboard_history_metrics.csv")
 
 N_WEEKS = 4
 
-# Reverted -- the skip-most-recent instruction itself was correct (user
-# confirmed). The 80%-vs-100% discrepancy is NOT about which weeks are
-# selected (Jessica Peterson is reportedly 100% in every week), so the
-# real bug is somewhere in the per-tutor aggregation/matching logic
-# below, not here. Left at 1, matching progress_update_quality, until the
-# real cause is found.
+# Reverted back to 1 after the 2026-09-12 catch-up run (period
+# 8/9/26-9/5/26), which used skip=0 one-off since that run happened
+# after a gap and every week in its window had already fully processed.
+# Back on normal cadence now: skip=1 holds back the most recent scraped
+# week in case its video-review/scoring data hasn't finished processing
+# yet.
 PARENT_VIDEOS_SKIP_MOST_RECENT = 1
 
-# progress_updates_history.json: NOT yet confirmed whether it has the same
-# separate-current-file split as parent_update_videos does. Left at the
-# old conservative value (drop 1) until confirmed one way or the other --
-# do not assume it behaves the same as the file above.
+# See note above -- same reasoning.
 PROGRESS_UPDATE_SKIP_MOST_RECENT = 1
 
 

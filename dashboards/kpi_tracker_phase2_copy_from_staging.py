@@ -55,9 +55,10 @@ LOGIN_PASSWORD = 'Cattongue!950'
 # CONFIG
 # =============================================================================
 
-# Ian Plamondon -- corrected trackers (+ Aaron/Zoe's fresh rows) uploaded
-# to staging, ready to copy over.
-FACULTY_LEADERS_TO_RUN = ['Ian Plamondon']
+# New full-team rollout for the 8/9/26-9/5/26 period -- run everyone
+# across all 5 active Faculty Leaders. None = every leader in the
+# freshly-synced Master_Tutor.csv except EXCLUDED_FACULTY_LEADERS below.
+FACULTY_LEADERS_TO_RUN = None
 EXCLUDED_FACULTY_LEADERS = ['Katherine Marino', 'Nikki Pencak']
 
 # Set this to re-run only specific tutors instead of every tutor for every
@@ -68,10 +69,17 @@ EXCLUDED_FACULTY_LEADERS = ['Katherine Marino', 'Nikki Pencak']
 # while this is set). Reset to None here -- fill in with real names +
 # `python3 kpi_tracker_phase2_copy_from_staging.py` after checking
 # RESULTS_LOG_PATH for a run's failures.
-# Tim Page and Eleanor Mancilla, Annelies de Groot's team -- one-off
-# re-run for just these two.
-RETRY_ONLY = {
-    'Annelies de Groot': ['Tim Page', 'Eleanor Mancilla'],
+RETRY_ONLY = None
+
+# These 7 never got a local tracker file out of step 1 (phase 1 couldn't
+# even locate their source file on SharePoke to download/update), so
+# they were never uploaded to staging -- attempting them here would just
+# waste time hitting "not found in staging." Deal with these separately
+# once step 1 is fixed for them.
+EXCLUDED_TUTORS = {
+    'Annelies de Groot': ['Breille Duncan', 'Taylor Ennadi'],
+    'Ela Cross': ['Eve Shames'],
+    'Geoff St. Marie': ['Cadence Liles', 'Quaid Strickland', 'Ruben Dorador', 'Treasure Joyce'],
 }
 
 MAX_TUTOR_ATTEMPTS = 3
@@ -177,6 +185,10 @@ NAME_ALIASES = {
     # Master_Tutor.csv spells her "Nayely"; the actual SharePoint file is
     # spelled "Nayley" -- same fix as phase 1.
     'Nayely Rolon-Gomez': 'Nayley Rolon-Gomez',
+    # Same fix as phase 1: the actual SharePoint tracker filenames have a
+    # trailing "s" on the last name that Master_Tutor.csv doesn't have.
+    'Breille Duncan': 'Breille Duncans',
+    'Taylor Ennadi': 'Taylor Ennadis',
 }
 
 DEAD_SESSION_MARKERS = (
@@ -239,7 +251,29 @@ def kill_all_drivers():
 DRIVER_PATH = ChromeDriverManager().install()
 
 
+def clear_stale_profile_locks():
+    """If Chrome crashed/was killed mid-session (e.g. the 'browser restart
+    failed' case), it can leave Singleton* lock files behind in the
+    persistent profile dir. Chrome then refuses to start a new session
+    against that profile at all -- "session not created: Chrome instance
+    exited" -- even though nothing is actually still running. Confirmed
+    this is what happened on 2026-09-13: every leader failed at
+    make_driver() with that exact error right after a mid-run crash.
+    Safe to remove unconditionally before launching: if a real Chrome
+    process were still alive on this profile, it would recreate these
+    itself immediately."""
+    for name in ('SingletonLock', 'SingletonCookie', 'SingletonSocket'):
+        path = os.path.join(PERSISTENT_PROFILE_DIR, name)
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+        except OSError as e:
+            print(f'Could not remove stale profile lock {path}: {e}')
+
+
 def make_driver():
+    clear_stale_profile_locks()
     chrome_options = Options()
     chrome_options.add_argument(f'--user-data-dir={PERSISTENT_PROFILE_DIR}')
     if HEADLESS:
@@ -586,7 +620,12 @@ def copy_tutor_file_via_picker(driver, tutor, team_folder_name, file_text, folde
     driver.switch_to.frame(iframe)
 
     try:
-        WebDriverWait(driver, 10).until(EC.visibility_of_element_located((By.ID, "appRoot")))
+        # Was 10s. Screenshots from the 2026-09-13 run showed the "Copy to"
+        # picker dialog opening every time but hanging on Microsoft's own
+        # loading spinner well past 10s (not a wrong selector -- the dialog
+        # just hadn't finished rendering yet), so every single tutor was
+        # timing out here. Widened to give the picker room to actually load.
+        WebDriverWait(driver, 30).until(EC.visibility_of_element_located((By.ID, "appRoot")))
 
         click_with_stale_retry(
             driver,
@@ -709,6 +748,12 @@ def run_faculty_leader(faculty_leader, start_delay=0):
             .dropna()
             .tolist()
         )
+        excluded_here = set(EXCLUDED_TUTORS.get(faculty_leader, []))
+        if excluded_here:
+            skipped = [t for t in tutor_list if t in excluded_here]
+            tutor_list = [t for t in tutor_list if t not in excluded_here]
+            if skipped:
+                print(f'[{faculty_leader}] EXCLUDED_TUTORS set -- skipping {len(skipped)}: {skipped}')
         if RETRY_ONLY is not None:
             wanted = set(RETRY_ONLY.get(faculty_leader, []))
             tutor_list = [t for t in tutor_list if t in wanted]

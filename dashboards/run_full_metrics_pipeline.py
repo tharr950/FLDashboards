@@ -3,6 +3,11 @@
 run_full_metrics_pipeline.py
 
 The one command that runs the ENTIRE chain, start to finish:
+  0. sync_master_tutor.py         -- refreshes Desktop/Master_Tutor.csv from
+                                      Redshift (the same tutor/team query the
+                                      dashboard's own cache uses), so the KPI
+                                      Tracker automation's roster never goes
+                                      stale between runs.
   1. pull_kpi_4week_data.py       -- Redshift 4-week KPI query -> KPI_4Week_Metrics.xlsx
   2. pull_fl_dashboard_history.py -- GitHub history files -> fl_dashboard_history_metrics.csv
   3. build_tutor_metrics_file.py  -- combines both -> metrics.csv
@@ -62,6 +67,7 @@ from datetime import datetime
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 STEPS = [
+    "sync_master_tutor.py",
     "pull_kpi_4week_data.py",
     "pull_fl_dashboard_history.py",
     "build_tutor_metrics_file.py",

@@ -51,10 +51,10 @@ LOGIN_PASSWORD = 'Cattongue!950'
 # CONFIG
 # =============================================================================
 
-# Kristin Haase-Alvey -- never had step 1 succeed at all (died at login
-# every time before the persistent-profile/login fixes went in), so this
-# is a plain fresh run, no retry/dedup concerns.
-FACULTY_LEADERS_TO_RUN = ['Kristin Haase-Alvey']
+# New full-team rollout for the 8/9/26-9/5/26 period -- run everyone
+# across all 5 active Faculty Leaders. None = every leader in the
+# freshly-synced Master_Tutor.csv except EXCLUDED_FACULTY_LEADERS below.
+FACULTY_LEADERS_TO_RUN = None
 
 # Faculty Leaders to always skip, regardless of the setting above.
 EXCLUDED_FACULTY_LEADERS = ['Katherine Marino', 'Nikki Pencak']
@@ -66,11 +66,7 @@ EXCLUDED_FACULTY_LEADERS = ['Katherine Marino', 'Nikki Pencak']
 # everyone normally. When set, ONLY the leaders listed here run, and ONLY
 # the tutors listed for each one (FACULTY_LEADERS_TO_RUN and
 # EXCLUDED_FACULTY_LEADERS are ignored while this is set).
-# Eleanor Mancilla only -- Tim Page already succeeded in the previous
-# run, so leaving him out here to avoid a duplicate row. Master_Tutor.csv
-# had her under Katherine Marino (stale); corrected to Annelies de Groot
-# before this run.
-RETRY_ONLY = {'Annelies de Groot': ['Eleanor Mancilla']}
+RETRY_ONLY = None
 # Example: RETRY_ONLY = {'Ela Cross': ['Some Tutor']}
 
 # Total attempts per tutor (1 initial try + retries) before giving up.
@@ -357,6 +353,13 @@ NAME_ALIASES = {
     # spelled "Nayley" -- confirmed after the file-search (not folder-
     # search) failed for her specifically.
     'Nayely Rolon-Gomez': 'Nayley Rolon-Gomez',
+    # Both confirmed via debug screenshot: the actual SharePoint tracker
+    # filenames have a trailing "s" on the last name ("Breille Duncans
+    # KPI Tracker.xlsx" / "Taylor Ennadis KPI Tracker.xlsx") that doesn't
+    # match Master_Tutor.csv's spelling -- these were 2 of the 7 phase-1
+    # failures on Annelies de Groot's team from the 2026-09-13 run.
+    'Breille Duncan': 'Breille Duncans',
+    'Taylor Ennadi': 'Taylor Ennadis',
 }
 
 
