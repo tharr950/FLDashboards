@@ -10241,32 +10241,47 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                 if _hm_tier != "All Tiers":
                     _av_where += f" AND ti.name = '{_hm_tier}'"
 
-                # Accepting filters -- non-BUC uses accept_new_students,
-                # BUC uses the buc_accepting toggle (both from buc_rates.csv).
-                _acc1, _acc2 = st.columns(2)
-                with _acc1:
-                    _only_nonbuc_acc = st.checkbox("Non-BUC accepting only", value=False, key="hm_acc_nonbuc")
-                with _acc2:
-                    _only_buc_acc = st.checkbox("BUC accepting only", value=False, key="hm_acc_buc")
+                # View selector + accepting toggle.
+                # Non-BUC view keys off accept_new_students; BUC view keys off
+                # buc_accepting. Tutors not eligible for BUC simply aren't in
+                # the BUC view -- they still count as supply in the Non-BUC view.
+                _v1, _v2 = st.columns(2)
+                with _v1:
+                    _hm_view = st.radio("View", ["All Non-BUC", "BUC Only"],
+                                        horizontal=True, key="hm_av_view")
+                with _v2:
+                    _hm_accepting = st.radio("Accepting status", ["All", "Accepting", "Not accepting"],
+                                             horizontal=True, key="hm_av_accepting")
 
-                if _only_nonbuc_acc or _only_buc_acc:
-                    _acc_df = load_buc_rates()
-                    if _acc_df.empty:
-                        st.warning("Accepting filter unavailable — could not load buc_rates.csv.")
+                _acc_col = "buc_accepting" if _hm_view == "BUC Only" else "accept_new_students"
+                _acc_df = load_buc_rates()
+
+                if _acc_df.empty or "tutor" not in _acc_df.columns:
+                    st.warning("Could not load buc_rates.csv — showing all tutors unfiltered.")
+                elif _acc_col not in _acc_df.columns:
+                    st.warning(f"Column '{_acc_col}' not found in buc_rates.csv — showing all tutors unfiltered.")
+                else:
+                    _is_acc = _acc_df[_acc_col].astype(str).str.lower().isin(["1","1.0","true"])
+                    if _hm_view == "BUC Only":
+                        # Restrict to tutors that appear on the BUC roster at all
+                        _pool = _acc_df.copy()
+                        if _hm_accepting == "Accepting":
+                            _pool = _pool[_is_acc]
+                        elif _hm_accepting == "Not accepting":
+                            _pool = _pool[~_is_acc]
                     else:
-                        def _truthy(col):
-                            return _acc_df[col].astype(str).str.lower().isin(["1","1.0","true"])
-                        _keep = pd.Series(True, index=_acc_df.index)
-                        if _only_nonbuc_acc and "accept_new_students" in _acc_df.columns:
-                            _keep &= _truthy("accept_new_students")
-                        if _only_buc_acc and "buc_accepting" in _acc_df.columns:
-                            _keep &= _truthy("buc_accepting")
-                        _acc_names = _acc_df.loc[_keep, "tutor"].dropna().unique().tolist()
-                        if _acc_names:
-                            _acc_sql = "','".join(_acc_names)
-                            _av_where += f" AND u.first_name||' '||u.last_name IN ('{_acc_sql}')"
-                        else:
-                            _av_where += " AND 1=0"
+                        _pool = _acc_df.copy()
+                        if _hm_accepting == "Accepting":
+                            _pool = _pool[_is_acc]
+                        elif _hm_accepting == "Not accepting":
+                            _pool = _pool[~_is_acc]
+
+                    _names = _pool["tutor"].dropna().unique().tolist()
+                    if _names:
+                        _av_where += " AND u.first_name||' '||u.last_name IN ('" + "','".join(_names) + "')"
+                    else:
+                        _av_where += " AND 1=0"
+                    st.caption(f"{_hm_view} · {_hm_accepting} — {len(_names)} tutor(s) in scope.")
 
                 _conn_av = get_redshift_connection()
                 _cur_av = _conn_av.cursor()
