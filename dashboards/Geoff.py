@@ -10274,7 +10274,9 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
 
                     _names = _pool["tutor"].dropna().unique().tolist()
                     if _names:
-                        _av_where += " AND u.first_name||' '||u.last_name IN ('" + "','".join(_names) + "')"
+                        # Escape apostrophes (e.g. "Joyraj D'souza") for SQL
+                        _esc = [str(n).replace("'", "''") for n in _names]
+                        _av_where += " AND u.first_name||' '||u.last_name IN ('" + "','".join(_esc) + "')"
                     else:
                         _av_where += " AND 1=0"
                     st.caption(f"{_hm_view} · {_hm_accepting} — {len(_names)} tutor(s) in scope.")
