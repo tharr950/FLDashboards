@@ -2671,6 +2671,7 @@ def render_app(config):
         "Archivable Students & Unscheduled Hours",
         "📅 30-Min Availability",
         "🌡️ Demand Heatmap",
+        "🔁 Repurchases Report",
         "🚫 Session Cancellation Patterns",
         "📋 Annual Reviews",
         "🔰 90-Day Review",
@@ -10089,6 +10090,182 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
     # ─────────────────────────────────────────────
     # PAGE: DEMAND HEATMAP
     # ─────────────────────────────────────────────
+    # ─────────────────────────────────────────────
+    # PAGE: REPURCHASES REPORT
+    # ─────────────────────────────────────────────
+    if page == "🔁 Repurchases Report":
+        st.markdown('<div class="main-title">🔁 Repurchases Report</div>', unsafe_allow_html=True)
+        st.caption("Paid repurchases by existing students. Defaults to the last 12 complete weeks (Sunday-Saturday), matching the KPI trackers.")
+
+        from datetime import timedelta as _rp_td
+
+        # Last 12 complete Sun-Sat weeks: end on the most recent Saturday.
+        _rp_today = pd.Timestamp.today().normalize()
+        _rp_last_sat = _rp_today - _rp_td(days=(_rp_today.weekday() + 2) % 7)
+        if _rp_last_sat >= _rp_today:
+            _rp_last_sat -= _rp_td(days=7)
+        _rp_def_start = (_rp_last_sat - _rp_td(days=83)).date()   # 12 weeks, starts Sunday
+        _rp_def_end   = _rp_last_sat.date()
+
+        _rc1, _rc2, _rc3 = st.columns([1.2, 1.2, 1.6])
+        with _rc1:
+            _rp_start = st.date_input("Start date", value=_rp_def_start, key="rp_start")
+        with _rc2:
+            _rp_end = st.date_input("End date", value=_rp_def_end, key="rp_end")
+        with _rc3:
+            _rp_scope = st.radio("Scope", ["My Team Only", "All Teams"], horizontal=True, key="rp_scope")
+
+        if _rp_start > _rp_end:
+            st.error("Start date must be on or before end date.")
+        else:
+            try:
+                _rp_sql = f"""
+                WITH time_period AS (
+                    SELECT '{_rp_start}' AS repurchase_start, '{_rp_end}' AS day_end
+                ),
+                cte_bookings AS (
+                    SELECT bookings.student_id, bookings.id AS purchase_id,
+                           bookings.brand_id AS brand, bookings.duration/60.0 AS hours,
+                           bookings.booked_at AS booked_at, bookings.amount AS booking_amount
+                    FROM dw.bookings
+                    WHERE bookings.brand_id IN (2,41,42)
+                      AND bookings.booked_at >= (SELECT repurchase_start FROM time_period)
+                      AND bookings.booked_at <= (SELECT day_end FROM time_period)
+                      AND bookings.item_type = 'TutorPackage'
+                      AND bookings.discount IS NULL
+                      AND bookings.amount > 0
+                    UNION
+                    SELECT tutor_packages.student_id, ar.id AS purchase_id, 42 AS brand,
+                           ar.number_of_hours AS hours, ar.created_at AS created_at,
+                           ar.number_of_hours*39 AS booking_amount
+                    FROM orbit_stitch.affiliate_reservations ar
+                    LEFT JOIN dw.tutor_packages ON ar.tutor_package_id = tutor_packages.id
+                    WHERE ar.created_at >= (SELECT repurchase_start FROM time_period)
+                      AND ar.created_at <= (SELECT day_end FROM time_period)
+                      AND ar.status <> 'canceled'
+                    UNION ALL
+                    SELECT tp.student_id, tp.id AS purchase_id, 47 AS brand,
+                           tp.duration/60.0 AS hours, tp.won_at AS created_at, 0 AS booking_amount
+                    FROM dw.tutor_packages tp
+                    WHERE tp.transfer_type = 'School Pay'
+                ),
+                cte_first_brand_session AS (
+                    SELECT cte_bookings.student_id, cte_bookings.booked_at,
+                           sessions.supervisor_id AS tutor_id, courses.brand_id AS brand,
+                           MIN(sessions.starts_at) AS first_session,
+                           MIN(CASE WHEN sessions.attendances_attended_count > 0
+                                    THEN sessions.starts_at END) AS first_attended_session,
+                           MAX(sessions.starts_at) AS last_scheduled_session
+                    FROM cte_bookings
+                    JOIN dw.students ON cte_bookings.student_id = students.id
+                    JOIN dw.enrollments ON students.id = enrollments.enrollee_id
+                    JOIN dw.courses ON enrollments.course_id = courses.id
+                    JOIN dw.sessions ON courses.id = sessions.course_id
+                    WHERE courses.brand_id IN (2,41,42,43,47)
+                    GROUP BY cte_bookings.student_id, cte_bookings.booked_at,
+                             sessions.supervisor_id, courses.brand_id
+                ),
+                cte_new_student AS (
+                    SELECT student_id, tutor_id,
+                           MIN(first_session) AS first_session,
+                           MIN(first_attended_session) AS first_attended_session,
+                           MAX(last_scheduled_session) AS last_scheduled_session
+                    FROM cte_first_brand_session
+                    GROUP BY student_id, tutor_id
+                ),
+                cte_student_detail AS (
+                    SELECT student_id, booked_at,
+                           COUNT(DISTINCT brand) AS past_brand_count,
+                           COUNT(DISTINCT tutor_id) AS past_tutor_count
+                    FROM cte_first_brand_session
+                    WHERE booked_at >= first_attended_session
+                    GROUP BY student_id, booked_at
+                )
+                SELECT DISTINCT
+                    tutor_users.first_name||' '||tutor_users.last_name AS tutor_name,
+                    mgr_users.first_name||' '||mgr_users.last_name AS faculty_leader,
+                    teams.name AS team_name,
+                    cte_new_student.student_id,
+                    student_users.first_name||' '||student_users.last_name AS student_name,
+                    cte_bookings.purchase_id,
+                    cte_bookings.booked_at::DATE AS booked_at_date,
+                    b.name AS booked_brand,
+                    cte_student_detail.past_brand_count,
+                    cte_bookings.hours,
+                    cte_bookings.booking_amount
+                FROM cte_bookings
+                JOIN cte_student_detail
+                    ON (cte_bookings.student_id = cte_student_detail.student_id
+                    AND cte_student_detail.booked_at = cte_bookings.booked_at)
+                JOIN cte_new_student ON cte_new_student.student_id = cte_student_detail.student_id
+                JOIN cte_first_brand_session
+                    ON (cte_first_brand_session.student_id = cte_student_detail.student_id
+                    AND cte_first_brand_session.tutor_id = cte_new_student.tutor_id
+                    AND cte_first_brand_session.brand = cte_bookings.brand)
+                JOIN dw.students ON students.id = cte_bookings.student_id
+                JOIN dw.users student_users ON students.user_id = student_users.id
+                JOIN dw.brands b ON cte_bookings.brand = b.id
+                JOIN dw.employees emp ON cte_new_student.tutor_id = emp.id
+                JOIN dw.users tutor_users ON emp.user_id = tutor_users.id
+                LEFT JOIN dw.team_members ON emp.id = team_members.member_id
+                LEFT JOIN dw.teams ON team_members.team_id = teams.id
+                LEFT JOIN dw.employees mgr ON teams.manager_id = mgr.id
+                LEFT JOIN dw.users mgr_users ON mgr.user_id = mgr_users.id
+                WHERE cte_new_student.first_attended_session <= cte_bookings.booked_at
+                  AND cte_first_brand_session.last_scheduled_session >= cte_bookings.booked_at
+                """
+
+                _rp_conn = get_redshift_connection()
+                try:
+                    _rp_df = pd.read_sql(_rp_sql, _rp_conn)
+                finally:
+                    _rp_conn.close()
+
+                if _rp_scope == "My Team Only":
+                    _rp_df = _rp_df[_rp_df["tutor_name"].isin(set(annelies_tutors))]
+
+                if _rp_df.empty:
+                    st.info("No repurchases found for the selected dates and scope.")
+                else:
+                    _rp_df["hours"] = pd.to_numeric(_rp_df["hours"], errors="coerce").fillna(0)
+                    _rp_df["booking_amount"] = pd.to_numeric(_rp_df["booking_amount"], errors="coerce").fillna(0)
+
+                    _m1, _m2, _m3 = st.columns(3)
+                    _m1.metric("Total Hours", f"{_rp_df['hours'].sum():,.1f}")
+                    _m2.metric("Repurchases", f"{_rp_df['purchase_id'].nunique():,}")
+                    _m3.metric("Students", f"{_rp_df['student_id'].nunique():,}")
+
+                    st.markdown("#### By Tutor")
+                    _rp_sum = (_rp_df.groupby(["tutor_name","faculty_leader"])
+                               .agg(Hours=("hours","sum"),
+                                    Repurchases=("purchase_id","nunique"),
+                                    Students=("student_id","nunique"),
+                                    Amount=("booking_amount","sum"))
+                               .reset_index()
+                               .rename(columns={"tutor_name":"Tutor","faculty_leader":"Faculty Leader"})
+                               .sort_values("Hours", ascending=False))
+                    _rp_sum["Hours"] = _rp_sum["Hours"].round(1)
+                    _rp_sum["Amount"] = _rp_sum["Amount"].round(0)
+                    st.dataframe(_rp_sum, hide_index=True, use_container_width=True)
+
+                    with st.expander("🔍 Detail — one row per repurchase"):
+                        _rp_det = _rp_df.rename(columns={
+                            "tutor_name":"Tutor","faculty_leader":"Faculty Leader","team_name":"Team",
+                            "student_name":"Student","booked_at_date":"Booked","booked_brand":"Brand",
+                            "hours":"Hours","booking_amount":"Amount","past_brand_count":"Prior Brands",
+                        })[["Tutor","Faculty Leader","Student","Booked","Brand","Hours","Amount","Prior Brands"]]
+                        st.dataframe(_rp_det.sort_values(["Tutor","Booked"]),
+                                     hide_index=True, use_container_width=True)
+
+                    st.download_button(
+                        "⬇️ Download detail as CSV",
+                        data=_rp_df.to_csv(index=False),
+                        file_name=f"repurchases_{_rp_start}_to_{_rp_end}.csv",
+                        mime="text/csv", key="rp_dl")
+
+            except Exception as _rp_e:
+                st.error(f"Could not load repurchases: {_rp_e}")
+
     if page == "🌡️ Demand Heatmap":
         st.markdown('<div class="main-title">🌡️ Demand Heatmap</div>', unsafe_allow_html=True)
         st.caption("Compare when sessions are scheduled, when families are available, and when tutors have posted availability.")
