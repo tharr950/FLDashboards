@@ -10094,7 +10094,7 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
         st.caption("Paid repurchases by existing students. Defaults to the last 12 complete weeks (Sunday-Saturday), matching the KPI trackers.")
 
         # Verify this matches your Orbit host/path for a student's orders page.
-        _ORBIT_ORDERS_URL = "https://orbit.revolutionprep.com/students/{sid}/orders"
+        _ORBIT_ORDERS_URL = "https://admin.revolutionprep.com/students/{sid}/orders"
 
         with st.expander("ℹ️ About this data — how a tutor gets repurchase credit"):
             st.markdown("""
