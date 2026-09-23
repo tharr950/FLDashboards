@@ -10093,14 +10093,32 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
         st.markdown('<div class="main-title">🔁 Repurchases Report</div>', unsafe_allow_html=True)
         st.caption("Paid repurchases by existing students. Defaults to the last 12 complete weeks (Sunday-Saturday), matching the KPI trackers.")
 
+        # Verify this matches your Orbit host/path for a student's orders page.
+        _ORBIT_ORDERS_URL = "https://orbit.revolutionprep.com/students/{sid}/orders"
+
+        with st.expander("ℹ️ About this data — how a tutor gets repurchase credit"):
+            st.markdown("""
+**To get credit:**
+- Tutor must have completed an **attended session** with the student **before** the repurchase date
+- Tutor must have a session **scheduled** with the student **on or after** the repurchase date, for the **brand the family purchased**
+- Family must have **paid** for some portion of the hours. The only exception is **School Pay Private Tutoring**, since it is paid by the school
+- A **first purchase after a trial session does not count**
+- If hours are **transferred** from one student to another, all hours are credited to the account the hours were **purchased on**
+
+**Column meanings:**
+- **Repurchased Hours** — hours contained in the repurchase
+- **Repurchase Count** — number of repurchase transactions
+- **Unique Students** — distinct students who repurchased
+- **Hours Before Repurchase** — attended tutoring hours that tutor completed with that student *prior to* the repurchase date
+            """)
+
         from datetime import timedelta as _rp_td
 
-        # Last 12 complete Sun-Sat weeks: end on the most recent Saturday.
         _rp_today = pd.Timestamp.today().normalize()
         _rp_last_sat = _rp_today - _rp_td(days=(_rp_today.weekday() + 2) % 7)
         if _rp_last_sat >= _rp_today:
             _rp_last_sat -= _rp_td(days=7)
-        _rp_def_start = (_rp_last_sat - _rp_td(days=83)).date()   # 12 weeks, starts Sunday
+        _rp_def_start = (_rp_last_sat - _rp_td(days=83)).date()
         _rp_def_end   = _rp_last_sat.date()
 
         _rc1, _rc2, _rc3 = st.columns([1.2, 1.2, 1.6])
@@ -10110,6 +10128,18 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
             _rp_end = st.date_input("End date", value=_rp_def_end, key="rp_end")
         with _rc3:
             _rp_scope = st.radio("Scope", ["My Team Only", "All Teams"], horizontal=True, key="rp_scope")
+
+        _rf1, _rf2, _rf3 = st.columns(3)
+        with _rf1:
+            _rp_tier = st.multiselect("Tier", ["Distinguished","Premium","Advanced"],
+                                      default=[], key="rp_tier", placeholder="All tiers")
+        with _rf2:
+            _rp_ttype = st.multiselect("Tutor type", ["Adjunct","Professional","BUC Only"],
+                                       default=[], key="rp_ttype", placeholder="All types")
+        with _rf3:
+            _rp_brand = st.multiselect("Repurchase brand",
+                                       ["Private Tutoring","Academics","BUC","School Pay PT"],
+                                       default=[], key="rp_brand", placeholder="All brands")
 
         if _rp_start > _rp_end:
             st.error("Start date must be on or before end date.")
@@ -10144,6 +10174,8 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                            tp.duration/60.0 AS hours, tp.won_at AS created_at, 0 AS booking_amount
                     FROM dw.tutor_packages tp
                     WHERE tp.transfer_type = 'School Pay'
+                      AND tp.won_at >= (SELECT repurchase_start FROM time_period)
+                      AND tp.won_at <= (SELECT day_end FROM time_period)
                 ),
                 cte_first_brand_session AS (
                     SELECT cte_bookings.student_id, cte_bookings.booked_at,
@@ -10176,19 +10208,38 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                     FROM cte_first_brand_session
                     WHERE booked_at >= first_attended_session
                     GROUP BY student_id, booked_at
+                ),
+                -- Attended hours the tutor completed with the student BEFORE the repurchase
+                cte_hours_before AS (
+                    SELECT cb.student_id, cb.booked_at, s.supervisor_id AS tutor_id,
+                           SUM(s.duration)/60.0 AS hours_before
+                    FROM cte_bookings cb
+                    JOIN dw.enrollments en ON cb.student_id = en.enrollee_id
+                    JOIN dw.courses co ON en.course_id = co.id
+                    JOIN dw.sessions s ON co.id = s.course_id
+                    WHERE s.attendances_attended_count > 0
+                      AND s.starts_at < cb.booked_at
+                      AND co.brand_id IN (2,41,42,43,47)
+                    GROUP BY cb.student_id, cb.booked_at, s.supervisor_id
                 )
                 SELECT DISTINCT
                     tutor_users.first_name||' '||tutor_users.last_name AS tutor_name,
                     mgr_users.first_name||' '||mgr_users.last_name AS faculty_leader,
                     teams.name AS team_name,
+                    ti.name AS tier,
+                    CASE WHEN emp.tier_id = 1 THEN 'BUC Only'
+                         WHEN emp.delivery_target < 30 THEN 'Adjunct'
+                         ELSE 'Professional' END AS tutor_type,
                     cte_new_student.student_id,
                     student_users.first_name||' '||student_users.last_name AS student_name,
                     cte_bookings.purchase_id,
                     cte_bookings.booked_at::DATE AS booked_at_date,
                     b.name AS booked_brand,
-                    cte_student_detail.past_brand_count,
                     cte_bookings.hours,
-                    cte_bookings.booking_amount
+                    cte_bookings.booking_amount,
+                    COALESCE(cte_hours_before.hours_before, 0) AS hours_before,
+                    cte_new_student.first_attended_session::DATE AS first_attended_session,
+                    cte_first_brand_session.last_scheduled_session::DATE AS last_scheduled_session
                 FROM cte_bookings
                 JOIN cte_student_detail
                     ON (cte_bookings.student_id = cte_student_detail.student_id
@@ -10198,11 +10249,16 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                     ON (cte_first_brand_session.student_id = cte_student_detail.student_id
                     AND cte_first_brand_session.tutor_id = cte_new_student.tutor_id
                     AND cte_first_brand_session.brand = cte_bookings.brand)
+                LEFT JOIN cte_hours_before
+                    ON (cte_hours_before.student_id = cte_bookings.student_id
+                    AND cte_hours_before.booked_at = cte_bookings.booked_at
+                    AND cte_hours_before.tutor_id = cte_new_student.tutor_id)
                 JOIN dw.students ON students.id = cte_bookings.student_id
                 JOIN dw.users student_users ON students.user_id = student_users.id
                 JOIN dw.brands b ON cte_bookings.brand = b.id
                 JOIN dw.employees emp ON cte_new_student.tutor_id = emp.id
                 JOIN dw.users tutor_users ON emp.user_id = tutor_users.id
+                LEFT JOIN dw.tiers ti ON emp.tier_id = ti.id
                 LEFT JOIN dw.team_members ON emp.id = team_members.member_id
                 LEFT JOIN dw.teams ON team_members.team_id = teams.id
                 LEFT JOIN dw.employees mgr ON teams.manager_id = mgr.id
@@ -10219,43 +10275,74 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
 
                 if _rp_scope == "My Team Only":
                     _rp_df = _rp_df[_rp_df["tutor_name"].isin(set(annelies_tutors))]
+                if _rp_tier:
+                    _rp_df = _rp_df[_rp_df["tier"].isin(_rp_tier)]
+                if _rp_ttype:
+                    _rp_df = _rp_df[_rp_df["tutor_type"].isin(_rp_ttype)]
+                if _rp_brand:
+                    _rp_df = _rp_df[_rp_df["booked_brand"].isin(_rp_brand)]
 
                 if _rp_df.empty:
-                    st.info("No repurchases found for the selected dates and scope.")
+                    st.info("No repurchases found for the selected filters.")
                 else:
-                    _rp_df["hours"] = pd.to_numeric(_rp_df["hours"], errors="coerce").fillna(0)
-                    _rp_df["booking_amount"] = pd.to_numeric(_rp_df["booking_amount"], errors="coerce").fillna(0)
+                    for _c in ["hours","booking_amount","hours_before"]:
+                        _rp_df[_c] = pd.to_numeric(_rp_df[_c], errors="coerce").fillna(0)
 
-                    _m1, _m2, _m3 = st.columns(3)
-                    _m1.metric("Total Hours", f"{_rp_df['hours'].sum():,.1f}")
-                    _m2.metric("Repurchases", f"{_rp_df['purchase_id'].nunique():,}")
-                    _m3.metric("Students", f"{_rp_df['student_id'].nunique():,}")
+                    _m1, _m2, _m3, _m4 = st.columns(4)
+                    _m1.metric("Repurchased Hours", f"{_rp_df['hours'].sum():,.1f}")
+                    _m2.metric("Repurchase Count", f"{_rp_df['purchase_id'].nunique():,}")
+                    _m3.metric("Unique Students", f"{_rp_df['student_id'].nunique():,}")
+                    _m4.metric("Total Amount", f"${_rp_df['booking_amount'].sum():,.0f}")
 
                     st.markdown("#### By Tutor")
-                    _rp_sum = (_rp_df.groupby(["tutor_name","faculty_leader"])
-                               .agg(Hours=("hours","sum"),
-                                    Repurchases=("purchase_id","nunique"),
-                                    Students=("student_id","nunique"),
-                                    Amount=("booking_amount","sum"))
+                    _rp_sum = (_rp_df.groupby(["tutor_name","faculty_leader","tier","tutor_type"])
+                               .agg(**{"Repurchased Hours": ("hours","sum"),
+                                       "Repurchase Count": ("purchase_id","nunique"),
+                                       "Unique Students": ("student_id","nunique"),
+                                       "Hours Before Repurchase": ("hours_before","sum"),
+                                       "Amount": ("booking_amount","sum")})
                                .reset_index()
-                               .rename(columns={"tutor_name":"Tutor","faculty_leader":"Faculty Leader"})
-                               .sort_values("Hours", ascending=False))
-                    _rp_sum["Hours"] = _rp_sum["Hours"].round(1)
+                               .rename(columns={"tutor_name":"Tutor","faculty_leader":"Faculty Leader",
+                                                "tier":"Tier","tutor_type":"Type"})
+                               .sort_values("Repurchased Hours", ascending=False))
+                    for _c in ["Repurchased Hours","Hours Before Repurchase"]:
+                        _rp_sum[_c] = _rp_sum[_c].round(1)
                     _rp_sum["Amount"] = _rp_sum["Amount"].round(0)
-                    st.dataframe(_rp_sum, hide_index=True, use_container_width=True)
+                    st.dataframe(_rp_sum, hide_index=True, use_container_width=True,
+                                 column_config={"Amount": st.column_config.NumberColumn("Amount", format="$%.0f")})
 
-                    with st.expander("🔍 Detail — one row per repurchase"):
-                        _rp_det = _rp_df.rename(columns={
-                            "tutor_name":"Tutor","faculty_leader":"Faculty Leader","team_name":"Team",
-                            "student_name":"Student","booked_at_date":"Booked","booked_brand":"Brand",
-                            "hours":"Hours","booking_amount":"Amount","past_brand_count":"Prior Brands",
-                        })[["Tutor","Faculty Leader","Student","Booked","Brand","Hours","Amount","Prior Brands"]]
-                        st.dataframe(_rp_det.sort_values(["Tutor","Booked"]),
-                                     hide_index=True, use_container_width=True)
+                    st.markdown("#### Detail — one row per repurchase")
+                    _det_tutors = st.multiselect("Filter detail by tutor",
+                                                 options=sorted(_rp_df["tutor_name"].dropna().unique()),
+                                                 default=[], key="rp_det_tutor", placeholder="All tutors")
+                    _det_src = _rp_df if not _det_tutors else _rp_df[_rp_df["tutor_name"].isin(_det_tutors)]
+
+                    _rp_det = _det_src.copy()
+                    _rp_det["Orbit"] = _rp_det["student_id"].apply(
+                        lambda s: _ORBIT_ORDERS_URL.format(sid=int(s)) if pd.notna(s) else None)
+                    _rp_det = _rp_det.rename(columns={
+                        "tutor_name":"Tutor","faculty_leader":"Faculty Leader","tier":"Tier",
+                        "tutor_type":"Type","student_name":"Student","booked_at_date":"Booked",
+                        "booked_brand":"Brand","hours":"Repurchased Hours","booking_amount":"Amount",
+                        "hours_before":"Hours Before Repurchase",
+                        "first_attended_session":"First Attended Session",
+                        "last_scheduled_session":"Last Scheduled Session",
+                    })[["Tutor","Faculty Leader","Tier","Type","Student","Orbit","Booked","Brand",
+                        "Repurchased Hours","Hours Before Repurchase","Amount",
+                        "First Attended Session","Last Scheduled Session"]]
+                    for _c in ["Repurchased Hours","Hours Before Repurchase"]:
+                        _rp_det[_c] = _rp_det[_c].round(1)
+
+                    st.dataframe(_rp_det.sort_values(["Tutor","Booked"]),
+                                 hide_index=True, use_container_width=True,
+                                 column_config={
+                                     "Amount": st.column_config.NumberColumn("Amount", format="$%.0f"),
+                                     "Orbit": st.column_config.LinkColumn("Orbit", display_text="Open"),
+                                 })
 
                     st.download_button(
                         "⬇️ Download detail as CSV",
-                        data=_rp_df.to_csv(index=False),
+                        data=_rp_det.to_csv(index=False),
                         file_name=f"repurchases_{_rp_start}_to_{_rp_end}.csv",
                         mime="text/csv", key="rp_dl")
 
