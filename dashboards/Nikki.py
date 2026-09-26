@@ -11027,7 +11027,6 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                     FROM orbit_stitch.study_areas sa
                     JOIN dw.subjects sub ON sa.subject_id = sub.id
                     WHERE sub.category_id IN (1,2,3,4,5,8,9,10,11)
-                      AND CAST(sub.high_grade AS int) > 8
                       AND sa.archived_at IS NULL
                       AND sa._sdc_deleted_at IS NULL
                 ),
