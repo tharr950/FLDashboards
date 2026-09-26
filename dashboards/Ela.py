@@ -11019,6 +11019,76 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
 
         st.caption(f"📅 12-month period: **{AR_12M_START}** to **{AR_12M_END}** | 3-month period: **{AR_3M_START}** to **{AR_3M_END}**")
 
+        # ── Students met with in the last 6 months ───────────────────────────
+        st.divider()
+        st.markdown("### 👥 Students Met With — Last 6 Months")
+        _s6_tutor = st.selectbox("Tutor", sorted(annelies_tutors), key="ar_s6_tutor")
+        if _s6_tutor:
+            try:
+                _s6_sql = """
+                WITH cte_subjects AS (
+                    SELECT sa.student_id, sub.name AS subject
+                    FROM orbit_stitch.study_areas sa
+                    JOIN dw.subjects sub ON sa.subject_id = sub.id
+                    WHERE sub.category_id IN (1,2,3,4,5,8,9,10,11)
+                      AND CAST(sub.high_grade AS int) > 8
+                      AND sa.archived_at IS NULL
+                      AND sa._sdc_deleted_at IS NULL
+                ),
+                cte_met AS (
+                    SELECT en.enrollee_id AS student_id,
+                           b.name AS brand,
+                           COUNT(DISTINCT s.id) AS sessions,
+                           MIN(s.starts_at)::DATE AS first_session,
+                           MAX(s.starts_at)::DATE AS last_session
+                    FROM dw.sessions s
+                    JOIN dw.employees e ON s.supervisor_id = e.id
+                    JOIN dw.users u ON e.user_id = u.id
+                    JOIN dw.courses c ON s.course_id = c.id
+                    JOIN dw.brands b ON c.brand_id = b.id
+                    JOIN dw.enrollments en ON s.course_id = en.course_id
+                    WHERE s.starts_at >= DATEADD(month, -6, GETDATE())
+                      AND s.starts_at < GETDATE()
+                      AND s.attendances_attended_count > 0
+                      AND u.first_name||' '||u.last_name = %(tutor)s
+                    GROUP BY en.enrollee_id, b.name
+                )
+                SELECT su.first_name||' '||su.last_name AS student,
+                       m.brand, m.sessions, m.first_session, m.last_session,
+                       cs.subject
+                FROM cte_met m
+                JOIN dw.students st ON m.student_id = st.id
+                JOIN dw.users su ON st.user_id = su.id
+                LEFT JOIN cte_subjects cs ON cs.student_id = m.student_id
+                ORDER BY student, m.brand
+                """
+                _s6_conn = get_redshift_connection()
+                try:
+                    _s6_raw = pd.read_sql(_s6_sql, _s6_conn, params={"tutor": _s6_tutor})
+                finally:
+                    _s6_conn.close()
+
+                if _s6_raw.empty:
+                    st.info(f"No attended sessions in the last 6 months for {_s6_tutor}.")
+                else:
+                    _s6 = (_s6_raw.groupby(["student","brand","sessions","first_session","last_session"], dropna=False)
+                           ["subject"].apply(lambda x: ", ".join(sorted({v for v in x if pd.notna(v)})) or "—")
+                           .reset_index()
+                           .rename(columns={"student":"Student","brand":"Brand","subject":"Subjects",
+                                            "sessions":"Sessions","first_session":"First Session",
+                                            "last_session":"Last Session"}))
+                    _s6 = _s6[["Student","Subjects","Brand","Sessions","First Session","Last Session"]]
+                    _s6 = _s6.sort_values(["Student","Brand"])
+                    st.caption(f"{_s6['Student'].nunique()} student(s) · {int(_s6['Sessions'].sum())} attended sessions")
+                    st.dataframe(_s6, hide_index=True, use_container_width=True)
+                    st.caption("Subjects come from the student's active study areas (same source as the grades page), "
+                               "so they reflect what the student is enrolled for rather than each individual session.")
+                    st.download_button("⬇️ Download as CSV", data=_s6.to_csv(index=False),
+                                       file_name=f"students_6mo_{_s6_tutor.replace(' ','_')}.csv",
+                                       mime="text/csv", key="ar_s6_dl")
+            except Exception as _s6_e:
+                st.error(f"Could not load students: {_s6_e}")
+
         # ── Tutor selector ───────────────────────────────────────────────────
         ar_tutor = st.selectbox("Select Tutor", ["— Select —"] + sorted(annelies_tutors), key="ar_tutor_select")
         if ar_tutor == "— Select —":
