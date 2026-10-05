@@ -11175,12 +11175,20 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
         try:
             _s6_sql = """
             WITH cte_subjects AS (
-                SELECT sa.student_id, sub.name AS subject, sub.category_id
-                FROM orbit_stitch.study_areas sa
-                JOIN dw.subjects sub ON sa.subject_id = sub.id
-                WHERE sub.category_id IN (1,2,3,4,5,6,8,9,10,11,12)
-                  AND sa.archived_at IS NULL
-                  AND sa._sdc_deleted_at IS NULL
+                -- Subjects this tutor actually allocated sessions to, from session allotments
+                SELECT DISTINCT en.enrollee_id AS student_id,
+                       sub.name AS subject, sub.category_id
+                FROM dw.sessions s
+                JOIN dw.employees e ON s.supervisor_id = e.id
+                JOIN dw.users u ON e.user_id = u.id
+                JOIN dw.courses c ON s.course_id = c.id
+                JOIN dw.enrollments en ON en.course_id = c.id
+                JOIN dw.session_allotments al ON al.session_id = s.id
+                JOIN dw.subjects sub ON al.subject_id = sub.id
+                WHERE s.starts_at >= DATEADD(month, -6, GETDATE())
+                  AND s.starts_at < GETDATE()
+                  AND s.attendances_attended_count > 0
+                  AND u.first_name||' '||u.last_name = %(tutor)s
             ),
             cte_recent AS (
                 SELECT en.enrollee_id AS student_id, b.name AS brand,
@@ -11232,6 +11240,13 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
             finally:
                 _s6_conn.close()
 
+            if not _s6_raw.empty:
+                _tp_map = {"SAT":"SAT","Digital SAT":"SAT","Paper SAT":"SAT",
+                           "ACT":"ACT","Digital ACT":"ACT",
+                           "PSAT/NMSQT":"PSAT","Digital PSAT":"PSAT","Digital PSAT/NMSQT":"PSAT",
+                           "PSAT":"PSAT","PSAT 8/9":"PSAT","Paper PSAT/NMSQT":"PSAT","Paper PSAT 8/9":"PSAT"}
+                _s6_raw["subject"] = _s6_raw["subject"].map(lambda v: _tp_map.get(v, v))
+
             if _s6_tp and not _s6_raw.empty:
                 _keep = _s6_raw.loc[_s6_raw["category_id"] == 6, "student"].unique()
                 _s6_raw = _s6_raw[_s6_raw["student"].isin(_keep)]
@@ -11256,8 +11271,9 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                            f"{int(_s6['Sessions (all time)'].sum())} all time")
                 st.dataframe(_s6, hide_index=True, use_container_width=True)
                 st.caption("Students are those met with in the last 6 months; session counts and first session "
-                           "cover the full relationship. Subjects come from the student's active study areas "
-                           "(same source as the grades page), so they reflect enrollment rather than each session.")
+                           "cover the full relationship. Subjects come from this tutor's own session allotments "
+                           "over the same 6 months — blank means no subject was allocated on those sessions "
+                           "(e.g. auto-attendance).")
                 st.download_button("⬇️ Download as CSV", data=_s6.to_csv(index=False),
                                    file_name=f"students_6mo_{ar_tutor.replace(' ','_')}.csv",
                                    mime="text/csv", key="ar_s6_dl")
