@@ -2671,6 +2671,7 @@ def render_app(config):
         "📅 30-Min Availability",
         "🌡️ Demand Heatmap",
         "🔁 Repurchases Report",
+        "📆 9-Month Availability",
         "🚫 Session Cancellation Patterns",
         "📋 Annual Reviews",
         "🔰 90-Day Review",
@@ -10089,6 +10090,152 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
     # ─────────────────────────────────────────────
     # PAGE: REPURCHASES REPORT
     # ─────────────────────────────────────────────
+    # ─────────────────────────────────────────────
+    # PAGE: 9-MONTH AVAILABILITY
+    # ─────────────────────────────────────────────
+    if page == "📆 9-Month Availability":
+        st.markdown('<div class="main-title">📆 9-Month Availability</div>', unsafe_allow_html=True)
+        st.caption("Tutors are expected to post recurring availability roughly 9 months out, "
+                   "measured against each tutor's own availability target.")
+
+        with st.expander("ℹ️ How this is measured"):
+            st.markdown("""
+- Window is the **next 39 weeks** (~9 months), Sunday-start weeks.
+- Each tutor has their own **availability target** (`dw.employees.availability_target`) — e.g. 16 hrs for a
+  12-hr delivery target, 38 hrs for a 30-hr delivery target. A week **counts** only if they posted at least
+  the chosen percentage of *their own* target, so a single stray block never counts.
+- **Compliant** means enough of the 39 weeks count. Median coverage across all tutors is ~34 of 39, so a
+  handful of missing weeks (vacation) is normal.
+- **Availability Through** is how far out any availability exists at all, regardless of size.
+            """)
+
+        _av9_c1, _av9_c2, _av9_c3 = st.columns(3)
+        with _av9_c1:
+            _av9_pct = st.slider("Week counts at ≥ % of tutor's target", 10, 100, 50, 5, key="av9_pct")
+        with _av9_c2:
+            _av9_min_wks = st.slider("Weeks required of 39", 10, 39, 34, 1, key="av9_wks")
+        with _av9_c3:
+            _av9_scope = st.radio("Scope", ["My Team Only", "All Teams"], horizontal=True, key="av9_scope")
+
+        try:
+            _av9_conn = get_redshift_connection()
+            try:
+                _av9_raw = pd.read_sql("""
+                    SELECT e.id AS tutor_id,
+                           u.first_name||' '||u.last_name AS tutor,
+                           mu.first_name||' '||mu.last_name AS faculty_leader,
+                           ti.name AS tier,
+                           e.delivery_target, e.availability_target,
+                           DATEADD(day, -1, DATE_TRUNC('week', a.starts_at)::date) AS week_start,
+                           SUM(a.duration)/60.0 AS hours
+                    FROM dw.availabilities a
+                    JOIN dw.employees e ON a.employee_id = e.id
+                    JOIN dw.users u ON e.user_id = u.id
+                    LEFT JOIN dw.tiers ti ON e.tier_id = ti.id
+                    LEFT JOIN dw.team_members tm ON e.id = tm.member_id
+                    LEFT JOIN dw.teams t ON tm.team_id = t.id
+                    LEFT JOIN dw.employees mgr ON t.manager_id = mgr.id
+                    LEFT JOIN dw.users mu ON mgr.user_id = mu.id
+                    WHERE a.starts_at::date >= CURRENT_DATE
+                      AND a.starts_at::date < DATEADD(week, 40, CURRENT_DATE)
+                      AND e.end_date IS NULL AND e.type = 'Tutor'
+                    GROUP BY 1,2,3,4,5,6,7
+                """, _av9_conn)
+                _av9_roster_df = pd.read_sql("""
+                    SELECT u.first_name||' '||u.last_name AS tutor,
+                           mu.first_name||' '||mu.last_name AS faculty_leader,
+                           ti.name AS tier, e.delivery_target, e.availability_target
+                    FROM dw.employees e
+                    JOIN dw.users u ON e.user_id = u.id
+                    LEFT JOIN dw.tiers ti ON e.tier_id = ti.id
+                    LEFT JOIN dw.team_members tm ON e.id = tm.member_id
+                    LEFT JOIN dw.teams t ON tm.team_id = t.id
+                    LEFT JOIN dw.employees mgr ON t.manager_id = mgr.id
+                    LEFT JOIN dw.users mu ON mgr.user_id = mu.id
+                    WHERE e.end_date IS NULL AND e.type='Tutor' AND e.tier_id IS NOT NULL
+                      AND COALESCE(e.availability_target,0) > 0
+                """, _av9_conn)
+            finally:
+                _av9_conn.close()
+
+            if _av9_scope == "My Team Only":
+                _team = set(annelies_tutors)
+                _av9_raw = _av9_raw[_av9_raw.tutor.isin(_team)]
+                _av9_roster_df = _av9_roster_df[_av9_roster_df.tutor.isin(_team)]
+
+            if _av9_roster_df.empty:
+                st.info("No tutors with an availability target in this scope.")
+            else:
+                _t0 = pd.Timestamp.today().normalize()
+                if not _av9_raw.empty:
+                    _av9_raw["week_start"] = pd.to_datetime(_av9_raw["week_start"])
+                    _av9_raw["week_num"] = ((_av9_raw.week_start - _t0).dt.days // 7) + 1
+                    _w = _av9_raw[_av9_raw.week_num.between(1, 39)].copy()
+                    _w["needed"] = _w.availability_target.fillna(0) * (_av9_pct/100.0)
+                    _w["counts"] = (_w.availability_target.fillna(0) > 0) & (_w.hours >= _w.needed)
+                    _cov = _w[_w.counts].groupby("tutor").size().rename("weeks_covered")
+                    _extra = (_av9_raw.groupby("tutor")
+                              .agg(furthest_week=("week_num","max"),
+                                   median_hrs=("hours","median")))
+                else:
+                    _cov = pd.Series(dtype=int, name="weeks_covered")
+                    _extra = pd.DataFrame(columns=["furthest_week","median_hrs"])
+
+                _sum = (_av9_roster_df.drop_duplicates("tutor")
+                        .merge(_cov, on="tutor", how="left")
+                        .merge(_extra, on="tutor", how="left"))
+                _sum["weeks_covered"] = _sum.weeks_covered.fillna(0).astype(int)
+                _sum["furthest_week"] = _sum.furthest_week.fillna(0).astype(int)
+                _sum["median_hrs"]    = _sum.median_hrs.fillna(0)
+                _sum["pct_of_target"] = np.where(_sum.availability_target > 0,
+                                                 _sum.median_hrs / _sum.availability_target * 100, 0).round(0)
+                _sum["status"] = np.where(_sum.weeks_covered >= _av9_min_wks, "✅ Compliant",
+                                  np.where(_sum.weeks_covered >= _av9_min_wks*0.75, "🟡 Close", "🔴 Short"))
+                _sum["through"] = (_t0 + pd.to_timedelta(_sum.furthest_week*7, unit="D")).dt.date
+                _sum = _sum.sort_values(["weeks_covered","tutor"])
+
+                _m1,_m2,_m3,_m4 = st.columns(4)
+                _m1.metric("Compliant", int((_sum.status=="✅ Compliant").sum()))
+                _m2.metric("Close",     int((_sum.status=="🟡 Close").sum()))
+                _m3.metric("Short",     int((_sum.status=="🔴 Short").sum()))
+                _m4.metric("No availability", int((_sum.furthest_week==0).sum()))
+
+                _disp = _sum.rename(columns={
+                    "tutor":"Tutor","faculty_leader":"Faculty Leader","tier":"Tier",
+                    "delivery_target":"Delivery Target","availability_target":"Availability Target",
+                    "weeks_covered":"Weeks Covered (of 39)","median_hrs":"Median Hrs/Week",
+                    "pct_of_target":"Median % of Target","through":"Availability Through","status":"Status"
+                })[["Tutor","Faculty Leader","Tier","Delivery Target","Availability Target",
+                    "Weeks Covered (of 39)","Median Hrs/Week","Median % of Target",
+                    "Availability Through","Status"]]
+                _disp["Median Hrs/Week"] = _disp["Median Hrs/Week"].round(1)
+                st.dataframe(_disp, hide_index=True, use_container_width=True,
+                             height=min(720, 36*len(_disp)+40),
+                             column_config={"Median % of Target":
+                                            st.column_config.NumberColumn(format="%d%%")})
+
+                st.download_button("⬇️ Download as CSV", data=_disp.to_csv(index=False),
+                                   file_name=f"nine_month_availability_{_t0.date()}.csv",
+                                   mime="text/csv", key="av9_dl")
+
+                if not _av9_raw.empty:
+                    st.divider()
+                    st.markdown("#### Weekly posted hours vs target")
+                    _pick = st.multiselect("Tutors to chart", sorted(_w.tutor.unique()),
+                                           default=list(_sum.head(5).tutor), key="av9_chart")
+                    if _pick:
+                        _cd = _w[_w.tutor.isin(_pick)].sort_values("week_num").copy()
+                        _cd["pct"] = np.where(_cd.availability_target > 0,
+                                              _cd.hours/_cd.availability_target*100, 0)
+                        _fig = px.line(_cd, x="week_start", y="pct", color="tutor", markers=True, height=420)
+                        _fig.add_hline(y=_av9_pct, line_dash="dash", line_color="red",
+                                       annotation_text=f"{_av9_pct}% of target")
+                        _fig.update_layout(xaxis_title="", yaxis_title="% of tutor's availability target")
+                        st.plotly_chart(_fig, use_container_width=True)
+
+        except Exception as _av9_e:
+            st.error(f"Could not load availability: {_av9_e}")
+
     if page == "🔁 Repurchases Report":
         st.markdown('<div class="main-title">🔁 Repurchases Report</div>', unsafe_allow_html=True)
         st.caption("Paid repurchases by existing students. Defaults to the last 12 complete weeks (Sunday-Saturday), matching the KPI trackers.")
