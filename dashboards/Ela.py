@@ -11028,6 +11028,7 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
         # ── Students met with in the last 6 months ───────────────────────────
         st.divider()
         st.markdown("### 👥 Students Met With — Last 6 Months")
+        _s6_tp = st.checkbox("Test prep students only (SAT / ACT / PSAT)", value=False, key="ar_s6_testprep")
         try:
             _s6_sql = """
             WITH cte_subjects AS (
@@ -11038,11 +11039,9 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                   AND sa.archived_at IS NULL
                   AND sa._sdc_deleted_at IS NULL
             ),
-            cte_met AS (
-                SELECT en.enrollee_id AS student_id,
-                       b.name AS brand,
-                       COUNT(DISTINCT s.id) AS sessions,
-                       MIN(s.starts_at)::DATE AS first_session,
+            cte_recent AS (
+                SELECT en.enrollee_id AS student_id, b.name AS brand,
+                       COUNT(DISTINCT s.id) AS sessions_6mo,
                        MAX(s.starts_at)::DATE AS last_session
                 FROM dw.sessions s
                 JOIN dw.employees e ON s.supervisor_id = e.id
@@ -11056,15 +11055,33 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                   AND c.brand_id NOT IN (7, 48)
                   AND u.first_name||' '||u.last_name = %(tutor)s
                 GROUP BY en.enrollee_id, b.name
+            ),
+            cte_alltime AS (
+                SELECT en.enrollee_id AS student_id, b.name AS brand,
+                       COUNT(DISTINCT s.id) AS sessions_total,
+                       MIN(s.starts_at)::DATE AS first_session_ever
+                FROM dw.sessions s
+                JOIN dw.employees e ON s.supervisor_id = e.id
+                JOIN dw.users u ON e.user_id = u.id
+                JOIN dw.courses c ON s.course_id = c.id
+                JOIN dw.brands b ON c.brand_id = b.id
+                JOIN dw.enrollments en ON s.course_id = en.course_id
+                WHERE s.starts_at < GETDATE()
+                  AND s.attendances_attended_count > 0
+                  AND c.brand_id NOT IN (7, 48)
+                  AND u.first_name||' '||u.last_name = %(tutor)s
+                GROUP BY en.enrollee_id, b.name
             )
             SELECT su.first_name||' '||su.last_name AS student,
-                   m.brand, m.sessions, m.first_session, m.last_session,
+                   r.brand, r.sessions_6mo, r.last_session,
+                   a.sessions_total, a.first_session_ever,
                    cs.subject
-            FROM cte_met m
-            JOIN dw.students st ON m.student_id = st.id
+            FROM cte_recent r
+            JOIN cte_alltime a ON (a.student_id = r.student_id AND a.brand = r.brand)
+            JOIN dw.students st ON r.student_id = st.id
             JOIN dw.users su ON st.user_id = su.id
-            LEFT JOIN cte_subjects cs ON cs.student_id = m.student_id
-            ORDER BY student, m.brand
+            LEFT JOIN cte_subjects cs ON cs.student_id = r.student_id
+            ORDER BY student, r.brand
             """
             _s6_conn = get_redshift_connection()
             try:
@@ -11072,20 +11089,32 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
             finally:
                 _s6_conn.close()
 
+            if _s6_tp and not _s6_raw.empty:
+                _tp_mask = _s6_raw["subject"].fillna("").str.upper().str.contains("SAT|ACT|PSAT", regex=True)
+                _keep = _s6_raw.loc[_tp_mask, "student"].unique()
+                _s6_raw = _s6_raw[_s6_raw["student"].isin(_keep)]
+
             if _s6_raw.empty:
-                st.info(f"No attended sessions in the last 6 months for {ar_tutor}.")
+                st.info(f"No attended sessions in the last 6 months for {ar_tutor}"
+                        + (" matching the test prep filter." if _s6_tp else "."))
             else:
-                _s6 = (_s6_raw.groupby(["student","brand","sessions","first_session","last_session"], dropna=False)
+                _s6 = (_s6_raw.groupby(["student","brand","sessions_6mo","sessions_total",
+                                        "first_session_ever","last_session"], dropna=False)
                        ["subject"].apply(lambda x: ", ".join(sorted({v for v in x if pd.notna(v)})) or "—")
                        .reset_index()
                        .rename(columns={"student":"Student","brand":"Brand","subject":"Subjects",
-                                        "sessions":"Sessions","first_session":"First Session",
+                                        "sessions_6mo":"Sessions (6 mo)","sessions_total":"Sessions (all time)",
+                                        "first_session_ever":"First Session (all time)",
                                         "last_session":"Last Session"}))
-                _s6 = _s6[["Student","Subjects","Brand","Sessions","First Session","Last Session"]].sort_values(["Student","Brand"])
-                st.caption(f"{_s6['Student'].nunique()} student(s) · {int(_s6['Sessions'].sum())} attended sessions")
+                _s6 = _s6[["Student","Subjects","Brand","Sessions (6 mo)","Sessions (all time)",
+                           "First Session (all time)","Last Session"]].sort_values(["Student","Brand"])
+                st.caption(f"{_s6['Student'].nunique()} student(s) · "
+                           f"{int(_s6['Sessions (6 mo)'].sum())} sessions in last 6 months · "
+                           f"{int(_s6['Sessions (all time)'].sum())} all time")
                 st.dataframe(_s6, hide_index=True, use_container_width=True)
-                st.caption("Subjects come from the student's active study areas (same source as the grades page), "
-                           "so they reflect what the student is enrolled for rather than each individual session.")
+                st.caption("Students are those met with in the last 6 months; session counts and first session "
+                           "cover the full relationship. Subjects come from the student's active study areas "
+                           "(same source as the grades page), so they reflect enrollment rather than each session.")
                 st.download_button("⬇️ Download as CSV", data=_s6.to_csv(index=False),
                                    file_name=f"students_6mo_{ar_tutor.replace(' ','_')}.csv",
                                    mime="text/csv", key="ar_s6_dl")
