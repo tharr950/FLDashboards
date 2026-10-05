@@ -11175,10 +11175,10 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
         try:
             _s6_sql = """
             WITH cte_subjects AS (
-                SELECT sa.student_id, sub.name AS subject
+                SELECT sa.student_id, sub.name AS subject, sub.category_id
                 FROM orbit_stitch.study_areas sa
                 JOIN dw.subjects sub ON sa.subject_id = sub.id
-                WHERE sub.category_id IN (1,2,3,4,5,8,9,10,11)
+                WHERE sub.category_id IN (1,2,3,4,5,6,8,9,10,11,12)
                   AND sa.archived_at IS NULL
                   AND sa._sdc_deleted_at IS NULL
             ),
@@ -11218,7 +11218,7 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
             SELECT su.first_name||' '||su.last_name AS student,
                    r.brand, r.sessions_6mo, r.last_session,
                    a.sessions_total, a.first_session_ever,
-                   cs.subject
+                   cs.subject, cs.category_id
             FROM cte_recent r
             JOIN cte_alltime a ON (a.student_id = r.student_id AND a.brand = r.brand)
             JOIN dw.students st ON r.student_id = st.id
@@ -11233,14 +11233,14 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                 _s6_conn.close()
 
             if _s6_tp and not _s6_raw.empty:
-                _tp_mask = _s6_raw["subject"].fillna("").str.upper().str.contains("SAT|ACT|PSAT", regex=True)
-                _keep = _s6_raw.loc[_tp_mask, "student"].unique()
+                _keep = _s6_raw.loc[_s6_raw["category_id"] == 6, "student"].unique()
                 _s6_raw = _s6_raw[_s6_raw["student"].isin(_keep)]
 
             if _s6_raw.empty:
                 st.info(f"No attended sessions in the last 6 months for {ar_tutor}"
                         + (" matching the test prep filter." if _s6_tp else "."))
             else:
+                _s6_raw = _s6_raw.drop(columns=["category_id"])
                 _s6 = (_s6_raw.groupby(["student","brand","sessions_6mo","sessions_total",
                                         "first_session_ever","last_session"], dropna=False)
                        ["subject"].apply(lambda x: ", ".join(sorted({v for v in x if pd.notna(v)})) or "—")
