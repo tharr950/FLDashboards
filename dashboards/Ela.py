@@ -1270,7 +1270,7 @@ def load_ppw_data(start_date: str, end_date: str, team_name: str):
                 MIN(sessions.starts_at) AS first_session_ever
             FROM dw.sessions
             JOIN dw.courses ON (courses.id = sessions.course_id
-                AND courses.brand_id IN (2,36,41,42,43,47,48))
+                AND courses.brand_id IN (2,36,41,42,43,47))
             JOIN dw.enrollments ON sessions.course_id = enrollments.course_id
             GROUP BY enrollments.enrollee_id
         ),
@@ -1283,7 +1283,7 @@ def load_ppw_data(start_date: str, end_date: str, team_name: str):
                 courses.brand_id
             FROM dw.sessions
             JOIN dw.courses ON (courses.id = sessions.course_id
-                AND courses.brand_id IN (2,36,41,42,43,47,48))
+                AND courses.brand_id IN (2,36,41,42,43,47))
             JOIN dw.enrollments ON sessions.course_id = enrollments.course_id
             JOIN first_ever ON (first_ever.student_id = enrollments.enrollee_id
                 AND first_ever.first_session_ever = sessions.starts_at)
