@@ -9,3 +9,4 @@ pymysql
 mysql-connector-python
 reportlab
 kaleido
+toml
