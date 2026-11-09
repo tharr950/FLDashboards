@@ -11401,8 +11401,11 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
         @st.cache_data(ttl=3600)
         def load_ar_from_github(filename):
             """Load AR data from GitHub CSV (synced nightly)."""
-            token = st.secrets["github"]["token"]
-            repo  = st.secrets["github"]["repo"]
+            try:
+                token = st.secrets["github"]["token"]
+                repo  = st.secrets["github"]["repo"]
+            except Exception:
+                return pd.DataFrame()
             url   = f"https://raw.githubusercontent.com/{repo}/main/data/{filename}"
             import requests, io
             resp = requests.get(url, headers={"Authorization": f"token {token}"})
