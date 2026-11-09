@@ -11274,13 +11274,14 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                 st.dataframe(_rd, hide_index=True, use_container_width=True)
             else:
                 st.info(f"No qualifying rematches on file for {ar_tutor}.")
-            _names = set(ar_12m["tutor_name"].astype(str).str.strip().str.lower()) if not ar_12m.empty else set()
-            _unmatched = sorted(set(_rem["Former Tutor"].astype(str).str.strip()) -
-                                {n for n in _rem["Former Tutor"].astype(str).str.strip()
-                                 if n.lower() in _names})
-            if _unmatched:
-                with st.expander(f"⚠️ {len(_unmatched)} rematch ticket name(s) did not match a tutor"):
-                    st.write(", ".join(_unmatched))
+            with st.expander("All qualifying rematch tickets (every tutor)"):
+                _all = (_rem[["created","Reason for Rematch","Former Tutor","New Tutor"]]
+                        .sort_values("created", ascending=False)
+                        .rename(columns={"created":"Date","Reason for Rematch":"Reason"}))
+                _all["Date"] = _all["Date"].dt.date
+                st.dataframe(_all, hide_index=True, use_container_width=True)
+                st.caption("Former Tutor is free text on the ticket, so some entries "
+                           "(first name only, misspellings) will not match a tutor above.")
 
         # ── Students met with in the last 6 months ───────────────────────────
         st.divider()
