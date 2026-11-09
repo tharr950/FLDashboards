@@ -19,10 +19,10 @@ except ImportError:
     pass
 
 # ── Hardcoded date ranges (update before review season) ──────────────────────
-AR_12M_START = "2025-04-17"
-AR_12M_END   = "2026-04-17"
-AR_3M_START  = "2026-01-17"
-AR_3M_END    = "2026-04-17"
+AR_12M_START = "2025-11-01"
+AR_12M_END   = "2026-11-01"   # exclusive — data through 2026-10-31
+AR_3M_START  = "2026-08-01"
+AR_3M_END    = "2026-11-01"   # exclusive — data through 2026-10-31
 
 # ── Credentials ──────────────────────────────────────────────────────────────
 RS_HOST     = os.environ["REDSHIFT_HOST"]
@@ -149,45 +149,29 @@ def fetch_ar_kpi(start, end):
             FROM tutor_updates WHERE updates_required >= 0
             GROUP BY supervisor_id
         ),
-        cte_NPS AS (
-            SELECT employees.id AS tutor_id,
-                COUNT(DISTINCT nps_histories.id) AS number_of_nps,
-                SUM(nps_histories.score*1.0)/COUNT(DISTINCT nps_histories.id)*1.0 AS avg_nps_score
-            FROM dw.nps_histories
-            JOIN dw.employees ON employees.id = nps_histories.tutor_id
-            WHERE nps_histories.created_at >= (SELECT day_start FROM time_period)
-              AND nps_histories.created_at < (SELECT day_end FROM time_period)
-            GROUP BY employees.id
-        ),
-        cte_prep1 AS (
-            SELECT cte_sessions.supervisor_id AS tutor_id, cte_sessions.starts_at,
-                brands.name AS category,
-                CASE WHEN cte_sessions.attendances_attended_count = 0 THEN 'PrepTime' ELSE 'Attended Session' END AS type,
-                cte_sessions.duration/60.0 AS duration_hours,
-                dates.first_day_of_week_sunday_start AS week_of
-            FROM cte_sessions
-            JOIN rp_bi.dates ON (datepart(year,cte_sessions.starts_at)=dates.year
-                AND datepart(month,cte_sessions.starts_at)=dates.month
-                AND datepart(day,cte_sessions.starts_at)=dates.day)
-            JOIN dw.courses ON cte_sessions.course_id = courses.id
-            JOIN dw.brands ON courses.brand_id = brands.id
-            UNION ALL
-            SELECT events.attendee_id, events.starts_at, events.category,
-                REPLACE(events.type,'Event::',''), events.duration/60.0,
-                dates.first_day_of_week_sunday_start
-            FROM dw.events
-            JOIN rp_bi.dates ON (datepart(year,events.starts_at)=dates.year
-                AND datepart(month,events.starts_at)=dates.month
-                AND datepart(day,events.starts_at)=dates.day)
-            WHERE events.starts_at >= (SELECT day_start FROM time_period)
-              AND events.starts_at < (SELECT day_end FROM time_period)
-              AND events.category IN ('Session Preparation','Email or Slack Communication')
-        ),
         cte_prep2 AS (
-            SELECT tutor_id,
-                CASE WHEN type='PrepTime' THEN SUM(duration_hours) ELSE NULL END AS Total_Prep,
-                CASE WHEN type='Attended Session' THEN SUM(duration_hours) ELSE NULL END AS Attended_Sessions
-            FROM cte_prep1 GROUP BY tutor_id, type
+            -- Prep time = hours logged in dw.events under the two prep categories,
+            -- over attended session hours. The previous version labelled
+            -- zero-attendance SESSIONS as 'PrepTime' and never picked up the
+            -- events rows at all, so it measured no-shows, not prep.
+            SELECT COALESCE(p.tutor_id, a.tutor_id) AS tutor_id,
+                   COALESCE(p.Total_Prep, 0) AS Total_Prep,
+                   a.Attended_Sessions
+            FROM (
+                SELECT ev.attendee_id AS tutor_id, SUM(ev.duration)/60.0 AS Total_Prep
+                FROM dw.events ev
+                WHERE ev.attendee_type = 'Employee'
+                  AND ev.category IN ('Session Preparation','Email or Slack Communication')
+                  AND ev.starts_at >= (SELECT day_start FROM time_period)
+                  AND ev.starts_at <  (SELECT day_end FROM time_period)
+                GROUP BY 1
+            ) p
+            FULL OUTER JOIN (
+                SELECT supervisor_id AS tutor_id, SUM(duration)/60.0 AS Attended_Sessions
+                FROM cte_sessions
+                WHERE attendances_attended_count > 0
+                GROUP BY 1
+            ) a ON p.tutor_id = a.tutor_id
         )
         SELECT DISTINCT
             dw.employees.id,
@@ -204,8 +188,6 @@ def fetch_ar_kpi(start, end):
             ROUND(AVG(cte_availabilities.availability)/(dw.employees.availability_target),4) AS availability_pct,
             (cte_ontime.ontime_sessions/cte_sessiondelivery.launched_sessions)*1.00 AS sessions_on_time_pct,
             cte_parent_updates.percent_parent_updates AS parent_update_pct,
-            cte_NPS.number_of_nps,
-            CASE WHEN cte_NPS.number_of_nps>0 THEN cte_NPS.avg_nps_score END AS avg_nps,
             COUNT(DISTINCT CASE WHEN cte_sessions.automatic_attendance=1 THEN cte_sessions.session_id END) AS autoattendance_sessions,
             CASE WHEN MAX(cte_prep2.Attended_Sessions)>0
                 THEN MAX(cte_prep2.Total_Prep)/MAX(cte_prep2.Attended_Sessions) END AS prep_time_ratio
@@ -222,7 +204,6 @@ def fetch_ar_kpi(start, end):
         LEFT JOIN cte_parent_updates ON employees.id = cte_parent_updates.supervisor_id
         LEFT JOIN cte_deliveries ON employees.id = cte_deliveries.employee_id
         LEFT JOIN cte_availabilities ON employees.id = cte_availabilities.employee_id
-        LEFT JOIN cte_NPS ON cte_NPS.tutor_id = employees.id
         LEFT JOIN cte_prep2 ON employees.id = cte_prep2.tutor_id
         WHERE employees.end_date IS NULL
           AND employees.delivery_target > 0
@@ -231,7 +212,7 @@ def fetch_ar_kpi(start, end):
         GROUP BY employees.id, tutor_users.first_name, tutor_users.last_name,
             dw.tiers.name, employees.skill_score, manager_users.first_name, manager_users.last_name,
             employees.hire_date, employees.delivery_target, cte_ontime.ontime_sessions,
-            cte_sessiondelivery.launched_sessions, cte_nps.number_of_nps, cte_nps.avg_nps_score,
+            cte_sessiondelivery.launched_sessions,
             employees.availability_target, cte_parent_updates.percent_parent_updates
     """
     conn = get_redshift_connection()
