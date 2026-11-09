@@ -76,10 +76,13 @@ RETRY_ONLY = None
 # they were never uploaded to staging -- attempting them here would just
 # waste time hitting "not found in staging." Deal with these separately
 # once step 1 is fixed for them.
+# Updated 2026-10-17 for the 9/6/26-10/3/26 period: these 4 failed phase 1
+# (no tracker produced). Breille/Taylor/Quaid/Ruben/Treasure now succeed.
 EXCLUDED_TUTORS = {
-    'Annelies de Groot': ['Breille Duncan', 'Taylor Ennadi'],
-    'Ela Cross': ['Eve Shames'],
-    'Geoff St. Marie': ['Cadence Liles', 'Quaid Strickland', 'Ruben Dorador', 'Treasure Joyce'],
+    'Annelies de Groot': ['Zach McFatridge'],
+    'Ian Plamondon': ['Eve Shames'],
+    'Geoff St. Marie': ['Cadence Liles'],
+    'Kristin Haase-Alvey': ['Zack Anthony'],
 }
 
 MAX_TUTOR_ATTEMPTS = 3
@@ -311,28 +314,70 @@ def save_debug_screenshot(driver, tag):
         print(f'Could not save debug screenshot: {e}')
 
 
+def _last_row_text(driver):
+    rows = driver.find_elements(By.XPATH, "//div[@role='row']")
+    try:
+        return rows[-1].text if rows else ""
+    except Exception:
+        return ""
+
+
+def _scroll_list_down(driver, container):
+    """Scrolls the file list with a REAL mouse-wheel event over a row.
+    2026-11-08: setting scrollTop / scrollIntoView did nothing (list stuck
+    with ~31 rows in the DOM); wheel events scroll whatever is under the
+    pointer, so this works regardless of which element is the scroller."""
+    rows = driver.find_elements(By.XPATH, "//div[@role='row']")
+    try:
+        if rows:
+            mid = rows[min(len(rows) - 1, 6)]
+            ActionChains(driver).move_to_element(mid).scroll_by_amount(0, 700).perform()
+            return
+    except Exception:
+        pass
+    # Fallbacks
+    if rows:
+        try:
+            driver.execute_script("arguments[0].scrollIntoView({block: 'end'});", rows[-1])
+        except Exception:
+            pass
+    if container is not None:
+        try:
+            driver.execute_script(
+                "arguments[0].scrollTop = arguments[0].scrollTop + arguments[0].clientHeight;", container)
+        except Exception:
+            pass
+
+
 def find_span_element(driver, text, max_scrolls=200, pause=0.4):
-    """Same scroll-and-check approach phase 1 uses -- aa_Metrics_Upload is a
-    normal SharePoint folder, same virtualized list."""
-    container = driver.find_element(By.CSS_SELECTOR, FILES_CONTAINER_SELECTOR)
+    """SharePoint's file/folder list is virtualized -- an item's <span> only
+    exists in the DOM once you've scrolled near it."""
+    try:
+        container = driver.find_element(By.CSS_SELECTOR, FILES_CONTAINER_SELECTOR)
+    except Exception:
+        container = None
     xpath = '//span[text()="{}"]'.format(text)
-    last_height = None
+    stable = 0
     for _ in range(max_scrolls):
         elements = driver.find_elements(By.XPATH, xpath)
         if elements:
             return elements[0]
-        driver.execute_script(
-            "arguments[0].scrollTop = arguments[0].scrollTop + arguments[0].clientHeight;", container
-        )
-        time.sleep(pause)
-        new_height = driver.execute_script("return arguments[0].scrollHeight;", container)
-        if new_height == last_height:
-            time.sleep(1)
+        before = _last_row_text(driver)
+        _scroll_list_down(driver, container)
+        time.sleep(pause + 0.4)
+        after = _last_row_text(driver)
+        if after == before:
+            # Last visible row didn't change -- either the real end of the
+            # list or a slow lazy-load batch. Wait and re-check several times.
+            stable += 1
+            time.sleep(1.5)
             elements = driver.find_elements(By.XPATH, xpath)
             if elements:
                 return elements[0]
-            break
-        last_height = new_height
+            if stable >= 4:
+                break
+        else:
+            stable = 0
     raise NoSuchElementException('Could not locate "{}" after scrolling through the list.'.format(text))
 
 
@@ -602,16 +647,79 @@ def click_with_stale_retry(driver, xpath, timeout=10, retries=3):
     raise last_error
 
 
+def selected_row_texts(driver):
+    """Text of every currently-selected row in the SharePoint file list
+    (standard DetailsList markup: aria-selected="true" on the row)."""
+    texts = []
+    for el in driver.find_elements(By.XPATH, "//*[@role='row' and @aria-selected='true']"):
+        try:
+            texts.append(el.text)
+        except StaleElementReferenceException:
+            pass
+    return texts
+
+
+def select_correct_file_row(driver, file_text, max_attempts=4):
+    """Right-clicks the staging file row for `file_text` and VERIFIES the
+    selected row really is that file before returning.
+
+    Why: the file list is virtualized -- rows are recycled as it scrolls,
+    especially near the very top/bottom of the list. Right-clicking an
+    element reference right after scrolling to it could land on the
+    NEIGHBORING row (e.g. the previous tutor's file), so "Copy to" then
+    copied the wrong tracker into this tutor's folder. Fix: center the row,
+    let the list settle, re-find it fresh, right-click, then check the
+    selection. If the selected row isn't exactly this file, dismiss and
+    retry instead of copying the wrong file."""
+    for attempt in range(1, max_attempts + 1):
+        ActionChains(driver).send_keys(Keys.ESCAPE).perform()
+        time.sleep(0.5)
+
+        element = find_span_element_with_sort_fallback(driver, file_text)
+        driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", element)
+        time.sleep(1.5)  # let the virtualized list finish re-rendering
+
+        # Re-find fresh; the node may have been recycled by the scroll.
+        fresh = driver.find_elements(By.XPATH, '//span[text()="{}"]'.format(file_text))
+        if not fresh:
+            continue
+        ActionChains(driver).context_click(fresh[0]).perform()
+        time.sleep(2)
+
+        selected = selected_row_texts(driver)
+        if not selected:
+            # Strict on purpose: never copy on an unverified selection.
+            print(f'  Could not verify selected row for "{file_text}" (no selected rows detected) -- retrying ({attempt}/{max_attempts}).')
+            continue
+        if len(selected) == 1 and file_text in selected[0]:
+            print(f'  Verified selected file: "{file_text}"')
+            return
+        print(f'  Wrong row selected (wanted "{file_text}", got {[s.splitlines()[0] if s else s for s in selected]}) -- retrying ({attempt}/{max_attempts}).')
+    raise RuntimeError(f'Could not select the correct staging file "{file_text}" after {max_attempts} attempts -- NOT copying to avoid a wrong-file copy.')
+
+
 def copy_tutor_file_via_picker(driver, tutor, team_folder_name, file_text, folder_name_candidates=None):
     """Right-clicks the file span, clicks 'Copy to', then drives the
     file-picker iframe through to 'Copy here' + confirming 'Replace'.
     Raises on any failure -- caller handles retries."""
     if folder_name_candidates is None:
         folder_name_candidates = [tutor]
-    file_button = find_span_element_with_sort_fallback(driver, file_text)
-    ActionChains(driver).context_click(file_button).perform()
-    time.sleep(2)
-    safe_click(driver, driver.find_element(By.XPATH, "//span[text()='Copy to']"))
+    select_correct_file_row(driver, file_text)
+    # JS click, re-found fresh each try: SharePoint's file hover card can sit
+    # on top of the context menu and intercept a normal click (confirmed in
+    # full_errors.log), and safe_click's Escape fallback then CLOSES the menu,
+    # leaving a stale element. A JS click ignores the overlay.
+    for _try in range(3):
+        try:
+            copy_to = WebDriverWait(driver, 10).until(
+                EC.presence_of_element_located((By.XPATH, "//span[text()='Copy to']"))
+            )
+            driver.execute_script("arguments[0].click();", copy_to)
+            break
+        except StaleElementReferenceException:
+            time.sleep(1)
+    else:
+        raise RuntimeError('Could not click "Copy to" in the context menu after 3 tries.')
     time.sleep(3)
 
     iframe = WebDriverWait(driver, 10).until(

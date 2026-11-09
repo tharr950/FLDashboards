@@ -772,6 +772,57 @@ def load_cancellation_data():
     return pd.DataFrame()
 
 @st.cache_data(ttl=3600)
+@st.cache_data(ttl=3600)
+def load_ar_nps():
+    """NPS from manual CSV export (DB source retired). Jul 1 - Oct 31 2026 only."""
+    frames = []
+    for fn in ["NPS Part 1.csv", "NPS Part 2.csv"]:
+        try:
+            if os.path.exists(fn):
+                frames.append(pd.read_csv(fn))
+        except Exception:
+            pass
+    if not frames:
+        return pd.DataFrame()
+    n = pd.concat(frames, ignore_index=True).drop_duplicates()
+    n["survey_date"] = pd.to_datetime(n["Survey Date"], format="mixed", dayfirst=True, errors="coerce")
+    n = n[(n.survey_date >= "2026-07-01") & (n.survey_date <= "2026-10-31")]
+    n["Rating"]   = pd.to_numeric(n["Rating"], errors="coerce")
+    n["Tutor ID"] = pd.to_numeric(n["Tutor ID"], errors="coerce")
+    return n.dropna(subset=["Tutor ID", "Rating"])
+
+@st.cache_data(ttl=3600)
+def load_ar_cancellations():
+    """Tutor support form cancellation requests. Collapsed to one per tutor per session date."""
+    fn = "Tutor_Support_Form_1793745280.xlsx"
+    if not os.path.exists(fn):
+        return pd.DataFrame()
+    try:
+        c = pd.read_excel(fn)
+    except Exception:
+        return pd.DataFrame()
+    c["session_date"] = pd.to_datetime(c["Date of Session"], errors="coerce")
+    c["tutor_id"]     = pd.to_numeric(c["tutor_id"], errors="coerce")
+    c = c.dropna(subset=["tutor_id", "session_date"])
+    # multiple students on the same day = one cancellation event
+    return c.drop_duplicates(subset=["tutor_id", "session_date"])
+
+@st.cache_data(ttl=3600)
+def load_ar_rematches():
+    """Rematch tickets, limited to the three reasons that reflect on the tutor."""
+    fn = "tutor rematches.xlsx"
+    if not os.path.exists(fn):
+        return pd.DataFrame()
+    try:
+        r = pd.read_excel(fn, sheet_name="Tutor Rematch Tickets")
+    except Exception:
+        return pd.DataFrame()
+    keep = ["Not the right fit", "Tutor Complaint", "Tier Upgrade"]
+    r = r[r["Reason for Rematch"].isin(keep)].copy()
+    r["created"] = pd.to_datetime(r["Create date"], errors="coerce")
+    r["_match"]  = r["Former Tutor"].astype(str).str.strip().str.lower()
+    return r
+
 def load_ar_kpi(start, end):
     conn = get_redshift_connection()
     query = f"""
@@ -873,45 +924,29 @@ def load_ar_kpi(start, end):
             FROM tutor_updates WHERE updates_required >= 0
             GROUP BY supervisor_id
         ),
-        cte_NPS AS (
-            SELECT employees.id AS tutor_id,
-                COUNT(DISTINCT nps_histories.id) AS number_of_nps,
-                SUM(nps_histories.score*1.0)/COUNT(DISTINCT nps_histories.id)*1.0 AS avg_nps_score
-            FROM dw.nps_histories
-            JOIN dw.employees ON employees.id = nps_histories.tutor_id
-            WHERE nps_histories.created_at >= (SELECT day_start FROM time_period)
-              AND nps_histories.created_at < (SELECT day_end FROM time_period)
-            GROUP BY employees.id
-        ),
-        cte_prep1 AS (
-            SELECT cte_sessions.supervisor_id AS tutor_id, cte_sessions.starts_at,
-                brands.name AS category,
-                CASE WHEN cte_sessions.attendances_attended_count = 0 THEN 'PrepTime' ELSE 'Attended Session' END AS type,
-                cte_sessions.duration/60.0 AS duration_hours,
-                dates.first_day_of_week_sunday_start AS week_of
-            FROM cte_sessions
-            JOIN rp_bi.dates ON (datepart(year,cte_sessions.starts_at)=dates.year
-                AND datepart(month,cte_sessions.starts_at)=dates.month
-                AND datepart(day,cte_sessions.starts_at)=dates.day)
-            JOIN dw.courses ON cte_sessions.course_id = courses.id
-            JOIN dw.brands ON courses.brand_id = brands.id
-            UNION ALL
-            SELECT events.attendee_id, events.starts_at, events.category,
-                REPLACE(events.type,'Event::',''), events.duration/60.0,
-                dates.first_day_of_week_sunday_start
-            FROM dw.events
-            JOIN rp_bi.dates ON (datepart(year,events.starts_at)=dates.year
-                AND datepart(month,events.starts_at)=dates.month
-                AND datepart(day,events.starts_at)=dates.day)
-            WHERE events.starts_at >= (SELECT day_start FROM time_period)
-              AND events.starts_at < (SELECT day_end FROM time_period)
-              AND events.category IN ('Session Preparation','Email or Slack Communication')
-        ),
         cte_prep2 AS (
-            SELECT tutor_id,
-                CASE WHEN type='PrepTime' THEN SUM(duration_hours) ELSE NULL END AS Total_Prep,
-                CASE WHEN type='Attended Session' THEN SUM(duration_hours) ELSE NULL END AS Attended_Sessions
-            FROM cte_prep1 GROUP BY tutor_id, type
+            -- Prep time = hours logged in dw.events under the two prep categories,
+            -- over attended session hours. The previous version labelled
+            -- zero-attendance SESSIONS as 'PrepTime' and never picked up the
+            -- events rows at all, so it measured no-shows, not prep.
+            SELECT COALESCE(p.tutor_id, a.tutor_id) AS tutor_id,
+                   COALESCE(p.Total_Prep, 0) AS Total_Prep,
+                   a.Attended_Sessions
+            FROM (
+                SELECT ev.attendee_id AS tutor_id, SUM(ev.duration)/60.0 AS Total_Prep
+                FROM dw.events ev
+                WHERE ev.attendee_type = 'Employee'
+                  AND ev.category IN ('Session Preparation','Email or Slack Communication')
+                  AND ev.starts_at >= (SELECT day_start FROM time_period)
+                  AND ev.starts_at <  (SELECT day_end FROM time_period)
+                GROUP BY 1
+            ) p
+            FULL OUTER JOIN (
+                SELECT supervisor_id AS tutor_id, SUM(duration)/60.0 AS Attended_Sessions
+                FROM cte_sessions
+                WHERE attendances_attended_count > 0
+                GROUP BY 1
+            ) a ON p.tutor_id = a.tutor_id
         )
         SELECT DISTINCT
             dw.employees.id,
@@ -928,8 +963,6 @@ def load_ar_kpi(start, end):
             ROUND(AVG(cte_availabilities.availability)/(dw.employees.availability_target),4) AS availability_pct,
             (cte_ontime.ontime_sessions/cte_sessiondelivery.launched_sessions)*1.00 AS sessions_on_time_pct,
             cte_parent_updates.percent_parent_updates AS parent_update_pct,
-            cte_NPS.number_of_nps,
-            CASE WHEN cte_NPS.number_of_nps>0 THEN cte_NPS.avg_nps_score END AS avg_nps,
             COUNT(DISTINCT CASE WHEN cte_sessions.automatic_attendance=1 THEN cte_sessions.session_id END) AS autoattendance_sessions,
             CASE WHEN MAX(cte_prep2.Attended_Sessions)>0
                 THEN MAX(cte_prep2.Total_Prep)/MAX(cte_prep2.Attended_Sessions) END AS prep_time_ratio
@@ -946,7 +979,6 @@ def load_ar_kpi(start, end):
         LEFT JOIN cte_parent_updates ON employees.id = cte_parent_updates.supervisor_id
         LEFT JOIN cte_deliveries ON employees.id = cte_deliveries.employee_id
         LEFT JOIN cte_availabilities ON employees.id = cte_availabilities.employee_id
-        LEFT JOIN cte_NPS ON cte_NPS.tutor_id = employees.id
         LEFT JOIN cte_prep2 ON employees.id = cte_prep2.tutor_id
         WHERE employees.end_date IS NULL
           AND employees.delivery_target > 0
@@ -955,7 +987,7 @@ def load_ar_kpi(start, end):
         GROUP BY employees.id, tutor_users.first_name, tutor_users.last_name,
             dw.tiers.name, employees.skill_score, manager_users.first_name, manager_users.last_name,
             employees.hire_date, employees.delivery_target, cte_ontime.ontime_sessions,
-            cte_sessiondelivery.launched_sessions, cte_nps.number_of_nps, cte_nps.avg_nps_score,
+            cte_sessiondelivery.launched_sessions,
             employees.availability_target, cte_parent_updates.percent_parent_updates
     """
     if FORCE_CACHE_MODE:
@@ -9676,15 +9708,23 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
 
                 # ── 12. NPS
                 def _90s12():
-                    v1=_safe_90(r1m,"avg_nps"); v6=_safe_90(r6w,"avg_nps"); v8=_safe_90(r8w,"avg_nps")
-                    c1,c2,c3=st.columns(3)
-                    c1.metric("Avg NPS (1M)",fmt_num_90(v1,2))
-                    c2.metric("Avg NPS (6W)",fmt_num_90(v6,2))
-                    c3.metric("Avg NPS (8W)",fmt_num_90(v8,2))
-                    c1b,c2b,c3b=st.columns(3)
-                    c1b.metric("# Responses (1M)",fmt_num_90(_safe_90(r1m,"number_of_nps"),0))
-                    c2b.metric("# Responses (6W)",fmt_num_90(_safe_90(r6w,"number_of_nps"),0))
-                    c3b.metric("# Responses (8W)",fmt_num_90(_safe_90(r8w,"number_of_nps"),0))
+                    # NPS is no longer in the database. The replacement export is a
+                    # fixed 1 Jul - 31 Oct 2026 window, which cannot be split into
+                    # rolling 1M/6W/8W periods, so nothing is shown here.
+                    _n = load_ar_nps()
+                    _tid = None
+                    try:
+                        _row = d_1m_90[d_1m_90["tutor_name"] == nr90_tutor]
+                        if not _row.empty:
+                            _tid = int(_row.iloc[0]["id"])
+                    except Exception:
+                        pass
+                    _me = _n[_n["Tutor ID"] == _tid] if (_tid and not _n.empty) else None
+                    st.info("NPS is no longer pulled from the database. The current export covers a fixed "
+                            "**1 Jul – 31 Oct 2026** window and cannot be broken into 1M / 6W / 8W periods."
+                            + (f" Over that whole window this tutor has **{len(_me)}** response(s)"
+                               + (f", averaging **{_me.Rating.mean():.2f}**." if len(_me) else ".")
+                               if _me is not None else ""))
                 _card_90("12. NPS", _90s12)
 
                 # ── 13. Parent Update Video
@@ -11155,18 +11195,88 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
 
 
         # ── Date ranges (hardcoded) ──────────────────────────────────────────
-        AR_12M_START = "2025-04-27"
-        AR_12M_END   = "2026-04-26"
-        AR_3M_START  = "2026-02-01"
-        AR_3M_END    = "2026-04-26"
+        AR_12M_START = "2025-11-01"
+        AR_12M_END   = "2026-11-01"   # exclusive — data through 2026-10-31
+        AR_3M_START  = "2026-08-01"
+        AR_3M_END    = "2026-11-01"   # exclusive — data through 2026-10-31
 
-        st.caption(f"📅 12-month period: **{AR_12M_START}** to **{AR_12M_END}** | 3-month period: **{AR_3M_START}** to **{AR_3M_END}**")
+        st.caption("📅 12-month period: **2025-11-01** to **2026-10-31** | 3-month period: **2026-08-01** to **2026-10-31**")
 
         # ── Tutor selector ───────────────────────────────────────────────────
         ar_tutor = st.selectbox("Select Tutor", ["— Select —"] + sorted(annelies_tutors), key="ar_tutor_select")
         if ar_tutor == "— Select —":
             st.info("Select a tutor above to load their annual review.")
             st.stop()
+
+        _ar_tutor_id = None
+        try:
+            _m = ar_12m[ar_12m["tutor_name"] == ar_tutor]
+            if not _m.empty:
+                _ar_tutor_id = int(_m.iloc[0]["id"])
+        except Exception:
+            pass
+
+        # ── Cancellation requests ────────────────────────────────────────────
+        st.divider()
+        st.markdown("### 🚫 Cancellation Requests")
+        _can = load_ar_cancellations()
+        if _can.empty:
+            st.info("Cancellation export not found.")
+        else:
+            st.caption(f"Tutor support form submissions, {_can.session_date.min():%-d %b %Y} – "
+                       f"{_can.session_date.max():%-d %b %Y}. Multiple students on the same session date "
+                       "count as one cancellation.")
+            _cm = _can[_can.tutor_id == _ar_tutor_id] if _ar_tutor_id else _can.iloc[0:0]
+            _c1, _c2 = st.columns(2)
+            _c1.metric("Cancellations", len(_cm))
+            _c2.metric("Team median", f"{_can.groupby('tutor_id').size().median():.0f}")
+            if len(_cm):
+                _cols = [c for c in ["session_date",
+                                     "Which Category best describes the reason for the change?",
+                                     "What type of change do you need?",
+                                     "Student First and Last Name",
+                                     "Please explain the situation."] if c in _cm.columns]
+                _cd = _cm[_cols].sort_values("session_date", ascending=False).rename(columns={
+                    "session_date":"Session Date",
+                    "Which Category best describes the reason for the change?":"Category",
+                    "What type of change do you need?":"Change Type",
+                    "Student First and Last Name":"Student",
+                    "Please explain the situation.":"Explanation"})
+                _cd["Session Date"] = _cd["Session Date"].dt.date
+                st.dataframe(_cd, hide_index=True, use_container_width=True)
+            else:
+                st.info(f"No cancellation requests on file for {ar_tutor}.")
+
+        # ── Rematches ────────────────────────────────────────────────────────
+        st.divider()
+        st.markdown("### 🔄 Rematches")
+        _rem = load_ar_rematches()
+        if _rem.empty:
+            st.info("Rematch export not found.")
+        else:
+            st.caption(f"⚠️ Rematch data begins **{_rem.created.min():%-d %b %Y}** — it does not cover the full "
+                       "12 months. Limited to reasons: Not the right fit, Tutor Complaint, Tier Upgrade. "
+                       "Tutors are matched by name from the ticket's *Former Tutor* field.")
+            _rm = _rem[_rem["_match"] == str(ar_tutor).strip().lower()]
+            _c1, _c2 = st.columns(2)
+            _c1.metric("Rematches", len(_rm))
+            _c2.metric("All tutors (qualifying)", len(_rem))
+            if len(_rm):
+                _rd = (_rm[["created","Reason for Rematch","Ticket name","New Tutor"]]
+                       .sort_values("created", ascending=False)
+                       .rename(columns={"created":"Date","Reason for Rematch":"Reason",
+                                        "Ticket name":"Ticket","New Tutor":"New Tutor"}))
+                _rd["Date"] = _rd["Date"].dt.date
+                st.dataframe(_rd, hide_index=True, use_container_width=True)
+            else:
+                st.info(f"No qualifying rematches on file for {ar_tutor}.")
+            _names = set(ar_12m["tutor_name"].astype(str).str.strip().str.lower()) if not ar_12m.empty else set()
+            _unmatched = sorted(set(_rem["Former Tutor"].astype(str).str.strip()) -
+                                {n for n in _rem["Former Tutor"].astype(str).str.strip()
+                                 if n.lower() in _names})
+            if _unmatched:
+                with st.expander(f"⚠️ {len(_unmatched)} rematch ticket name(s) did not match a tutor"):
+                    st.write(", ".join(_unmatched))
 
         # ── Students met with in the last 6 months ───────────────────────────
         st.divider()
@@ -11786,11 +11896,24 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
 
         # ── 12. NPS ──────────────────────────────────────────────────────────
         def _s12():
+            _n = load_ar_nps()
+            if _n.empty:
+                st.info("NPS export not found.")
+                return
+            _me = _n[_n["Tutor ID"] == _ar_tutor_id] if _ar_tutor_id else _n.iloc[0:0]
             c1, c2, c3 = st.columns(3)
-            c1.metric("Avg Score (12M)",   fmt_num(t12r.get("avg_nps"), 2))
-            c2.metric("Avg Score (3M)",    fmt_num(t3r.get("avg_nps") if t3r is not None else None, 2))
-            c3.metric("# Responses (12M)", fmt_num(t12r.get("number_of_nps"), 0))
-            st.caption("Not compared to peers. Individual survey scores and comments coming soon.")
+            c1.metric("Avg Score",   f"{_me.Rating.mean():.2f}" if len(_me) else "—")
+            c2.metric("# Responses", len(_me))
+            c3.metric("All-Tutor Avg", f"{_n.Rating.mean():.2f}")
+            st.caption("⚠️ NPS is no longer pulled from the database. Manual export covering "
+                       "**1 Jul 2026 – 31 Oct 2026 submissions only** — not a full 12 months, "
+                       "so this does not align with the other cards' periods.")
+            if len(_me):
+                _d = (_me[["survey_date","Rating","Brand","Comment"]]
+                      .sort_values("survey_date", ascending=False)
+                      .rename(columns={"survey_date":"Date"}))
+                _d["Date"] = _d["Date"].dt.date
+                st.dataframe(_d, hide_index=True, use_container_width=True)
         ar_card(12, "NPS", _s12)
 
         # ── 13. Parent Update Video ──────────────────────────────────────────

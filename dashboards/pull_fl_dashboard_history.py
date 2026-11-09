@@ -110,9 +110,17 @@ N_WEEKS = 4
 # Back on normal cadence now: skip=1 holds back the most recent scraped
 # week in case its video-review/scoring data hasn't finished processing
 # yet.
-PARENT_VIDEOS_SKIP_MOST_RECENT = 1
+# 2026-11-07 run (period 10/4-10/31): parent-video file's latest week is
+# 10/18 (10/25 not run yet), so skip=0 to use 9/27-10/18; progress is
+# set to skip=1 below so both metrics use the same 4 weeks. Reset both to 1
+# once the parent-video file is caught up.
+PARENT_VIDEOS_SKIP_MOST_RECENT = 0
 
 # See note above -- same reasoning.
+# Bug fixed 2026-10-16: compute_progress_update_quality() never passed this
+# constant to last_n_weeks_excluding_most_recent(), so it was silently
+# ignored and progress never skipped its most recent week. Now wired in.
+# Check the two "using weeks" log lines match on every run.
 PROGRESS_UPDATE_SKIP_MOST_RECENT = 1
 
 
@@ -216,7 +224,7 @@ def compute_progress_update_quality():
     df["sent_at"] = pd.to_datetime(df["sent_at"])
     df["week_of"] = df["sent_at"].apply(week_of_sunday)
 
-    last_weeks = last_n_weeks_excluding_most_recent(df["week_of"].unique())
+    last_weeks = last_n_weeks_excluding_most_recent(df["week_of"].unique(), skip=PROGRESS_UPDATE_SKIP_MOST_RECENT)
     log(f"progress_update_quality: using weeks {[str(w) for w in last_weeks]}")
     df = df[df["week_of"].isin(last_weeks)]
 

@@ -252,28 +252,70 @@ def safe_click(driver, element):
             driver.execute_script("arguments[0].click();", element)
 
 
+def _last_row_text(driver):
+    rows = driver.find_elements(By.XPATH, "//div[@role='row']")
+    try:
+        return rows[-1].text if rows else ""
+    except Exception:
+        return ""
+
+
+def _scroll_list_down(driver, container):
+    """Scrolls the file list with a REAL mouse-wheel event over a row.
+    2026-11-08: setting scrollTop / scrollIntoView did nothing (list stuck
+    with ~31 rows in the DOM); wheel events scroll whatever is under the
+    pointer, so this works regardless of which element is the scroller."""
+    rows = driver.find_elements(By.XPATH, "//div[@role='row']")
+    try:
+        if rows:
+            mid = rows[min(len(rows) - 1, 6)]
+            ActionChains(driver).move_to_element(mid).scroll_by_amount(0, 700).perform()
+            return
+    except Exception:
+        pass
+    # Fallbacks
+    if rows:
+        try:
+            driver.execute_script("arguments[0].scrollIntoView({block: 'end'});", rows[-1])
+        except Exception:
+            pass
+    if container is not None:
+        try:
+            driver.execute_script(
+                "arguments[0].scrollTop = arguments[0].scrollTop + arguments[0].clientHeight;", container)
+        except Exception:
+            pass
+
+
 def find_span_element(driver, text, max_scrolls=200, pause=0.4):
     """SharePoint's file/folder list is virtualized -- an item's <span> only
     exists in the DOM once you've scrolled near it."""
-    container = driver.find_element(By.CSS_SELECTOR, FILES_CONTAINER_SELECTOR)
+    try:
+        container = driver.find_element(By.CSS_SELECTOR, FILES_CONTAINER_SELECTOR)
+    except Exception:
+        container = None
     xpath = '//span[text()="{}"]'.format(text)
-    last_height = None
+    stable = 0
     for _ in range(max_scrolls):
         elements = driver.find_elements(By.XPATH, xpath)
         if elements:
             return elements[0]
-        driver.execute_script(
-            "arguments[0].scrollTop = arguments[0].scrollTop + arguments[0].clientHeight;", container
-        )
-        time.sleep(pause)
-        new_height = driver.execute_script("return arguments[0].scrollHeight;", container)
-        if new_height == last_height:
-            time.sleep(1)
+        before = _last_row_text(driver)
+        _scroll_list_down(driver, container)
+        time.sleep(pause + 0.4)
+        after = _last_row_text(driver)
+        if after == before:
+            # Last visible row didn't change -- either the real end of the
+            # list or a slow lazy-load batch. Wait and re-check several times.
+            stable += 1
+            time.sleep(1.5)
             elements = driver.find_elements(By.XPATH, xpath)
             if elements:
                 return elements[0]
-            break
-        last_height = new_height
+            if stable >= 4:
+                break
+        else:
+            stable = 0
     raise NoSuchElementException('Could not locate "{}" after scrolling through the list.'.format(text))
 
 
@@ -467,6 +509,53 @@ def reupload_file_to_current_folder(driver, local_file_path):
     time.sleep(3)
 
 
+# --- Direct-URL navigation to a tutor's folder -------------------------------
+# Scrolling SharePoint's virtualized team list to find a folder started failing
+# for everyone at the bottom of long lists (2026-11-08). The folder URL is just
+# the team folder's `id=` path plus "/<tutor name>", so open it directly and
+# skip the scroll. Falls back to the scroll search if this doesn't work, and
+# turns itself off after 3 failures in a row so a broken URL scheme can't slow
+# the whole run down.
+from urllib.parse import urlparse, parse_qs, urlencode, urlunparse, quote
+
+DIRECT_NAV_ENABLED = True  # REST check 2026-11-08: folders exist; list scroll is what's broken
+_direct_nav_fail_streak = 0
+
+
+def tutor_folder_url(team_folder_url, name):
+    p = urlparse(team_folder_url)
+    q = parse_qs(p.query)
+    if "id" not in q:
+        return None
+    q["id"] = [q["id"][0].rstrip("/") + "/" + name]
+    return urlunparse(p._replace(query=urlencode(q, doseq=True, quote_via=quote)))
+
+
+def open_tutor_folder_direct(driver, team_folder_url, candidates):
+    """Returns the candidate name whose folder opened (and shows a 'KPI Tracker'
+    subfolder), or None."""
+    global _direct_nav_fail_streak
+    if not DIRECT_NAV_ENABLED or _direct_nav_fail_streak >= 8:
+        return None
+    for cand in candidates[:6]:
+        url = tutor_folder_url(team_folder_url, cand)
+        if not url:
+            break
+        try:
+            driver.get(url)
+            WebDriverWait(driver, 15).until(
+                EC.presence_of_element_located((By.XPATH, '//span[text()="KPI Tracker"]'))
+            )
+            _direct_nav_fail_streak = 0
+            return cand
+        except Exception:
+            continue
+    _direct_nav_fail_streak += 1
+    driver.get(team_folder_url)
+    time.sleep(3)
+    return None
+
+
 def process_tutor(driver, tutor, team_folder_url, metrics_sheet, il_team_folders_url, team_folder_name,
                    faculty_leader, max_attempts=MAX_TUTOR_ATTEMPTS):
     """Downloads a tutor's KPI Tracker, appends their metrics row, and saves
@@ -495,13 +584,17 @@ def process_tutor(driver, tutor, team_folder_url, metrics_sheet, il_team_folders
     for attempt in range(1, max_attempts + 1):
         try:
             time.sleep(2)
-            general_button = find_first_matching_span(driver, folder_name_candidates)
-            driver.execute_script(
-                "arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", general_button
-            )
-            time.sleep(3)
-            general_button = find_first_matching_span(driver, folder_name_candidates)  # re-fetch, avoid staleness
-            safe_click(driver, general_button)
+            opened_directly = open_tutor_folder_direct(driver, team_folder_url, folder_name_candidates)
+            if opened_directly:
+                print(f'  Opened "{opened_directly}" folder directly by URL.')
+            else:
+                general_button = find_first_matching_span(driver, folder_name_candidates)
+                driver.execute_script(
+                    "arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", general_button
+                )
+                time.sleep(3)
+                general_button = find_first_matching_span(driver, folder_name_candidates)  # re-fetch, avoid staleness
+                safe_click(driver, general_button)
 
             tutor_name_info, resolved_name = find_tutor_row(metrics_sheet, tutor)
             if tutor_name_info is None:
