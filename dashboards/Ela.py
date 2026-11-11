@@ -1713,6 +1713,9 @@ def load_archive_snapshot_history():
     if not df.empty and "week_date" in df.columns:
         df["week_date"] = pd.to_datetime(df["week_date"], errors="coerce")
         df = df.dropna(subset=["week_date"]).sort_values("week_date")
+        if "pct_archivable" not in df.columns and {"archivable_students","total_students"} <= set(df.columns):
+            df["pct_archivable"] = (pd.to_numeric(df["archivable_students"], errors="coerce") /
+                                    pd.to_numeric(df["total_students"], errors="coerce").replace(0, pd.NA) * 100)
     return df
 
 def load_video_snapshots():
@@ -11787,22 +11790,32 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
             if tutor_as.empty:
                 st.info(f"No archivable data found for {ar_tutor}.")
                 return
-            all_latest  = ar_arch_snap.sort_values("week_date").groupby("tutor_name").last().reset_index()
-            all_avg_pct = all_latest["pct_archivable"].mean() if "pct_archivable" in all_latest.columns else None
+            _h = load_archive_snapshot_history()
+            _th = _h[_h["tutor_name"] == ar_tutor].sort_values("week_date") if not _h.empty else pd.DataFrame()
 
-            latest   = tutor_as.iloc[-1]
-            prev     = tutor_as.iloc[-2] if len(tutor_as) >= 2 else None
-            lat_pct  = latest["pct_archivable"] if "pct_archivable" in latest else None
-            prev_pct = prev["pct_archivable"]   if prev is not None and "pct_archivable" in prev else None
-            d_peer, dc_peer = ar_delta_num(lat_pct, all_avg_pct, higher_is_better=False, label="vs all-tutor avg")
-            d_prev, dc_prev = ar_delta_num(lat_pct, prev_pct,    higher_is_better=False, label="vs prev week")                               if prev_pct is not None else (None, "off")
+            latest  = tutor_as.iloc[-1]
+            lat_pct = latest["pct_archivable"] if "pct_archivable" in latest else None
+            _peer_now = (ar_arch_snap.sort_values("week_date").groupby("tutor_name").last()
+                         ["pct_archivable"].mean() if "pct_archivable" in ar_arch_snap.columns else None)
 
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("# Archivable (now)",    fmt_num(latest["archivable_students"], 0))
-            c2.metric("% Archivable (now)",    f"{lat_pct:.1f}%" if lat_pct else "—",
-                      delta=d_prev, delta_color=dc_prev)
-            c3.metric("All-Tutor Avg %",       f"{all_avg_pct:.1f}%" if all_avg_pct else "—")
-            c4.metric("vs All-Tutor Avg",      f"{lat_pct - all_avg_pct:+.1f}pp" if lat_pct and all_avg_pct else "—")
+            st.markdown("**Current — most recent weekly snapshot**"
+                        + (f" (week of {latest['week_date']:%-d %b %Y})" if hasattr(latest['week_date'],'strftime') else ""))
+            d1, dc1 = ar_delta_num(lat_pct, _peer_now, higher_is_better=False, label="vs team avg")
+            c1, c2, c3 = st.columns(3)
+            c1.metric("# Archivable", fmt_num(latest["archivable_students"], 0))
+            c2.metric("% Archivable", f"{lat_pct:.1f}%" if lat_pct is not None else "—",
+                      delta=d1, delta_color=dc1)
+            c3.metric("Team Avg (same week)", f"{_peer_now:.1f}%" if _peer_now is not None else "—")
+
+            if not _th.empty and "pct_archivable" in _th.columns:
+                _mine_all = _th["pct_archivable"].mean()
+                _peer_all = _h.groupby("tutor_name")["pct_archivable"].mean().mean()
+                d2, dc2 = ar_delta_num(_mine_all, _peer_all, higher_is_better=False, label="vs team avg")
+                st.markdown(f"**All-time — average of all {len(_th)} weekly snapshots "
+                            f"({_th['week_date'].min():%-d %b %Y} – {_th['week_date'].max():%-d %b %Y})**")
+                e1, e2 = st.columns(2)
+                e1.metric("% Archivable (all-time avg)", f"{_mine_all:.1f}%", delta=d2, delta_color=dc2)
+                e2.metric("Team Avg (all-time)", f"{_peer_all:.1f}%")
             _h = load_archive_snapshot_history()
             _th = _h[_h["tutor_name"] == ar_tutor].sort_values("week_date") if not _h.empty else pd.DataFrame()
             if len(_th) >= 2 and "pct_archivable" in _th.columns:
@@ -11831,22 +11844,30 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
             if tutor_as.empty:
                 st.info(f"No unscheduled hours data found for {ar_tutor}.")
                 return
-            all_latest  = ar_arch_snap.sort_values("week_date").groupby("tutor_name").last().reset_index()
-            all_avg_hrs = all_latest["unscheduled_hours"].mean()
+            _h = load_archive_snapshot_history()
+            _th = _h[_h["tutor_name"] == ar_tutor].sort_values("week_date") if not _h.empty else pd.DataFrame()
 
             latest   = tutor_as.iloc[-1]
-            prev     = tutor_as.iloc[-2] if len(tutor_as) >= 2 else None
             lat_hrs  = latest["unscheduled_hours"]
-            prev_hrs = prev["unscheduled_hours"] if prev is not None else None
-            d_peer, dc_peer = ar_delta_num(lat_hrs, all_avg_hrs, higher_is_better=False, label="vs all-tutor avg")
-            d_prev, dc_prev = ar_delta_num(lat_hrs, prev_hrs, higher_is_better=False, label="vs prev week")                               if prev_hrs is not None else (None, "off")
+            _peer_now = ar_arch_snap.sort_values("week_date").groupby("tutor_name").last()["unscheduled_hours"].mean()
 
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Unscheduled Hrs (now)", fmt_num(lat_hrs, 1),
-                      delta=d_prev, delta_color=dc_prev)
-            c2.metric("All-Tutor Avg (hrs)",   fmt_num(all_avg_hrs, 1))
-            c3.metric("vs All-Tutor Avg",      f"{lat_hrs - all_avg_hrs:+.1f} hrs" if all_avg_hrs else "—")
-            c4.metric("Total Students",         fmt_num(latest["total_students"], 0))
+            st.markdown("**Current — most recent weekly snapshot**"
+                        + (f" (week of {latest['week_date']:%-d %b %Y})" if hasattr(latest['week_date'],'strftime') else ""))
+            d1, dc1 = ar_delta_num(lat_hrs, _peer_now, higher_is_better=False, label="vs team avg")
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Unscheduled Hrs", fmt_num(lat_hrs, 1), delta=d1, delta_color=dc1)
+            c2.metric("Team Avg (same week)", fmt_num(_peer_now, 1))
+            c3.metric("Total Students", fmt_num(latest["total_students"], 0))
+
+            if not _th.empty and "unscheduled_hours" in _th.columns:
+                _mine_all = _th["unscheduled_hours"].mean()
+                _peer_all = _h.groupby("tutor_name")["unscheduled_hours"].mean().mean()
+                d2, dc2 = ar_delta_num(_mine_all, _peer_all, higher_is_better=False, label="vs team avg")
+                st.markdown(f"**All-time — average of all {len(_th)} weekly snapshots "
+                            f"({_th['week_date'].min():%-d %b %Y} – {_th['week_date'].max():%-d %b %Y})**")
+                e1, e2 = st.columns(2)
+                e1.metric("Unscheduled Hrs (all-time avg)", fmt_num(_mine_all, 1), delta=d2, delta_color=dc2)
+                e2.metric("Team Avg (all-time)", fmt_num(_peer_all, 1))
             _h = load_archive_snapshot_history()
             _th = _h[_h["tutor_name"] == ar_tutor].sort_values("week_date") if not _h.empty else pd.DataFrame()
             if len(_th) >= 2 and "unscheduled_hours" in _th.columns:
@@ -11915,18 +11936,22 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                 return
 
             latest    = tutor_vs.iloc[-1]
-            all_latest = all_vs.groupby("tutor_name")["pct_with_video"].last()
-            all_avg   = all_latest.mean()
+            _peer_now = all_vs.sort_values("week_date").groupby("tutor_name")["pct_with_video"].last().mean()
+            _mine_all = tutor_vs["pct_with_video"].mean()
+            _peer_all = all_vs.groupby("tutor_name")["pct_with_video"].mean().mean()
 
-            # Averages across all weeks
-            tutor_avg = tutor_vs["pct_with_video"].mean()
-            d, dc     = ar_delta_num(tutor_avg, all_avg, higher_is_better=True, label="vs all-tutor avg")
+            st.markdown(f"**Current — most recent weekly snapshot (week of {latest['week_date']:%-d %b %Y})**")
+            d1, dc1 = ar_delta_num(latest["pct_with_video"], _peer_now, higher_is_better=True, label="vs team avg")
+            c1, c2 = st.columns(2)
+            c1.metric("% With Video", f"{latest['pct_with_video']:.1f}%", delta=d1, delta_color=dc1)
+            c2.metric("Team Avg (same week)", f"{_peer_now:.1f}%")
 
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Most Recent Week %",   f"{latest['pct_with_video']:.1f}%")
-            c2.metric("Avg Across All Weeks", f"{tutor_avg:.1f}%", delta=d, delta_color=dc)
-            c3.metric("All-Tutor Avg",        f"{all_avg:.1f}%")
-
+            st.markdown(f"**All-time — average of all {len(tutor_vs)} weekly snapshots "
+                        f"({tutor_vs['week_date'].min():%-d %b %Y} – {tutor_vs['week_date'].max():%-d %b %Y})**")
+            d2, dc2 = ar_delta_num(_mine_all, _peer_all, higher_is_better=True, label="vs team avg")
+            e1, e2 = st.columns(2)
+            e1.metric("% With Video (all-time avg)", f"{_mine_all:.1f}%", delta=d2, delta_color=dc2)
+            e2.metric("Team Avg (all-time)", f"{_peer_all:.1f}%")
             # Trend chart
             if len(tutor_vs) >= 2:
                 fig_v = px.line(tutor_vs, x="week_date", y="pct_with_video",
@@ -11960,16 +11985,22 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                 return
 
             latest    = tutor_vs.iloc[-1]
-            all_latest = all_vs.groupby("tutor_name")["pct_with_homework"].last()
-            all_avg   = all_latest.mean()
-            tutor_avg = tutor_vs["pct_with_homework"].mean()
-            d, dc     = ar_delta_num(tutor_avg, all_avg, higher_is_better=True, label="vs all-tutor avg")
+            _peer_now = all_vs.sort_values("week_date").groupby("tutor_name")["pct_with_homework"].last().mean()
+            _mine_all = tutor_vs["pct_with_homework"].mean()
+            _peer_all = all_vs.groupby("tutor_name")["pct_with_homework"].mean().mean()
 
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Most Recent Week %",   f"{latest['pct_with_homework']:.1f}%")
-            c2.metric("Avg Across All Weeks", f"{tutor_avg:.1f}%", delta=d, delta_color=dc)
-            c3.metric("All-Tutor Avg",        f"{all_avg:.1f}%")
+            st.markdown(f"**Current — most recent weekly snapshot (week of {latest['week_date']:%-d %b %Y})**")
+            d1, dc1 = ar_delta_num(latest["pct_with_homework"], _peer_now, higher_is_better=True, label="vs team avg")
+            c1, c2 = st.columns(2)
+            c1.metric("% Mentioning HW", f"{latest['pct_with_homework']:.1f}%", delta=d1, delta_color=dc1)
+            c2.metric("Team Avg (same week)", f"{_peer_now:.1f}%")
 
+            st.markdown(f"**All-time — average of all {len(tutor_vs)} weekly snapshots "
+                        f"({tutor_vs['week_date'].min():%-d %b %Y} – {tutor_vs['week_date'].max():%-d %b %Y})**")
+            d2, dc2 = ar_delta_num(_mine_all, _peer_all, higher_is_better=True, label="vs team avg")
+            e1, e2 = st.columns(2)
+            e1.metric("% Mentioning HW (all-time avg)", f"{_mine_all:.1f}%", delta=d2, delta_color=dc2)
+            e2.metric("Team Avg (all-time)", f"{_peer_all:.1f}%")
             if len(tutor_vs) >= 2:
                 fig_h = px.line(tutor_vs, x="week_date", y="pct_with_homework",
                                 markers=True, title="% Updates Mentioning Homework — Week over Week",
