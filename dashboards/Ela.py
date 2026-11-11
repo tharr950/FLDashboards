@@ -1706,6 +1706,15 @@ def load_exams_snapshots():
         df["week_date"] = pd.to_datetime(df["week_date"])
     return df
 
+@st.cache_data(ttl=3600)
+def load_archive_snapshot_history():
+    """Full weekly archivable/unscheduled history (not just the latest 2 weeks)."""
+    df = gh_read(SNAPSHOT_HISTORY_FILE)
+    if not df.empty and "week_date" in df.columns:
+        df["week_date"] = pd.to_datetime(df["week_date"], errors="coerce")
+        df = df.dropna(subset=["week_date"]).sort_values("week_date")
+    return df
+
 def load_video_snapshots():
     df = gh_read(VIDEO_SNAPSHOT_FILE)
     if not df.empty and "week_date" in df.columns:
@@ -11737,18 +11746,22 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
             peer_wr = peer_mm_12m[peer_mm_12m["Date Parsed"] >= cutoff_12m].groupby("Tutor Name")[wr_col].apply(
                 lambda x: pd.to_numeric(x, errors="coerce").sum()).mean()
 
+            cutoff_5m  = pd.to_datetime("2026-06-14")
+            wr_5m = pd.to_numeric(tutor_mm[tutor_mm["Date Parsed"] >= cutoff_5m][wr_col], errors="coerce").sum()
             peer_wr_3m = peer_mm_12m[peer_mm_12m["Date Parsed"] >= cutoff_3m].groupby("Tutor Name")[wr_col].apply(
+                lambda x: pd.to_numeric(x, errors="coerce").sum()).mean()
+            peer_wr_5m = peer_mm_12m[peer_mm_12m["Date Parsed"] >= cutoff_5m].groupby("Tutor Name")[wr_col].apply(
                 lambda x: pd.to_numeric(x, errors="coerce").sum()).mean()
             d, dc = ar_delta_num(wr_3m, peer_wr_3m, higher_is_better=True, label="vs peer avg")
             c1, c2, c3 = st.columns(3)
             c1.metric("3-Month Total", fmt_num(wr_3m, 1), delta=d, delta_color=dc)
             c2.metric("Peer Avg (3M, same tier)", fmt_num(peer_wr_3m, 1))
-            c3.metric("12-Month Total", fmt_num(wr_12m, 1))
+            c3.metric("5-Month Total", fmt_num(wr_5m, 1))
 
             # Trend chart
             # Only June 2026 onward — the calculation changed before that, so earlier
             # periods are not comparable on the same chart.
-            REPURCHASE_PLOT_START = pd.to_datetime("2026-06-01")
+            REPURCHASE_PLOT_START = pd.to_datetime("2026-06-14")
             tutor_wr = tutor_mm[tutor_mm["Date Parsed"] >= REPURCHASE_PLOT_START][["Date Range","Date Parsed",wr_col]].copy()
             tutor_wr[wr_col] = pd.to_numeric(tutor_wr[wr_col], errors="coerce")
             if len(tutor_wr) >= 2:
@@ -11760,7 +11773,9 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                                      xaxis_tickangle=-30,
                                      title=dict(x=0.5, xanchor="center"))
                 st.plotly_chart(fig_wr, use_container_width=True)
-            st.caption(f"Compared to {len(peers_12m)} peers — same tier ({tier_val}) & delivery target.")
+            st.caption(f"Compared to {len(peers_12m)} peers — same tier ({tier_val}) & delivery target. "
+                       "Periods from 14 Jun 2026 onward only — the calculation changed before that, "
+                       "so earlier periods are not comparable.")
         ar_card(8, "Repurchase Hours", _s8)
 
         # ── 9. Archivable Students ───────────────────────────────────────────
@@ -11788,9 +11803,23 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                       delta=d_prev, delta_color=dc_prev)
             c3.metric("All-Tutor Avg %",       f"{all_avg_pct:.1f}%" if all_avg_pct else "—")
             c4.metric("vs All-Tutor Avg",      f"{lat_pct - all_avg_pct:+.1f}pp" if lat_pct and all_avg_pct else "—")
-            if prev is not None:
+            _h = load_archive_snapshot_history()
+            _th = _h[_h["tutor_name"] == ar_tutor].sort_values("week_date") if not _h.empty else pd.DataFrame()
+            if len(_th) >= 2 and "pct_archivable" in _th.columns:
+                _fig = px.line(_th, x="week_date", y="pct_archivable", markers=True,
+                               title="% Archivable — Week over Week",
+                               color_discrete_sequence=["#7b2d8b"])
+                _fig.update_layout(height=250, margin=dict(l=20,r=20,t=40,b=20),
+                                   xaxis_title="", yaxis_title="%",
+                                   title=dict(x=0.5, xanchor="center"))
+                st.plotly_chart(_fig, use_container_width=True)
+                st.caption(f"**The “now” figures above are the most recent weekly snapshot "
+                           f"({_th.iloc[-1]['week_date']:%-d %b %Y}).** Trend covers "
+                           f"{_th['week_date'].min():%-d %b %Y} – {_th['week_date'].max():%-d %b %Y} "
+                           f"({len(_th)} weekly snapshots).")
+            elif prev is not None:
                 st.caption(f"Previous week: {int(prev['archivable_students'])} archivable ({prev_pct:.1f}%) — week of {prev['week_date'].strftime('%b %d') if hasattr(prev['week_date'], 'strftime') else prev['week_date']}")
-            st.caption("% of active students who are archivable. Lower is better. Compared to all tutors. *(Full trend history coming next review cycle.)*")
+            st.caption("% of active students who are archivable. Lower is better. Compared to all tutors.")
         ar_card(9, "Archivable Students", _s9)
 
         # ── 10. Unscheduled Hours ────────────────────────────────────────────
@@ -11818,9 +11847,23 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
             c2.metric("All-Tutor Avg (hrs)",   fmt_num(all_avg_hrs, 1))
             c3.metric("vs All-Tutor Avg",      f"{lat_hrs - all_avg_hrs:+.1f} hrs" if all_avg_hrs else "—")
             c4.metric("Total Students",         fmt_num(latest["total_students"], 0))
-            if prev is not None:
+            _h = load_archive_snapshot_history()
+            _th = _h[_h["tutor_name"] == ar_tutor].sort_values("week_date") if not _h.empty else pd.DataFrame()
+            if len(_th) >= 2 and "unscheduled_hours" in _th.columns:
+                _fig = px.line(_th, x="week_date", y="unscheduled_hours", markers=True,
+                               title="Unscheduled Hours — Week over Week",
+                               color_discrete_sequence=["#1565c0"])
+                _fig.update_layout(height=250, margin=dict(l=20,r=20,t=40,b=20),
+                                   xaxis_title="", yaxis_title="hours",
+                                   title=dict(x=0.5, xanchor="center"))
+                st.plotly_chart(_fig, use_container_width=True)
+                st.caption(f"**The “now” figures above are the most recent weekly snapshot "
+                           f"({_th.iloc[-1]['week_date']:%-d %b %Y}).** Trend covers "
+                           f"{_th['week_date'].min():%-d %b %Y} – {_th['week_date'].max():%-d %b %Y} "
+                           f"({len(_th)} weekly snapshots).")
+            elif prev is not None:
                 st.caption(f"Previous week: {prev_hrs:.1f} hrs — week of {prev['week_date'].strftime('%b %d') if hasattr(prev['week_date'], 'strftime') else prev['week_date']}")
-            st.caption("Unscheduled hours for active students only. Lower is better. Compared to all tutors. *(Full trend history coming next review cycle.)*")
+            st.caption("Unscheduled hours for active students only. Lower is better. Compared to all tutors.")
         ar_card(10, "Unscheduled Hours", _s10)
 
         # ── 11. Auto-Attendance ──────────────────────────────────────────────
@@ -11898,7 +11941,10 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
             else:
                 st.caption("Not enough weeks of data for a trend chart yet.")
 
-            st.caption("Based on weekly video snapshots. Compared to all tutors on team.")
+            st.caption(f"**“Avg Across All Weeks” is the average of every weekly snapshot we hold for this "
+                       f"tutor — {len(tutor_vs)} weeks, {tutor_vs['week_date'].min():%-d %b %Y} – "
+                       f"{tutor_vs['week_date'].max():%-d %b %Y}** (not the 12-month review window). "
+                       "Compared to all tutors on team.")
         ar_card(13, "Parent Update Video", _s13)
 
         # ── 14. Parent Update Mentioning Homework ────────────────────────────
@@ -11935,7 +11981,10 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
             else:
                 st.caption("Not enough weeks of data for a trend chart yet.")
 
-            st.caption("Based on weekly video snapshots. Compared to all tutors on team.")
+            st.caption(f"**“Avg Across All Weeks” is the average of every weekly snapshot we hold for this "
+                       f"tutor — {len(tutor_vs)} weeks, {tutor_vs['week_date'].min():%-d %b %Y} – "
+                       f"{tutor_vs['week_date'].max():%-d %b %Y}** (not the 12-month review window). "
+                       "Compared to all tutors on team.")
         ar_card(14, "Parent Update Mentioning Homework", _s14)
 
         # ── 15. Progress Updates ─────────────────────────────────────────────
