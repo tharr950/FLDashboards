@@ -11216,69 +11216,6 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
         except Exception:
             pass
 
-        # ── Cancellation requests ────────────────────────────────────────────
-        st.divider()
-        st.markdown("### 🚫 Cancellation Requests")
-        _can = load_ar_cancellations()
-        if _can.empty:
-            st.info("Cancellation export not found.")
-        else:
-            st.caption(f"Tutor support form submissions, {_can.session_date.min():%-d %b %Y} – "
-                       f"{_can.session_date.max():%-d %b %Y}. Multiple students on the same session date "
-                       "count as one cancellation.")
-            _cm = _can[_can.tutor_id == _ar_tutor_id] if _ar_tutor_id else _can.iloc[0:0]
-            _c1, _c2 = st.columns(2)
-            _c1.metric("Cancellations", len(_cm))
-            _c2.metric("Team median", f"{_can.groupby('tutor_id').size().median():.0f}")
-            if len(_cm):
-                _cols = [c for c in ["session_date",
-                                     "Which Category best describes the reason for the change?",
-                                     "What type of change do you need?",
-                                     "Student First and Last Name",
-                                     "Please explain the situation."] if c in _cm.columns]
-                _cd = _cm[_cols].sort_values("session_date", ascending=False).rename(columns={
-                    "session_date":"Session Date",
-                    "Which Category best describes the reason for the change?":"Category",
-                    "What type of change do you need?":"Change Type",
-                    "Student First and Last Name":"Student",
-                    "Please explain the situation.":"Explanation"})
-                _cd["Session Date"] = _cd["Session Date"].dt.date
-                st.dataframe(_cd, hide_index=True, use_container_width=True)
-            else:
-                st.info(f"No cancellation requests on file for {ar_tutor}.")
-
-        # ── Rematches ────────────────────────────────────────────────────────
-        st.divider()
-        st.markdown("### 🔄 Rematches")
-        _rem = load_ar_rematches()
-        if _rem.empty:
-            st.info("Rematch export not found.")
-        else:
-            st.caption(f"⚠️ Rematch data begins **{_rem.created.min():%-d %b %Y}** — it does not cover the full "
-                       "12 months. Limited to reasons: Not the right fit, Tutor Complaint, Tier Upgrade. "
-                       "Tutors are matched by name from the ticket's *Former Tutor* field.")
-            _rm = _rem[_rem["_match"] == str(ar_tutor).strip().lower()]
-            _c1, _c2 = st.columns(2)
-            _c1.metric("Rematches", len(_rm))
-            _c2.metric("All tutors (qualifying)", len(_rem))
-            if len(_rm):
-                _rd = (_rm[["created","Reason for Rematch","Ticket name","New Tutor"]]
-                       .sort_values("created", ascending=False)
-                       .rename(columns={"created":"Date","Reason for Rematch":"Reason",
-                                        "Ticket name":"Ticket","New Tutor":"New Tutor"}))
-                _rd["Date"] = _rd["Date"].dt.date
-                st.dataframe(_rd, hide_index=True, use_container_width=True)
-            else:
-                st.info(f"No qualifying rematches on file for {ar_tutor}.")
-            with st.expander("All qualifying rematch tickets (every tutor)"):
-                _all = (_rem[["created","Reason for Rematch","Former Tutor","New Tutor"]]
-                        .sort_values("created", ascending=False)
-                        .rename(columns={"created":"Date","Reason for Rematch":"Reason"}))
-                _all["Date"] = _all["Date"].dt.date
-                st.dataframe(_all, hide_index=True, use_container_width=True)
-                st.caption("Former Tutor is free text on the ticket, so some entries "
-                           "(first name only, misspellings) will not match a tutor above.")
-
         # ── Students met with in the last 6 months ───────────────────────────
         st.divider()
         st.markdown("### 👥 Students Met With — Last 6 Months")
@@ -11645,21 +11582,33 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
         # ── 4. Cancellations by Tutor ────────────────────────────────────────
         # ── 4. Cancellations by Tutor ────────────────────────────────────────
         def _s4():
-            cancel_df = load_cancellation_data()
-            if cancel_df.empty:
-                st.info("No cancellation data available.")
+            _can = load_ar_cancellations()
+            if _can.empty:
+                st.info("Cancellation export not found.")
                 return
-
-            tutor_row = cancel_df[cancel_df["Tutor Name"].str.strip() == ar_tutor]
-            tutor_count = int(tutor_row["Count of Days Cancelled"].iloc[0]) if not tutor_row.empty else 0
-
-            peer_avg = round(cancel_df["Count of Days Cancelled"].mean(), 1)
-            d, dc = ar_delta_num(tutor_count, peer_avg, higher_is_better=False, label="vs all-tutor avg")
-
+            _cm = _can[_can.tutor_id == _ar_tutor_id] if _ar_tutor_id else _can.iloc[0:0]
+            _peer = round(_can.groupby("tutor_id").size().mean(), 1)
+            d, dc = ar_delta_num(len(_cm), _peer, higher_is_better=False, label="vs all-tutor avg")
             c1, c2 = st.columns(2)
-            c1.metric("Days Cancelled", tutor_count, delta=d, delta_color=dc)
-            c2.metric("All-Tutor Avg", fmt_num(peer_avg, 1))
-            st.caption("Count of days with tutor-initiated cancellations during the review period. Lower is better.")
+            c1.metric("Cancellations", len(_cm), delta=d, delta_color=dc)
+            c2.metric("All-Tutor Avg", fmt_num(_peer, 1))
+            if len(_cm):
+                _cols = [c for c in ["session_date",
+                                     "Which Category best describes the reason for the change?",
+                                     "What type of change do you need?",
+                                     "Student First and Last Name",
+                                     "Please explain the situation."] if c in _cm.columns]
+                _cd = _cm[_cols].sort_values("session_date", ascending=False).rename(columns={
+                    "session_date":"Session Date",
+                    "Which Category best describes the reason for the change?":"Category",
+                    "What type of change do you need?":"Change Type",
+                    "Student First and Last Name":"Student",
+                    "Please explain the situation.":"Explanation"})
+                _cd["Session Date"] = _cd["Session Date"].dt.date
+                st.dataframe(_cd, hide_index=True, use_container_width=True)
+            st.caption(f"Tutor support form submissions, {_can.session_date.min():%-d %b %Y} – "
+                       f"{_can.session_date.max():%-d %b %Y}. Multiple students on the same session "
+                       "date count as one cancellation. Lower is better.")
         ar_card(4, "Cancellations by Tutor", _s4)
 
         # ── 5. Exams Data ────────────────────────────────────────────────────
@@ -11723,46 +11672,26 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
         # ── 7. Rematches ─────────────────────────────────────────────────────
         # ── 7. Rematches ─────────────────────────────────────────────────────
         def _s7():
-            rematch_df = load_rematch_tracker()
-            if rematch_df.empty:
-                st.info("No rematch data available.")
+            _rem = load_ar_rematches()
+            if _rem.empty:
+                st.info("Rematch export not found.")
                 return
-
-            # Filter to this tutor and within 12-month review period
-            cutoff_start = pd.to_datetime(AR_12M_START)
-            cutoff_end   = pd.to_datetime(AR_12M_END)
-            tutor_rematches = rematch_df[
-                (rematch_df["Former Tutor"].str.strip() == ar_tutor) &
-                (rematch_df["Rematch Date Parsed"] >= cutoff_start) &
-                (rematch_df["Rematch Date Parsed"] <= cutoff_end)
-            ].copy()
-
-            # All tutors for peer comparison
-            all_rematches = rematch_df[
-                (rematch_df["Rematch Date Parsed"] >= cutoff_start) &
-                (rematch_df["Rematch Date Parsed"] <= cutoff_end)
-            ]
-            all_tutor_counts = all_rematches.groupby("Former Tutor").size()
-            peer_avg = round(all_tutor_counts.mean(), 1) if not all_tutor_counts.empty else 0
-
-            count = len(tutor_rematches)
-            d, dc = ar_delta_num(count, peer_avg, higher_is_better=False, label="vs all-tutor avg")
-
+            _rm = _rem[_rem["_match"] == str(ar_tutor).strip().lower()]
+            _peer = round(_rem.groupby("_match").size().mean(), 1) if len(_rem) else 0
+            d, dc = ar_delta_num(len(_rm), _peer, higher_is_better=False, label="vs all-tutor avg")
             c1, c2 = st.columns(2)
-            c1.metric("Rematches (12M)", count, delta=d, delta_color=dc)
-            c2.metric("All-Tutor Avg",   fmt_num(peer_avg, 1))
-
-            if count > 0:
-                st.markdown("**Rematch Details:**")
-                display = tutor_rematches[["Rematch Date Parsed","Student Name","Reason for Rematch Request",
-                                           "Does the Rematch Seem Valid?","FL Thoughts"]].copy()
-                display["Rematch Date Parsed"] = display["Rematch Date Parsed"].dt.strftime("%m/%d/%Y")
-                display = display.rename(columns={
-                    "Rematch Date Parsed": "Date", "Student Name": "Student",
-                    "Reason for Rematch Request": "Reason",
-                    "Does the Rematch Seem Valid?": "Valid?", "FL Thoughts": "FL Thoughts"})
-                st.dataframe(display, use_container_width=True, hide_index=True)
-            st.caption("Counts rematches where this tutor was the former tutor during the 12-month review period.")
+            c1.metric("Rematches", len(_rm), delta=d, delta_color=dc)
+            c2.metric("All-Tutor Avg", fmt_num(_peer, 1))
+            if len(_rm):
+                _rd = (_rm[["created","Reason for Rematch","Ticket name","New Tutor"]]
+                       .sort_values("created", ascending=False)
+                       .rename(columns={"created":"Date","Reason for Rematch":"Reason",
+                                        "Ticket name":"Ticket"}))
+                _rd["Date"] = _rd["Date"].dt.date
+                st.dataframe(_rd, hide_index=True, use_container_width=True)
+            st.caption(f"⚠️ Rematch data begins **{_rem.created.min():%-d %b %Y}** — not a full 12 months. "
+                       "Limited to: Not the right fit, Tutor Complaint, Tier Upgrade. Tutors matched by "
+                       "name from the ticket's *Former Tutor* field, which is free text. Lower is better.")
         ar_card(7, "Rematches", _s7)
 
         # ── 8. Weighted Repurchase ───────────────────────────────────────────
@@ -11804,18 +11733,23 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
             peer_wr = peer_mm_12m[peer_mm_12m["Date Parsed"] >= cutoff_12m].groupby("Tutor Name")[wr_col].apply(
                 lambda x: pd.to_numeric(x, errors="coerce").sum()).mean()
 
-            d, dc = ar_delta_num(wr_12m, peer_wr, higher_is_better=True, label="vs peer avg")
+            peer_wr_3m = peer_mm_12m[peer_mm_12m["Date Parsed"] >= cutoff_3m].groupby("Tutor Name")[wr_col].apply(
+                lambda x: pd.to_numeric(x, errors="coerce").sum()).mean()
+            d, dc = ar_delta_num(wr_3m, peer_wr_3m, higher_is_better=True, label="vs peer avg")
             c1, c2, c3 = st.columns(3)
-            c1.metric("12-Month Total", fmt_num(wr_12m, 1), delta=d, delta_color=dc)
-            c2.metric("3-Month Total",  fmt_num(wr_3m, 1))
-            c3.metric("Peer Avg (12M, same tier)", fmt_num(peer_wr, 1))
+            c1.metric("3-Month Total", fmt_num(wr_3m, 1), delta=d, delta_color=dc)
+            c2.metric("Peer Avg (3M, same tier)", fmt_num(peer_wr_3m, 1))
+            c3.metric("12-Month Total", fmt_num(wr_12m, 1))
 
             # Trend chart
-            tutor_wr = tutor_mm[tutor_mm["Date Parsed"] >= cutoff_12m][["Date Range","Date Parsed",wr_col]].copy()
+            # Only June 2026 onward — the calculation changed before that, so earlier
+            # periods are not comparable on the same chart.
+            REPURCHASE_PLOT_START = pd.to_datetime("2026-06-01")
+            tutor_wr = tutor_mm[tutor_mm["Date Parsed"] >= REPURCHASE_PLOT_START][["Date Range","Date Parsed",wr_col]].copy()
             tutor_wr[wr_col] = pd.to_numeric(tutor_wr[wr_col], errors="coerce")
             if len(tutor_wr) >= 2:
                 fig_wr = px.bar(tutor_wr, x="Date Range", y=wr_col,
-                                title="Weighted Repurchases by Month",
+                                title="Repurchase Hours by Month (June 2026 onward)",
                                 color_discrete_sequence=["#7b2d8b"])
                 fig_wr.update_layout(height=250, margin=dict(l=20,r=20,t=40,b=60),
                                      xaxis_title="", yaxis_title="Repurchases",
@@ -11823,7 +11757,7 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                                      title=dict(x=0.5, xanchor="center"))
                 st.plotly_chart(fig_wr, use_container_width=True)
             st.caption(f"Compared to {len(peers_12m)} peers — same tier ({tier_val}) & delivery target.")
-        ar_card(8, "Weighted Repurchase", _s8)
+        ar_card(8, "Repurchase Hours", _s8)
 
         # ── 9. Archivable Students ───────────────────────────────────────────
         def _s9():
@@ -12026,6 +11960,7 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
 
             pu_12m = tutor_mm[tutor_mm["Date Parsed"] >= cutoff_12m][pu_col].mean()
             pu_3m  = tutor_mm[tutor_mm["Date Parsed"] >= cutoff_3m][pu_col].mean()
+            pu_all = tutor_mm[pu_col].mean()   # all available history
 
             # Peer avg
             peer_mm = monthly_metric_annual_review_df[
@@ -12038,13 +11973,14 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
 
             d12, dc12 = ar_delta(pu_12m, peer_pu, higher_is_better=True)
             d3,  dc3  = ar_delta(pu_3m,  peer_pu, higher_is_better=True)
-            c1, c2, c3 = st.columns(3)
+            c1, c2, c3, c4 = st.columns(4)
             c1.metric("Avg % (12M)", fmt_pct(pu_12m), delta=d12, delta_color=dc12)
             c2.metric("Avg % (3M)",  fmt_pct(pu_3m),  delta=d3,  delta_color=dc3)
-            c3.metric("Peer Avg (12M, same tier)", fmt_pct(peer_pu))
+            c3.metric("Avg % (all data)", fmt_pct(pu_all))
+            c4.metric("Peer Avg (12M, same tier)", fmt_pct(peer_pu))
 
             # Trend
-            tutor_pu_trend = tutor_mm[tutor_mm["Date Parsed"] >= cutoff_12m][["Date Range","Date Parsed",pu_col]].copy()
+            tutor_pu_trend = tutor_mm[["Date Range","Date Parsed",pu_col]].copy()   # all available history
             if len(tutor_pu_trend) >= 2:
                 fig_pu = px.line(tutor_pu_trend, x="Date Range", y=pu_col,
                                  markers=True, title="% Progress Updates Completed — by Month",
