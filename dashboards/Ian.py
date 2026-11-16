@@ -2425,7 +2425,7 @@ def generate_tutor_pdf(
         if p_exam is not None and not p_exam.empty:
             p_now      = pd.Timestamp.now(tz="UTC")
             ex_students= p_exam["student_id"].nunique()
-            total_hrs  = p_exam["attended_test_prep_hours"].iloc[0] if not p_exam.empty else 0
+            total_hrs  = p_exam.groupby("student_id")["attended_test_prep_hours"].first().sum() if not p_exam.empty else 0
             n_completed= p_exam[p_exam["exam_valid_composite"] == True]["exam_id"].nunique()                      if "exam_id" in p_exam.columns else 0
             hrs_per    = round(total_hrs / n_completed, 1) if n_completed > 0 and pd.notna(total_hrs) else None
             summary_data = [
