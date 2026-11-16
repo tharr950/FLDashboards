@@ -8248,6 +8248,9 @@ Each progress update sent by a tutor is automatically scored across 4 dimensions
                 _au_col = "attachment_uploaded" if "attachment_uploaded" in display.columns else None
                 _ac_col = "attachment_created_at" if "attachment_created_at" in display.columns else None
                 def _ppw_status(row):
+                    _att = row.get("attendances_attended_count")
+                    if pd.notna(_att) and _att == 0:
+                        return "Student did not Attend"
                     on_time = row.get("attachment_uploaded", 0) == 1
                     has_upload_date = _ac_col and pd.notna(row.get("attachment_created_at")) and str(row.get("attachment_created_at","")) not in ("","nan","NaT","None")
                     if on_time:
