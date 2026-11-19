@@ -47,7 +47,9 @@ def push_to_github(df, path, label):
     if r2.status_code in (200, 201):
         log(f"✅ Pushed {label} ({len(df)} rows) → {path}")
     else:
-        log(f"❌ Failed to push {label}: {r2.status_code} {r2.text[:100]}")
+        # Raise so the caller's retry loop re-fetches a fresh sha. A 409 means
+        # another job pushed between our GET and PUT -- retrying resolves it.
+        raise RuntimeError(f"push {label} failed: {r2.status_code} {r2.text[:120]}")
 
 QUERIES = {
     "master_tutor": (
